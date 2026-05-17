@@ -494,7 +494,7 @@ directory into its own zone while rules still reference the logical parent:
   "boundaries": {
     "zones": [
       { "name": "app", "patterns": ["src/app/**"] },
-      { "name": "features", "autoDiscover": ["src/features"] },
+      { "name": "features", "patterns": ["src/features/**"], "autoDiscover": ["src/features"] },
       { "name": "shared", "patterns": ["src/shared/**"] }
     ],
     "rules": [
@@ -505,7 +505,7 @@ directory into its own zone while rules still reference the logical parent:
 }
 ```
 
-Top-level files inside an `autoDiscover` directory (e.g. `src/features/index.ts` barrel, `src/features/types.ts`) do not match any auto-discovered child pattern and stay unclassified, so barrel files can re-export children without false-positive cross-zone violations. The same applies to the Bulletproof preset's `features` zone. To classify top-level files strictly, add a `patterns` field to the zone (fallow then warns about the barrel-violation footgun).
+When an `autoDiscover` zone also has `patterns`, discovered child zones are matched first and top-level files fall back to the parent zone. The parent rule automatically allows its discovered children, so `src/features/index.ts` barrels can re-export feature modules while non-barrel top-level files such as `src/features/types.ts` still follow the parent `features` rule. Omit `patterns` when you want only discovered child directories classified.
 
 Run `fallow list --boundaries` to inspect the expanded rules. TOML also supported (`fallow init --toml`). The init command auto-detects your project structure (monorepo layout, frameworks, existing config) and generates a tailored config. It also adds `.fallow/` to your `.gitignore` (cache and local data). Scaffold a pre-commit `fallow audit` hook with `fallow hooks install --target git`; the hook uses the current branch upstream as its base and falls back to `--branch` (or the detected default branch) when no upstream is set. For agent gates, use `fallow hooks install --target agent`. Migrating from knip or jscpd? Run `fallow migrate`.
 

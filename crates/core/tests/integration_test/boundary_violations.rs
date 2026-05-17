@@ -675,25 +675,19 @@ fn bulletproof_preset_detects_violation() {
     );
 }
 
-/// Regression for the Bulletproof preset trade-off documented on
-/// `BoundaryPreset::Bulletproof`. The preset deliberately leaves the
-/// `features` zone's `patterns` empty so top-level files inside `src/features/`
-/// (a barrel like `src/features/index.ts`, or shared utilities like
-/// `src/features/types.ts`) stay unclassified and unrestricted. This test
-/// pins that behavior:
+/// Regression for the Bulletproof preset's `autoDiscover` strict mode. The
+/// preset classifies top-level files inside `src/features/` under the parent
+/// `features` zone while discovered child zones keep sibling isolation. This
+/// test pins both sides of that behavior:
 ///
 /// 1. `src/features/index.ts` (the barrel) re-exports `auth/login` and
-///    `types`. Under the preset the barrel must NOT classify as `features`,
-///    otherwise it would surface `features -> features/auth` violations.
+///    `types`. The parent `features` rule must allow the discovered
+///    `features/auth` child, otherwise it would surface a false positive.
 /// 2. `src/features/types.ts` imports `src/app/page`. Under the preset
-///    `types.ts` must NOT classify as `features`, otherwise it would surface
-///    a `features -> app` violation.
-///
-/// If a future change adds `patterns: ["src/features/**"]` (or similar) back
-/// to the preset's `features` zone, both of these turn into false-positive
-/// violations and this test fails with a useful count.
+///    `types.ts` must classify as `features`, so this strict-mode violation
+///    is reported.
 #[test]
-fn bulletproof_top_level_features_file_is_unrestricted() {
+fn bulletproof_top_level_features_file_is_strict_without_barrel_false_positive() {
     let root = fixture_path("boundary-bulletproof-toplevel");
     let boundaries = BoundaryConfig {
         preset: Some(BoundaryPreset::Bulletproof),
@@ -738,10 +732,10 @@ fn bulletproof_top_level_features_file_is_unrestricted() {
 
     assert_eq!(
         results.boundary_violations.len(),
-        0,
-        "Bulletproof preset must leave top-level src/features/ files unclassified \
-         so barrel re-exports and shared utilities do not produce false positives. \
-         Got: {:?}",
+        1,
+        "Bulletproof preset should allow the src/features/index.ts barrel to \
+         re-export discovered children, but still report strict top-level \
+         feature files that import forbidden zones. Got: {:?}",
         results
             .boundary_violations
             .iter()
@@ -753,6 +747,25 @@ fn bulletproof_top_level_features_file_is_unrestricted() {
                 v.to_path.display()
             ))
             .collect::<Vec<_>>()
+    );
+    let v = &results.boundary_violations[0];
+    assert_eq!(v.from_zone, "features");
+    assert_eq!(v.to_zone, "app");
+    assert!(
+        v.from_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("src/features/types.ts"),
+        "from_path should end with src/features/types.ts, got: {}",
+        v.from_path.display()
+    );
+    assert!(
+        v.to_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("src/app/page.ts"),
+        "to_path should end with src/app/page.ts, got: {}",
+        v.to_path.display()
     );
 }
 

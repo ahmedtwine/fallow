@@ -1,28 +1,10 @@
 //! Architecture boundary zone and rule definitions.
 
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
 
 use globset::Glob;
-use rustc_hash::FxHashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Process-local dedup state for the
-/// `patterns + autoDiscover` footgun warning. Keyed on the offending zone
-/// name. The warn fires once per (process, zone name) so long-running hosts
-/// (`fallow watch`, the LSP, the NAPI worker, the MCP server) do not spam
-/// the same diagnostic on every re-analysis. Restart re-arms the warning.
-static AUTO_DISCOVER_PATTERNS_WARN_SEEN: OnceLock<Mutex<FxHashSet<String>>> = OnceLock::new();
-
-/// Returns `true` if the warn for `zone_name` has not yet fired in this
-/// process, `false` if it has already fired. A poisoned mutex falls back to
-/// "would fire" so the user still sees one diagnostic per session.
-fn record_auto_discover_patterns_warn_seen(zone_name: &str) -> bool {
-    let seen = AUTO_DISCOVER_PATTERNS_WARN_SEEN.get_or_init(|| Mutex::new(FxHashSet::default()));
-    seen.lock()
-        .map_or(true, |mut set| set.insert(zone_name.to_owned()))
-}
 
 /// Built-in architecture presets.
 ///
@@ -54,14 +36,9 @@ pub enum BoundaryPreset {
     /// Feature modules are isolated from each other via `autoDiscover`: every
     /// immediate child of `src/features/` becomes its own `features/<name>` zone,
     /// and cross-feature imports are reported as boundary violations.
-    ///
-    /// **Trade-off (intentional):** top-level files in `src/features/` (e.g.
-    /// `src/features/index.ts` barrel, `src/features/types.ts`) do NOT match any
-    /// child pattern and are unclassified, meaning they are unrestricted by the
-    /// preset. This is deliberate so feature barrels can re-export children
-    /// without producing false-positive `features → features/<child>` violations.
-    /// To classify top-level files strictly, override the `features` zone with
-    /// an explicit user definition that includes a `patterns` field.
+    /// Top-level files in `src/features/` are classified by the logical
+    /// `features` parent zone, so barrels can re-export child features while
+    /// non-barrel top-level files still obey the `features` boundary rule.
     Bulletproof,
 }
 
@@ -148,14 +125,11 @@ impl BoundaryPreset {
         let zones = vec![
             Self::zone("app", source_root),
             BoundaryZone {
-                // `features` is a logical group only: auto-discovered child
-                // zones (`features/<name>`) classify the actual files. Leaving
-                // `patterns` empty keeps top-level files in `src/features/`
-                // (typically a barrel like `src/features/index.ts`) unclassified
-                // so the barrel can re-export children without a cross-zone
-                // `features → features/<child>` false positive.
+                // Discovered child zones classify concrete feature modules
+                // first; the parent pattern catches top-level feature files
+                // such as barrels and shared types.
                 name: "features".to_owned(),
-                patterns: vec![],
+                patterns: vec![format!("{source_root}/features/**")],
                 auto_discover: vec![format!("{source_root}/features")],
                 root: None,
             },
@@ -428,7 +402,10 @@ impl BoundaryConfig {
     /// `zone_name/child`. Rules that reference the logical parent are expanded
     /// to all discovered children. If the parent also has explicit `patterns`,
     /// it is kept after the children as a fallback so child directories remain
-    /// isolated by first-match classification.
+    /// isolated by first-match classification. The parent fallback rule
+    /// automatically allows its discovered children so top-level barrels can
+    /// re-export child modules without relaxing sibling isolation on the child
+    /// rules.
     pub fn expand_auto_discover(&mut self, project_root: &Path) {
         if self.zones.iter().all(|zone| zone.auto_discover.is_empty()) {
             return;
@@ -454,23 +431,6 @@ impl BoundaryConfig {
             expanded_zones.extend(discovered_zones);
 
             if !zone.patterns.is_empty() {
-                // Footgun: top-level files inside the auto-discover directory
-                // (e.g. a `src/features/index.ts` barrel) fall back to the
-                // parent zone, and the parent rule's allow list typically does
-                // not include the discovered child zones, so re-exports from
-                // the barrel surface as `parent -> parent/<child>` false
-                // positives. The Bulletproof preset deliberately leaves
-                // `patterns` empty for this reason.
-                if record_auto_discover_patterns_warn_seen(&group_name) {
-                    tracing::warn!(
-                        "boundary zone '{group_name}' sets BOTH `patterns` and `autoDiscover`. \
-                         Top-level files matching the parent pattern fall back to zone '{group_name}' \
-                         and may produce false-positive cross-zone violations when they re-export \
-                         auto-discovered children (e.g. a `{group_name}/index.ts` barrel). \
-                         Drop `patterns` to leave top-level files unclassified, or define explicit \
-                         allow rules that include the discovered child zones."
-                    );
-                }
                 expanded_names.push(group_name.clone());
                 zone.auto_discover.clear();
                 expanded_zones.push(zone);
@@ -498,10 +458,29 @@ impl BoundaryConfig {
 
             if let Some(from_zones) = group_expansions.get(&rule.from) {
                 for from in from_zones {
+                    let (allow, allow_type_only) = if from == &rule.from {
+                        (
+                            expand_parent_fallback_allow(&allow, from_zones, &rule.from),
+                            allow_type_only.clone(),
+                        )
+                    } else {
+                        (
+                            expand_generated_child_allow(
+                                &rule.allow,
+                                &group_expansions,
+                                &rule.from,
+                            ),
+                            expand_generated_child_allow(
+                                &rule.allow_type_only,
+                                &group_expansions,
+                                &rule.from,
+                            ),
+                        )
+                    };
                     let expanded_rule = BoundaryRule {
                         from: from.clone(),
-                        allow: allow.clone(),
-                        allow_type_only: allow_type_only.clone(),
+                        allow,
+                        allow_type_only,
                     };
                     if from == &rule.from {
                         explicit_rules.push(expanded_rule);
@@ -771,6 +750,44 @@ fn expand_rule_allow(
     dedupe_preserving_order(expanded)
 }
 
+fn expand_parent_fallback_allow(
+    allow: &[String],
+    from_zones: &[String],
+    parent_name: &str,
+) -> Vec<String> {
+    let mut expanded = allow.to_vec();
+    expanded.extend(
+        from_zones
+            .iter()
+            .filter(|from_zone| from_zone.as_str() != parent_name)
+            .cloned(),
+    );
+    dedupe_preserving_order(expanded)
+}
+
+fn expand_generated_child_allow(
+    allow: &[String],
+    group_expansions: &rustc_hash::FxHashMap<String, Vec<String>>,
+    source_group: &str,
+) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for zone in allow {
+        if zone == source_group {
+            if group_expansions
+                .get(source_group)
+                .is_some_and(|from_zones| from_zones.iter().any(|from_zone| from_zone == zone))
+            {
+                expanded.push(zone.clone());
+            }
+        } else if let Some(expansion) = group_expansions.get(zone) {
+            expanded.extend(expansion.iter().cloned());
+        } else {
+            expanded.push(zone.clone());
+        }
+    }
+    dedupe_preserving_order(expanded)
+}
+
 fn dedupe_preserving_order(values: Vec<String>) -> Vec<String> {
     let mut seen = rustc_hash::FxHashSet::default();
     values
@@ -985,6 +1002,107 @@ allow = ["db"]
                 .iter()
                 .any(|rule| rule.from == "features/billing" && rule.allow.is_empty())
         );
+        assert!(config.validate_zone_references().is_empty());
+    }
+
+    #[test]
+    fn auto_discover_parent_fallback_allows_children_without_relaxing_child_rules() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("src/features/auth")).unwrap();
+        std::fs::create_dir_all(temp.path().join("src/features/billing")).unwrap();
+
+        let mut config = BoundaryConfig {
+            preset: None,
+            zones: vec![
+                BoundaryZone {
+                    name: "app".to_string(),
+                    patterns: vec!["src/app/**".to_string()],
+                    auto_discover: vec![],
+                    root: None,
+                },
+                BoundaryZone {
+                    name: "features".to_string(),
+                    patterns: vec!["src/features/**".to_string()],
+                    auto_discover: vec!["src/features".to_string()],
+                    root: None,
+                },
+                BoundaryZone {
+                    name: "shared".to_string(),
+                    patterns: vec!["src/shared/**".to_string()],
+                    auto_discover: vec![],
+                    root: None,
+                },
+            ],
+            rules: vec![
+                BoundaryRule {
+                    from: "app".to_string(),
+                    allow: vec!["features".to_string(), "shared".to_string()],
+                    allow_type_only: vec![],
+                },
+                BoundaryRule {
+                    from: "features".to_string(),
+                    allow: vec!["shared".to_string()],
+                    allow_type_only: vec![],
+                },
+            ],
+        };
+
+        config.expand_auto_discover(temp.path());
+
+        let zone_names: Vec<_> = config.zones.iter().map(|zone| zone.name.as_str()).collect();
+        assert_eq!(
+            zone_names,
+            vec![
+                "app",
+                "features/auth",
+                "features/billing",
+                "features",
+                "shared"
+            ]
+        );
+
+        let app_rule = config
+            .rules
+            .iter()
+            .find(|rule| rule.from == "app")
+            .expect("app rule should be preserved");
+        assert_eq!(
+            app_rule.allow,
+            vec![
+                "features/auth".to_string(),
+                "features/billing".to_string(),
+                "features".to_string(),
+                "shared".to_string()
+            ]
+        );
+
+        let parent_rule = config
+            .rules
+            .iter()
+            .find(|rule| rule.from == "features")
+            .expect("parent fallback rule should be preserved");
+        assert_eq!(
+            parent_rule.allow,
+            vec![
+                "shared".to_string(),
+                "features/auth".to_string(),
+                "features/billing".to_string()
+            ]
+        );
+
+        let auth_rule = config
+            .rules
+            .iter()
+            .find(|rule| rule.from == "features/auth")
+            .expect("auth child rule should be generated");
+        assert_eq!(auth_rule.allow, vec!["shared".to_string()]);
+
+        let billing_rule = config
+            .rules
+            .iter()
+            .find(|rule| rule.from == "features/billing")
+            .expect("billing child rule should be generated");
+        assert_eq!(billing_rule.allow, vec!["shared".to_string()]);
         assert!(config.validate_zone_references().is_empty());
     }
 
@@ -1735,9 +1853,8 @@ allow = ["db"]
     #[test]
     fn expand_bulletproof_then_resolve_classifies() {
         // `expand()` alone (without `expand_auto_discover`) does not produce
-        // the per-feature child zones, so the `features` group is empty and
-        // top-level `src/features/...` files are unclassified. Sibling
-        // `app` / `shared` / `server` zones still classify normally.
+        // the per-feature child zones yet, but the parent `features` fallback
+        // still classifies top-level and nested `src/features/...` files.
         let mut config = BoundaryConfig {
             preset: Some(BoundaryPreset::Bulletproof),
             zones: vec![],
@@ -1751,8 +1868,8 @@ allow = ["db"]
         );
         assert_eq!(
             resolved.classify_zone("src/features/auth/hooks/useAuth.ts"),
-            None,
-            "without expand_auto_discover, src/features/... is unclassified"
+            Some("features"),
+            "without expand_auto_discover, src/features/... falls back to the parent zone"
         );
         assert_eq!(
             resolved.classify_zone("src/components/Button/Button.tsx"),
@@ -1776,12 +1893,11 @@ allow = ["db"]
 
     /// Regression for the bulletproof barrel pattern: a top-level
     /// `src/features/index.ts` barrel re-exporting child features must NOT
-    /// trigger `features → features/<child>` boundary violations. The fix is
-    /// to keep the bulletproof `features` zone pattern-free so the barrel is
-    /// unclassified (unrestricted) while child zones still enforce sibling
-    /// isolation.
+    /// trigger `features → features/<child>` boundary violations. The parent
+    /// fallback rule allows discovered children while generated child rules
+    /// still enforce sibling isolation.
     #[test]
-    fn bulletproof_features_barrel_is_unclassified() {
+    fn bulletproof_features_barrel_can_import_children() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("src/features/auth")).unwrap();
         std::fs::create_dir_all(temp.path().join("src/features/billing")).unwrap();
@@ -1795,11 +1911,11 @@ allow = ["db"]
         config.expand_auto_discover(temp.path());
         let resolved = config.resolve();
 
-        // Top-level barrel inside src/features stays unclassified.
+        // Top-level barrel inside src/features falls back to the parent zone.
         assert_eq!(
             resolved.classify_zone("src/features/index.ts"),
-            None,
-            "src/features/index.ts barrel must be unclassified to allow re-exporting children"
+            Some("features"),
+            "src/features/index.ts barrel should classify as the parent features zone"
         );
         // Discovered child zones still classify normally.
         assert_eq!(
@@ -1810,6 +1926,9 @@ allow = ["db"]
             resolved.classify_zone("src/features/billing/invoice.ts"),
             Some("features/billing")
         );
+        // Parent barrels can re-export child features.
+        assert!(resolved.is_import_allowed("features", "features/auth"));
+        assert!(resolved.is_import_allowed("features", "features/billing"));
         // Sibling-feature import is still a cross-zone violation.
         assert!(!resolved.is_import_allowed("features/auth", "features/billing"));
     }

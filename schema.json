@@ -1044,7 +1044,7 @@
           "const": "feature-sliced"
         },
         {
-          "description": "Bulletproof React: app → features → shared + server.\nFeature modules are isolated from each other via `autoDiscover`: every\nimmediate child of `src/features/` becomes its own `features/<name>` zone,\nand cross-feature imports are reported as boundary violations.\n\n**Trade-off (intentional):** top-level files in `src/features/` (e.g.\n`src/features/index.ts` barrel, `src/features/types.ts`) do NOT match any\nchild pattern and are unclassified, meaning they are unrestricted by the\npreset. This is deliberate so feature barrels can re-export children\nwithout producing false-positive `features → features/<child>` violations.\nTo classify top-level files strictly, override the `features` zone with\nan explicit user definition that includes a `patterns` field.",
+          "description": "Bulletproof React: app → features → shared + server.\nFeature modules are isolated from each other via `autoDiscover`: every\nimmediate child of `src/features/` becomes its own `features/<name>` zone,\nand cross-feature imports are reported as boundary violations.\nTop-level files in `src/features/` are classified by the logical\n`features` parent zone, so barrels can re-export child features while\nnon-barrel top-level files still obey the `features` boundary rule.",
           "type": "string",
           "const": "bulletproof"
         }
