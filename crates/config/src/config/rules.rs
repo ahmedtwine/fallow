@@ -96,6 +96,13 @@ pub struct RulesConfig {
     pub test_only_dependencies: Severity,
     #[serde(default, alias = "circular-dependency")]
     pub circular_dependencies: Severity,
+    #[serde(
+        default = "Severity::default_warn",
+        alias = "re-export-cycles",
+        alias = "reexport-cycle",
+        alias = "reexport-cycles"
+    )]
+    pub re_export_cycle: Severity,
     #[serde(default, alias = "boundary-violations")]
     pub boundary_violation: Severity,
     #[serde(default, alias = "coverage-gap")]
@@ -137,6 +144,7 @@ impl Default for RulesConfig {
             type_only_dependencies: Severity::Warn,
             test_only_dependencies: Severity::Warn,
             circular_dependencies: Severity::Error,
+            re_export_cycle: Severity::Warn,
             boundary_violation: Severity::Error,
             coverage_gaps: Severity::Off,
             feature_flags: Severity::Off,
@@ -197,6 +205,9 @@ impl RulesConfig {
         }
         if let Some(s) = partial.circular_dependencies {
             self.circular_dependencies = s;
+        }
+        if let Some(s) = partial.re_export_cycle {
+            self.re_export_cycle = s;
         }
         if let Some(s) = partial.boundary_violation {
             self.boundary_violation = s;
@@ -324,6 +335,14 @@ pub struct PartialRulesConfig {
     pub circular_dependencies: Option<Severity>,
     #[serde(
         default,
+        alias = "re-export-cycles",
+        alias = "reexport-cycle",
+        alias = "reexport-cycles",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub re_export_cycle: Option<Severity>,
+    #[serde(
+        default,
         alias = "boundary-violations",
         skip_serializing_if = "Option::is_none"
     )]
@@ -405,6 +424,7 @@ pub const KNOWN_RULE_NAMES: &[&str] = &[
     "type-only-dependencies",
     "test-only-dependencies",
     "circular-dependencies",
+    "re-export-cycle",
     "boundary-violation",
     "coverage-gaps",
     "feature-flags",
@@ -430,6 +450,9 @@ pub const KNOWN_RULE_NAMES: &[&str] = &[
     "type-only-dependency",
     "test-only-dependency",
     "circular-dependency",
+    "re-export-cycles",
+    "reexport-cycle",
+    "reexport-cycles",
     "boundary-violations",
     "coverage-gap",
     "feature-flag",
@@ -536,6 +559,32 @@ mod tests {
         assert_eq!(rules.unused_types, Severity::Off);
         // Unset fields default to error
         assert_eq!(rules.unresolved_imports, Severity::Error);
+    }
+
+    #[test]
+    fn rules_re_export_cycle_default_is_warn() {
+        let rules = RulesConfig::default();
+        assert_eq!(rules.re_export_cycle, Severity::Warn);
+    }
+
+    #[test]
+    fn rules_deserialize_re_export_cycle_aliases() {
+        // All four token forms (canonical + three aliases) must round-trip.
+        for token in [
+            "re-export-cycle",
+            "re-export-cycles",
+            "reexport-cycle",
+            "reexport-cycles",
+        ] {
+            let json_str = format!(r#"{{ "{token}": "error" }}"#);
+            let rules: RulesConfig = serde_json::from_str(&json_str)
+                .unwrap_or_else(|e| panic!("alias {token} did not deserialize: {e}"));
+            assert_eq!(
+                rules.re_export_cycle,
+                Severity::Error,
+                "alias {token} should set re_export_cycle"
+            );
+        }
     }
 
     #[test]
@@ -698,6 +747,7 @@ mod tests {
             type_only_dependencies: Some(Severity::Off),
             test_only_dependencies: Some(Severity::Off),
             circular_dependencies: Some(Severity::Off),
+            re_export_cycle: Some(Severity::Off),
             boundary_violation: Some(Severity::Off),
             coverage_gaps: Some(Severity::Off),
             feature_flags: Some(Severity::Off),
@@ -752,7 +802,7 @@ mod tests {
     fn known_rule_names_count_matches_struct() {
         // Drift guard. Bump both numbers together when adding a rule.
         // 24 canonical kebab-case names + 24 aliases = 48 entries.
-        assert_eq!(KNOWN_RULE_NAMES.len(), 48);
+        assert_eq!(KNOWN_RULE_NAMES.len(), 52);
     }
 
     #[test]
@@ -809,11 +859,12 @@ mod tests {
             aliases_found.push(alias.to_owned());
         }
 
-        // 24 alias attrs on RulesConfig + 24 on PartialRulesConfig = 48.
+        // 27 alias attrs on RulesConfig + 27 on PartialRulesConfig = 54.
+        // (24 + 24 base + 3 new aliases per struct on `re_export_cycle`).
         assert_eq!(
             aliases_found.len(),
-            48,
-            "expected 48 source-level alias attrs (24 per struct); got {}: {:?}",
+            54,
+            "expected 54 source-level alias attrs (27 per struct); got {}: {:?}",
             aliases_found.len(),
             aliases_found
         );
@@ -822,6 +873,37 @@ mod tests {
             assert!(
                 KNOWN_RULE_NAMES.contains(&alias.as_str()),
                 "serde alias '{alias}' is in rules.rs source but missing from KNOWN_RULE_NAMES"
+            );
+        }
+    }
+
+    #[test]
+    fn re_export_cycle_aliases_all_round_trip_to_the_same_field() {
+        // Panel catch #10 (Persona 8): pin every alias spelling of the new
+        // `re-export-cycle` rule so a future rename / typo of any of the four
+        // alias literals would fail this test instead of silently making the
+        // alias unmatched.
+        for alias in [
+            "re-export-cycle",
+            "re-export-cycles",
+            "reexport-cycle",
+            "reexport-cycles",
+        ] {
+            let json = format!(r#"{{"{alias}": "warn"}}"#);
+            let partial: PartialRulesConfig = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("'{alias}' should deserialize: {e}"));
+            assert_eq!(
+                partial.re_export_cycle,
+                Some(Severity::Warn),
+                "'{alias}' should set re_export_cycle to Warn"
+            );
+            // None of the four aliases should accidentally populate any other field.
+            let serialized = serde_json::to_value(&partial).unwrap();
+            let map = serialized.as_object().unwrap();
+            assert_eq!(
+                map.len(),
+                1,
+                "'{alias}' should resolve to exactly one field, got: {map:?}"
             );
         }
     }

@@ -23,7 +23,8 @@
     "unused_catalog_entries": [],
     "unresolved_catalog_references": [],
     "unused_dependency_overrides": [],
-    "misconfigured_dependency_overrides": []
+    "misconfigured_dependency_overrides": [],
+    "re_export_cycles": []
   },
   "dupes": {
     "clone_groups": [],

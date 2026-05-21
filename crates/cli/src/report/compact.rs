@@ -126,6 +126,24 @@ pub fn build_compact_lines(results: &AnalysisResults, root: &Path) -> Vec<String
             cross_pkg_tag
         ));
     }
+    for cycle in &results.re_export_cycles {
+        let chain: Vec<String> = cycle.cycle.files.iter().map(|p| rel(p)).collect();
+        let first_file = chain.first().map_or_else(String::new, Clone::clone);
+        let kind_tag = match cycle.cycle.kind {
+            fallow_core::results::ReExportCycleKind::SelfLoop => " (self-loop)",
+            fallow_core::results::ReExportCycleKind::MultiNode => "",
+        };
+        // Re-export cycles are file-scoped; no useful line/col anchor (the
+        // diagnostic spans the whole file). Match `unlisted-dep:` /
+        // `duplicate-export:` shape (no line/col) rather than inventing a
+        // misleading `:1:0:` placeholder (cli-output-reviewer panel catch).
+        lines.push(format!(
+            "re-export-cycle:{}:{}{}",
+            first_file,
+            chain.join(" <-> "),
+            kind_tag
+        ));
+    }
     for v in &results.boundary_violations {
         lines.push(format!(
             "boundary-violation:{}:{}:{} -> {} ({} -> {})",

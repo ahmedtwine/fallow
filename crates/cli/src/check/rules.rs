@@ -131,6 +131,9 @@ pub fn apply_rules(results: &mut fallow_core::results::AnalysisResults, config: 
     if rules.circular_dependencies == Severity::Off {
         results.circular_dependencies.clear();
     }
+    if rules.re_export_cycle == Severity::Off {
+        results.re_export_cycles.clear();
+    }
     if rules.boundary_violation == Severity::Off {
         results.boundary_violations.clear();
     }
@@ -247,6 +250,14 @@ pub fn has_error_severity_issues(
         || (!has_overrides
             && rules.circular_dependencies == Severity::Error
             && !results.circular_dependencies.is_empty())
+        // Note: re-export-cycle is intentionally NOT guarded by `!has_overrides`.
+        // Per-file `overrides.rules.re-export-cycle` is a no-op (the cycle spans
+        // multiple files; see `crates/config/src/config/resolution.rs` load-time
+        // warn). The file-scoped block above does not consult re_export_cycle,
+        // so adding the guard would silently mute re_export_cycle errors any
+        // time overrides exist for an unrelated rule. Keep the project-wide
+        // check unconditional.
+        || (rules.re_export_cycle == Severity::Error && !results.re_export_cycles.is_empty())
         || (rules.boundary_violation == Severity::Error && !results.boundary_violations.is_empty())
         || (rules.unused_catalog_entries == Severity::Error
             && !results.unused_catalog_entries.is_empty())
@@ -304,6 +315,9 @@ pub fn promote_warns_to_errors(rules: &mut RulesConfig) {
     }
     if rules.circular_dependencies == Severity::Warn {
         rules.circular_dependencies = Severity::Error;
+    }
+    if rules.re_export_cycle == Severity::Warn {
+        rules.re_export_cycle = Severity::Error;
     }
     if rules.boundary_violation == Severity::Warn {
         rules.boundary_violation = Severity::Error;
@@ -543,6 +557,7 @@ mod tests {
             test_only_dependencies: Severity::Off,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Off,
+            re_export_cycle: Severity::Warn,
             coverage_gaps: Severity::Off,
             feature_flags: Severity::Off,
             stale_suppressions: Severity::Off,
@@ -656,6 +671,7 @@ mod tests {
             test_only_dependencies: Severity::Warn,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Warn,
+            re_export_cycle: Severity::Warn,
             coverage_gaps: Severity::Warn,
             feature_flags: Severity::Warn,
             stale_suppressions: Severity::Warn,
@@ -693,6 +709,7 @@ mod tests {
             test_only_dependencies: Severity::Warn,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Warn,
+            re_export_cycle: Severity::Warn,
             coverage_gaps: Severity::Warn,
             feature_flags: Severity::Warn,
             stale_suppressions: Severity::Warn,
@@ -1028,6 +1045,7 @@ mod tests {
             test_only_dependencies: Severity::Warn,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Warn,
+            re_export_cycle: Severity::Warn,
             coverage_gaps: Severity::Warn,
             feature_flags: Severity::Warn,
             stale_suppressions: Severity::Warn,
@@ -1077,6 +1095,7 @@ mod tests {
             test_only_dependencies: Severity::Off,
             boundary_violation: Severity::Error,
             circular_dependencies: Severity::Off,
+            re_export_cycle: Severity::Warn,
             coverage_gaps: Severity::Off,
             feature_flags: Severity::Off,
             stale_suppressions: Severity::Off,
@@ -1164,6 +1183,7 @@ mod tests {
             ));
         let rules = RulesConfig {
             circular_dependencies: Severity::Warn,
+            re_export_cycle: Severity::Warn,
             ..RulesConfig::default()
         };
         // No other issues, circular is Warn -> no error

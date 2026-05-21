@@ -36,6 +36,7 @@ fn severity_for_kind(rules: &RulesConfig, kind: IssueKind) -> Severity {
         IssueKind::UnlistedDependency => rules.unlisted_dependencies,
         IssueKind::DuplicateExport => rules.duplicate_exports,
         IssueKind::CircularDependency => rules.circular_dependencies,
+        IssueKind::ReExportCycle => rules.re_export_cycle,
         IssueKind::TypeOnlyDependency => rules.type_only_dependencies,
         IssueKind::TestOnlyDependency => rules.test_only_dependencies,
         IssueKind::BoundaryViolation => rules.boundary_violation,
@@ -286,6 +287,7 @@ impl<'a> SuppressionContext<'a> {
                         IssueKind::DuplicateExport => "duplicate-export",
                         IssueKind::CodeDuplication => "code-duplication",
                         IssueKind::CircularDependency => "circular-dependency",
+                        IssueKind::ReExportCycle => "re-export-cycle",
                         IssueKind::TypeOnlyDependency => "type-only-dependency",
                         IssueKind::TestOnlyDependency => "test-only-dependency",
                         IssueKind::BoundaryViolation => "boundary-violation",
@@ -475,6 +477,7 @@ mod tests {
             IssueKind::UnresolvedCatalogReference,
             IssueKind::UnusedDependencyOverride,
             IssueKind::MisconfiguredDependencyOverride,
+            IssueKind::ReExportCycle,
         ] {
             assert_eq!(
                 IssueKind::from_discriminant(kind.to_discriminant()),
@@ -482,7 +485,7 @@ mod tests {
             );
         }
         assert_eq!(IssueKind::from_discriminant(0), None);
-        assert_eq!(IssueKind::from_discriminant(26), None);
+        assert_eq!(IssueKind::from_discriminant(27), None);
     }
 
     #[test]
