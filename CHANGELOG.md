@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.81.0] - 2026-05-26
+
 ### Fixed
 
 - **`node:sqlite` and other mandatory-`node:`-prefix builtins are no longer reported as unlisted dependencies or unresolved imports.** Before, fallow stripped the `node:` prefix and checked the remainder against a fixed builtin list that omitted `sqlite` and `sea`, so `import 'node:sqlite'` could surface as an unlisted dependency, forcing projects to add it to `ignoreDependencies`. After, the mandatory-`node:`-prefix family (`node:sqlite`, `node:sea`, `node:test`, `node:test/reporters`) is recognized as a platform builtin only when written with the `node:` prefix. The bare forms (`sqlite`, `sea`, `test`, `test/reporters`) are now treated as ordinary npm packages, because Node refuses to resolve these modules without the prefix and real npm packages share those names. This means a bare `import 'test'` is no longer classified as a builtin. (Closes [#627](https://github.com/fallow-rs/fallow/issues/627).)
@@ -2544,7 +2546,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.80.0...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.81.0...HEAD
+[2.81.0]: https://github.com/fallow-rs/fallow/compare/v2.80.0...v2.81.0
 [2.80.0]: https://github.com/fallow-rs/fallow/compare/v2.79.0...v2.80.0
 [2.79.0]: https://github.com/fallow-rs/fallow/compare/v2.78.1...v2.79.0
 [2.78.1]: https://github.com/fallow-rs/fallow/compare/v2.78.0...v2.78.1
