@@ -428,10 +428,27 @@ mod tests {
         assert_eq!(result.setup_files, vec![Path::new("/project/setup.ts")]);
     }
 
+    /// Build a platform-absolute path from a `/project/...`-style logical path.
+    /// On Windows a leading-slash path lacks a drive and is NOT absolute, so the
+    /// `config_path.parent().is_absolute()` gate in `resolve_config` would fall
+    /// back to the root and drop the nested config directory. The registry
+    /// always passes a genuinely-absolute config path at runtime (drive-rooted
+    /// on Windows), so these tests must do the same. On Unix this is the identity.
+    fn abs(logical: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!("C:{}", logical.replace('/', "\\")))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(logical)
+        }
+    }
+
     /// Resolve with an absolute, nested config path (as the registry passes at
     /// runtime), to exercise the config-file-directory base.
     fn resolve_at(config_path: &str, source: &str) -> PluginResult {
-        PlaywrightPlugin.resolve_config(Path::new(config_path), source, Path::new("/project"))
+        PlaywrightPlugin.resolve_config(&abs(config_path), source, &abs("/project"))
     }
 
     #[test]
@@ -446,7 +463,7 @@ mod tests {
         let result = resolve_at("/project/apps/web/playwright.config.ts", source);
         assert_eq!(
             result.setup_files,
-            vec![Path::new("/project/apps/web/scripts/e2e-server.ts")],
+            vec![abs("/project/apps/web/scripts/e2e-server.ts")],
             "nested-config file args must resolve under the config directory, not the project root"
         );
     }
@@ -461,7 +478,7 @@ mod tests {
         let result = resolve_at("/project/apps/web/playwright.config.ts", source);
         assert_eq!(
             result.setup_files,
-            vec![Path::new("/project/apps/web/api/scripts/server.ts")],
+            vec![abs("/project/apps/web/api/scripts/server.ts")],
             "cwd must resolve relative to the config directory"
         );
     }
@@ -476,7 +493,7 @@ mod tests {
         let result = resolve_at("/project/apps/web/playwright.config.ts", source);
         assert_eq!(
             result.setup_files,
-            vec![Path::new("/project/apps/web/setup.ts")],
+            vec![abs("/project/apps/web/setup.ts")],
             "globalSetup must resolve under the config directory"
         );
     }
