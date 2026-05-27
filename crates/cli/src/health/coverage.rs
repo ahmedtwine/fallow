@@ -2588,7 +2588,7 @@ mod tests {
         assert_eq!(value["start_line"], 42);
         assert_eq!(value["end_line"], 50);
         assert_eq!(value["identity"]["resolution"], "unresolved");
-        assert_eq!(value["identity"]["stable_id"], "fallow:fn:43629542");
+        assert_eq!(value["identity"]["stable_id"], "fallow:fn:cb4482d6aef7c79a");
         // source_hash is carried on the wire so the sidecar can echo it back.
         assert_eq!(value["identity"]["source_hash"], "0123456789abcdef");
         // Columns are deliberately absent on the health path (Unresolved).

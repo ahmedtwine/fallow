@@ -16,7 +16,7 @@ doctest = false
 
 [dependencies]
 fallow-types = { workspace = true }
-fallow-cov-protocol = "0.7"
+fallow-cov-protocol = "0.8"
 
 # Parsing & analysis
 oxc_allocator = { workspace = true }

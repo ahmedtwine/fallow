@@ -1410,7 +1410,7 @@ mod tests {
         // a divergent helper change is caught in fallow CI, not at join time.
         assert_eq!(
             function_identity_id("src/render.tsx", "render", 42),
-            "fallow:fn:43629542"
+            "fallow:fn:cb4482d6aef7c79a"
         );
     }
 
