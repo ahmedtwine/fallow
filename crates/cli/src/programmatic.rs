@@ -1199,6 +1199,238 @@ mod tests {
         assert_eq!(error.context.as_deref(), Some("analysis.diffFile"));
     }
 
+    /// Minimal valid project used by the end-to-end programmatic entry points.
+    fn tiny_project() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"prog-e2e","main":"src/index.ts"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/index.ts"),
+            "export const ok = 1;\nconsole.log(ok);\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn analysis_at(root: &Path) -> AnalysisOptions {
+        AnalysisOptions {
+            root: Some(root.to_path_buf()),
+            ..AnalysisOptions::default()
+        }
+    }
+
+    #[test]
+    fn resolve_rejects_zero_threads() {
+        let err = AnalysisOptions {
+            threads: Some(0),
+            ..AnalysisOptions::default()
+        }
+        .resolve()
+        .err()
+        .expect("zero threads must be rejected");
+        assert_eq!(err.exit_code, 2);
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_THREADS"));
+        assert_eq!(err.context.as_deref(), Some("analysis.threads"));
+    }
+
+    #[test]
+    fn resolve_rejects_mutually_exclusive_workspace_flags() {
+        let err = AnalysisOptions {
+            workspace: Some(vec!["packages/*".to_owned()]),
+            changed_workspaces: Some("HEAD~1".to_owned()),
+            ..AnalysisOptions::default()
+        }
+        .resolve()
+        .err()
+        .expect("workspace + changed_workspaces must be rejected");
+        assert_eq!(
+            err.code.as_deref(),
+            Some("FALLOW_MUTUALLY_EXCLUSIVE_OPTIONS")
+        );
+        assert_eq!(err.context.as_deref(), Some("analysis.workspace"));
+    }
+
+    #[test]
+    fn resolve_rejects_nonexistent_root() {
+        let err = AnalysisOptions {
+            root: Some(PathBuf::from("/definitely/not/a/real/path/xyzzy")),
+            ..AnalysisOptions::default()
+        }
+        .resolve()
+        .err()
+        .expect("nonexistent root must be rejected");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_ROOT"));
+        assert_eq!(err.context.as_deref(), Some("analysis.root"));
+    }
+
+    #[test]
+    fn resolve_rejects_root_that_is_a_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("not-a-dir.txt");
+        std::fs::write(&file, "x").unwrap();
+        let err = AnalysisOptions {
+            root: Some(file),
+            ..AnalysisOptions::default()
+        }
+        .resolve()
+        .err()
+        .expect("a file root must be rejected");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_ROOT"));
+    }
+
+    #[test]
+    fn resolve_rejects_nonexistent_config_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let err = AnalysisOptions {
+            root: Some(dir.path().to_path_buf()),
+            config_path: Some(dir.path().join("missing.fallowrc.json")),
+            ..AnalysisOptions::default()
+        }
+        .resolve()
+        .err()
+        .expect("nonexistent config must be rejected");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_CONFIG_PATH"));
+        assert_eq!(err.context.as_deref(), Some("analysis.configPath"));
+    }
+
+    #[test]
+    fn resolve_rejects_missing_diff_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let err = AnalysisOptions {
+            root: Some(dir.path().to_path_buf()),
+            diff_file: Some(PathBuf::from("nope.diff")),
+            ..AnalysisOptions::default()
+        }
+        .resolve()
+        .err()
+        .expect("missing diff file must be rejected");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_DIFF_FILE"));
+        assert_eq!(err.context.as_deref(), Some("analysis.diffFile"));
+    }
+
+    #[test]
+    fn resolve_rejects_diff_path_that_is_a_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(dir.path().join("a-dir")).unwrap();
+        let err = AnalysisOptions {
+            root: Some(dir.path().to_path_buf()),
+            diff_file: Some(PathBuf::from("a-dir")),
+            ..AnalysisOptions::default()
+        }
+        .resolve()
+        .err()
+        .expect("a directory diff path must be rejected");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_DIFF_FILE"));
+    }
+
+    #[test]
+    fn detect_circular_dependencies_returns_dead_code_envelope() {
+        let project = tiny_project();
+        let json = detect_circular_dependencies(&DeadCodeOptions {
+            analysis: analysis_at(project.path()),
+            ..DeadCodeOptions::default()
+        })
+        .expect("circular-dependency analysis should succeed");
+        assert_eq!(json["kind"], "dead-code");
+        assert!(json["circular_dependencies"].is_array());
+    }
+
+    #[test]
+    fn detect_boundary_violations_returns_dead_code_envelope() {
+        let project = tiny_project();
+        let json = detect_boundary_violations(&DeadCodeOptions {
+            analysis: analysis_at(project.path()),
+            ..DeadCodeOptions::default()
+        })
+        .expect("boundary-violation analysis should succeed");
+        assert_eq!(json["kind"], "dead-code");
+        assert!(json["boundary_violations"].is_array());
+    }
+
+    #[test]
+    fn detect_duplication_returns_dupes_envelope() {
+        let project = tiny_project();
+        let json = detect_duplication(&DuplicationOptions {
+            analysis: analysis_at(project.path()),
+            ..DuplicationOptions::default()
+        })
+        .expect("duplication analysis should succeed");
+        assert_eq!(json["kind"], "dupes");
+        // DupesOutput.report is `#[serde(flatten)]`, so its fields are top-level.
+        assert!(json["clone_groups"].is_array());
+        assert!(json["stats"].is_object());
+    }
+
+    #[test]
+    fn compute_health_returns_health_envelope() {
+        let project = tiny_project();
+        let options = ComplexityOptions {
+            analysis: analysis_at(project.path()),
+            ..ComplexityOptions::default()
+        };
+        // compute_health is a thin alias for compute_complexity.
+        let json = compute_health(&options).expect("health analysis should succeed");
+        assert_eq!(json["kind"], "health");
+        // HealthOutput.report is `#[serde(flatten)]`, so its fields are top-level.
+        assert!(json["summary"].is_object());
+        assert!(json["findings"].is_array());
+    }
+
+    #[test]
+    fn compute_complexity_rejects_missing_coverage_path() {
+        let project = tiny_project();
+        let err = compute_complexity(&ComplexityOptions {
+            analysis: analysis_at(project.path()),
+            coverage: Some(project.path().join("missing-coverage.json")),
+            ..ComplexityOptions::default()
+        })
+        .expect_err("a missing coverage path must be rejected");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_COVERAGE_PATH"));
+        assert_eq!(err.context.as_deref(), Some("health.coverage"));
+    }
+
+    #[test]
+    fn compute_complexity_rejects_relative_coverage_root() {
+        let project = tiny_project();
+        let err = compute_complexity(&ComplexityOptions {
+            analysis: analysis_at(project.path()),
+            coverage_root: Some(PathBuf::from("relative/prefix")),
+            ..ComplexityOptions::default()
+        })
+        .expect_err("a relative coverage_root must be rejected");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_INVALID_COVERAGE_ROOT"));
+        assert_eq!(err.context.as_deref(), Some("health.coverage_root"));
+    }
+
+    #[test]
+    fn programmatic_error_builders_compose_and_display() {
+        let err = ProgrammaticError::new("boom", 7)
+            .with_code("FALLOW_X")
+            .with_help("try again")
+            .with_context("ctx.path");
+        assert_eq!(err.message, "boom");
+        assert_eq!(err.exit_code, 7);
+        assert_eq!(err.code.as_deref(), Some("FALLOW_X"));
+        assert_eq!(err.help.as_deref(), Some("try again"));
+        assert_eq!(err.context.as_deref(), Some("ctx.path"));
+        // Display surfaces only the message.
+        assert_eq!(format!("{err}"), "boom");
+    }
+
+    #[test]
+    fn generic_analysis_error_uppercases_command_into_code() {
+        let err = generic_analysis_error("dead-code");
+        assert_eq!(err.code.as_deref(), Some("FALLOW_DEAD_CODE_FAILED"));
+        assert_eq!(err.exit_code, 2);
+        assert_eq!(err.context.as_deref(), Some("fallow dead-code"));
+        assert!(err.help.is_some(), "diagnostics hint should be attached");
+    }
+
     fn unused_file_paths(json: &serde_json::Value) -> Vec<String> {
         json["unused_files"]
             .as_array()
