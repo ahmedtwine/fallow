@@ -1366,4 +1366,117 @@ mod tests {
             Some("0123456789abcdef")
         );
     }
+
+    fn project_with_one_function() -> TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("package.json"), r#"{"name":"inv"}"#).unwrap();
+        std::fs::write(
+            root.join("src/index.ts"),
+            "export function boot() {\n  return 1;\n}\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn dry_run_args() -> UploadInventoryArgs {
+        UploadInventoryArgs {
+            project_id: Some("acme/web".to_owned()),
+            git_sha: Some("abcdef1".to_owned()),
+            api_endpoint: Some("http://localhost:3000".to_owned()),
+            allow_dirty: true,
+            dry_run: true,
+            ..UploadInventoryArgs::default()
+        }
+    }
+
+    #[test]
+    fn run_dry_run_emits_inventory_and_exits_zero() {
+        let project = project_with_one_function();
+        // Explicit project_id + git_sha keep this env- and git-free.
+        let code = run(&dry_run_args(), project.path());
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn run_with_no_functions_is_a_validation_exit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("package.json"), r#"{"name":"inv"}"#).unwrap();
+        // Only a declaration file: the walker intentionally skips `*.d.ts`, so
+        // the inventory is empty and run_inner returns a validation error.
+        std::fs::write(
+            root.join("src/types.d.ts"),
+            "export declare const x: number;\n",
+        )
+        .unwrap();
+        let code = run(&dry_run_args(), root);
+        assert_eq!(code, ExitCode::from(EXIT_VALIDATION));
+    }
+
+    #[test]
+    fn into_exit_maps_variants_and_soft_fails_transient_when_opted_in() {
+        // Hard-fail mapping (no soft-fail opt-in).
+        assert_eq!(
+            UploadError::Validation("v".to_owned()).into_exit(false),
+            ExitCode::from(EXIT_VALIDATION)
+        );
+        assert_eq!(
+            UploadError::PayloadTooLarge("p".to_owned()).into_exit(false),
+            ExitCode::from(EXIT_PAYLOAD_TOO_LARGE)
+        );
+        assert_eq!(
+            UploadError::AuthRejected("a".to_owned()).into_exit(false),
+            ExitCode::from(EXIT_AUTH_REJECTED)
+        );
+        assert_eq!(
+            UploadError::ServerError("s".to_owned()).into_exit(false),
+            ExitCode::from(EXIT_SERVER_ERROR)
+        );
+        assert_eq!(
+            UploadError::Network("n".to_owned()).into_exit(false),
+            ExitCode::from(NETWORK_EXIT_CODE)
+        );
+
+        // With --ignore-upload-errors, only transient (server/network) failures
+        // downgrade to exit 0; auth rejection stays fatal.
+        assert_eq!(
+            UploadError::ServerError("s".to_owned()).into_exit(true),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            UploadError::Network("n".to_owned()).into_exit(true),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            UploadError::AuthRejected("a".to_owned()).into_exit(true),
+            ExitCode::from(EXIT_AUTH_REJECTED)
+        );
+    }
+
+    #[test]
+    fn resolve_git_sha_validates_explicit_value() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let with_sha = |sha: &str| UploadInventoryArgs {
+            git_sha: Some(sha.to_owned()),
+            ..UploadInventoryArgs::default()
+        };
+
+        assert_eq!(
+            resolve_git_sha(&with_sha("abcdef1"), root).unwrap(),
+            "abcdef1"
+        );
+        assert!(resolve_git_sha(&with_sha(""), root).is_err(), "empty sha");
+        assert!(
+            resolve_git_sha(&with_sha(&"a".repeat(GIT_SHA_MAX_LEN + 1)), root).is_err(),
+            "over-length sha"
+        );
+        assert!(
+            resolve_git_sha(&with_sha("bad sha!"), root).is_err(),
+            "illegal characters"
+        );
+    }
 }
