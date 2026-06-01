@@ -21,7 +21,6 @@ fn supabase_edge_functions_handle_deno_schemes_and_roots() {
     let config = create_config(root.to_path_buf());
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // AC1 + AC4: jsr:, npm:, and URL imports produce no unresolved-import noise.
     let unresolved: Vec<&str> = results
         .unresolved_imports
         .iter()
@@ -32,9 +31,6 @@ fn supabase_edge_functions_handle_deno_schemes_and_roots() {
         "Deno scheme/URL imports should not be unresolved, found: {unresolved:?}"
     );
 
-    // AC1 + AC2: no unlisted-dependency noise. `@supabase/supabase-js` is
-    // declared, `zod` is imported only via `npm:` (self-declaring), and the
-    // `jsr:@std/path` import never reaches dependency accounting.
     let unlisted: Vec<&str> = results
         .unlisted_dependencies
         .iter()
@@ -45,7 +41,6 @@ fn supabase_edge_functions_handle_deno_schemes_and_roots() {
         "Deno scheme imports should not be unlisted dependencies, found: {unlisted:?}"
     );
 
-    // AC2: a declared dependency imported via `npm:` is credited, not unused.
     let unused_deps: Vec<&str> = results
         .unused_dependencies
         .iter()
@@ -56,7 +51,6 @@ fn supabase_edge_functions_handle_deno_schemes_and_roots() {
         "npm:@supabase/supabase-js should credit the declared dependency, unused: {unused_deps:?}"
     );
 
-    // AC5: the Supabase CLI is invoked from scripts, credited as tooling.
     let unused_dev_deps: Vec<&str> = results
         .unused_dev_dependencies
         .iter()
@@ -67,8 +61,6 @@ fn supabase_edge_functions_handle_deno_schemes_and_roots() {
         "supabase CLI should be credited as tooling, unused dev: {unused_dev_deps:?}"
     );
 
-    // AC3: function entry + shared code reachable; orphan outside the functions
-    // tree stays reportable.
     let unused_files = unused_file_paths(&results, root);
     assert!(
         !unused_files.contains(&"supabase/functions/hello/index.ts".to_string()),

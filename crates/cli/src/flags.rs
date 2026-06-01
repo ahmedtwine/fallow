@@ -82,13 +82,11 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
         Err(code) => return code,
     };
 
-    // Discover files
     let files = fallow_core::discover::discover_files_with_plugin_scopes(&config);
     if files.is_empty() {
         return emit_error("no files discovered", 2, opts.output);
     }
 
-    // Parse all files (flag extraction happens automatically during parse)
     let cache_store = if config.no_cache {
         None
     } else {
@@ -100,10 +98,8 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
     };
     let parse_result = fallow_core::extract::parse_all_files(&files, cache_store.as_ref(), false);
 
-    // Build file_id -> path lookup from discovered files
     let file_paths: rustc_hash::FxHashMap<_, _> = files.iter().map(|f| (f.id, &f.path)).collect();
 
-    // Prepare user-configured flag patterns for supplementary extraction
     let extra_sdk: Vec<(String, usize, String)> = config
         .flags
         .sdk_patterns
@@ -120,14 +116,12 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
         || !config.flags.env_prefixes.is_empty()
         || config.flags.config_object_heuristics;
 
-    // Collect feature flags from parsed modules (built-in patterns from cache/parse)
     let mut flags: Vec<FeatureFlag> = Vec::new();
     for module in &parse_result.modules {
         let Some(path) = file_paths.get(&module.file_id) else {
             continue;
         };
 
-        // Built-in flag results from parse/cache
         let file_suppressed = fallow_core::suppress::is_file_suppressed(
             &module.suppressions,
             fallow_core::suppress::IssueKind::FeatureFlag,
@@ -145,10 +139,6 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
             flags.push(flag_use_to_feature_flag(flag_use, module, path));
         }
 
-        // Supplementary extraction pass for user-configured patterns.
-        // Built-in patterns are already in module.flag_uses (cached).
-        // Custom SDK patterns, env prefixes, and config object heuristics
-        // require re-reading source because they weren't applied at parse time.
         if has_custom_config && let Ok(source) = std::fs::read_to_string(path) {
             let custom_flags = fallow_core::extract::flags::extract_flags_from_source(
                 &source,
@@ -157,7 +147,6 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
                 &config.flags.env_prefixes,
                 config.flags.config_object_heuristics,
             );
-            // Only add flags not already found by built-in extraction (dedup by line+name)
             for flag_use in &custom_flags {
                 let already_found = module.flag_uses.iter().any(|existing| {
                     existing.line == flag_use.line && existing.flag_name == flag_use.flag_name
@@ -175,8 +164,6 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
         }
     }
 
-    // Run dead code analysis for cross-reference (flags guarding dead code).
-    // Uses pre-parsed modules to avoid re-parsing.
     #[expect(
         deprecated,
         reason = "ADR-008 deprecates fallow_core::analyze_with_parse_result and the feature_flags helpers externally; flags still uses the workspace path dependency"
@@ -190,14 +177,12 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
         );
     }
 
-    // Filter to changed files if --changed-since is active
     if let Some(git_ref) = opts.changed_since
         && let Some(changed) = crate::check::get_changed_files(opts.root, git_ref)
     {
         flags.retain(|f| changed.contains(&f.path));
     }
 
-    // Filter to workspace(s) if specified (either --workspace or --changed-workspaces)
     let ws_scope = match crate::check::resolve_workspace_scope(
         opts.root,
         opts.workspace,
@@ -211,7 +196,6 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
         flags.retain(|f| ws_roots.iter().any(|r| f.path.starts_with(r)));
     }
 
-    // Sort for deterministic output
     flags.sort_by(|a, b| {
         a.path
             .cmp(&b.path)
@@ -219,14 +203,12 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
             .then(a.flag_name.cmp(&b.flag_name))
     });
 
-    // Apply top N limit
     if let Some(top) = opts.top {
         flags.truncate(top);
     }
 
     let elapsed = start.elapsed();
 
-    // Badge format is health-only
     if matches!(
         opts.output,
         OutputFormat::PrCommentGithub
@@ -242,9 +224,6 @@ pub fn run_flags(opts: &FlagsOptions<'_>) -> ExitCode {
         );
     }
 
-    // Render output. `files.len()` is the discovered source-file count, which
-    // matches the "Scanned N files" wording better than the parsed-module count
-    // (the latter undercounts when a file fails to read).
     let files_scanned = files.len();
     print_flags_result(&flags, &config, opts, elapsed, files_scanned);
 
@@ -412,13 +391,11 @@ fn print_flags_human(
         return;
     }
 
-    // Separate flags guarding dead code (cross-reference) from inventory
     let dead_code_flags: Vec<&FeatureFlag> = flags
         .iter()
         .filter(|f| !f.guarded_dead_exports.is_empty())
         .collect();
 
-    // Cross-reference section first (the primary value)
     if !dead_code_flags.is_empty() {
         let label = format!("Flags guarding dead code ({})", dead_code_flags.len());
         println!("{} {}", "\u{25cf}".yellow(), label.yellow().bold());
@@ -455,7 +432,6 @@ fn print_flags_human(
         println!();
     }
 
-    // Full inventory section
     let mut by_file: Vec<(&std::path::Path, Vec<&FeatureFlag>)> = Vec::new();
     for flag in flags {
         if let Some(entry) = by_file.iter_mut().find(|(p, _)| *p == flag.path.as_path()) {
@@ -483,7 +459,6 @@ fn print_flags_human(
         }
     }
 
-    // Footer
     if !quiet {
         let elapsed_str = format!("{:.2}s", elapsed.as_secs_f64());
         eprintln!(
@@ -618,10 +593,8 @@ fn print_flags_markdown(flags: &[FeatureFlag], config: &ResolvedConfig) {
         return;
     }
 
-    // Summary heading
     println!("## Feature flags: {} found\n", flags.len());
 
-    // Cross-reference section first
     let dead_flags: Vec<&FeatureFlag> = flags
         .iter()
         .filter(|f| !f.guarded_dead_exports.is_empty())
@@ -643,7 +616,6 @@ fn print_flags_markdown(flags: &[FeatureFlag], config: &ResolvedConfig) {
         println!();
     }
 
-    // Full inventory
     println!("### Feature flags ({})\n", flags.len());
     println!("| File | Line | Flag | Kind |");
     println!("|------|------|------|------|");
@@ -667,7 +639,6 @@ fn print_flags_codeclimate(flags: &[FeatureFlag], config: &ResolvedConfig) {
     let issues: Vec<serde_json::Value> = flags
         .iter()
         .map(|f| {
-            // Use crate::report::n for bracket encoding (Next.js dynamic routes)
             let path = crate::report::normalize_uri(&relative_path(f, &config.root));
             let mut description = format!(
                 "Feature flag '{}' detected ({})",

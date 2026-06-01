@@ -57,7 +57,6 @@ pub fn cross_reference(
     duplication: &DuplicationReport,
     dead_code: &AnalysisResults,
 ) -> CrossReferenceResult {
-    // Build lookup sets for fast checking
     let unused_files: FxHashSet<&PathBuf> = dead_code
         .unused_files
         .iter()
@@ -70,7 +69,6 @@ pub fn cross_reference(
 
     for (group_idx, group) in duplication.clone_groups.iter().enumerate() {
         for instance in &group.instances {
-            // Check 1: Is the file entirely unused?
             if unused_files.contains(&instance.file) {
                 combined_findings.push(CombinedFinding {
                     clone_instance: instance.clone(),
@@ -81,7 +79,6 @@ pub fn cross_reference(
                 continue; // No need to check exports if entire file is unused
             }
 
-            // Check 2: Does an unused export/type overlap with this clone's line range?
             if let Some(finding) = find_overlapping_unused_export(instance, group_idx, dead_code) {
                 clones_with_unused_exports += 1;
                 combined_findings.push(finding);
@@ -102,7 +99,6 @@ fn find_overlapping_unused_export(
     group_index: usize,
     dead_code: &AnalysisResults,
 ) -> Option<CombinedFinding> {
-    // Check unused exports
     for export in &dead_code.unused_exports {
         if export.export.path == instance.file
             && (export.export.line as usize) >= instance.start_line
@@ -118,7 +114,6 @@ fn find_overlapping_unused_export(
         }
     }
 
-    // Check unused types
     for type_export in &dead_code.unused_types {
         if type_export.export.path == instance.file
             && (type_export.export.line as usize) >= instance.start_line
@@ -320,14 +315,13 @@ mod tests {
             },
         };
         let mut dead_code = AnalysisResults::default();
-        // Unused export on a different line range
         dead_code
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
                 path: PathBuf::from("src/a.ts"),
                 export_name: "other".to_string(),
                 is_type_only: false,
-                line: 20, // outside clone range 5-15
+                line: 20,
                 col: 0,
                 span_start: 0,
                 is_re_export: false,
@@ -374,14 +368,12 @@ mod tests {
 
         let result = cross_reference(&duplication, &dead_code);
         let affected = result.affected_group_indices();
-        assert!(!affected.contains(&0)); // Group 0 not affected
-        assert!(affected.contains(&1)); // Group 1 has clone in unused file
+        assert!(!affected.contains(&0));
+        assert!(affected.contains(&1));
     }
 
     #[test]
     fn unused_file_takes_priority_over_export() {
-        // If a file is unused AND has unused exports, we should only get the
-        // UnusedFile finding (not both), because the continue skips export checks.
         let duplication = DuplicationReport {
             clone_groups: vec![make_group(vec![
                 make_instance("src/a.ts", 5, 15),
@@ -421,7 +413,6 @@ mod tests {
             }));
 
         let result = cross_reference(&duplication, &dead_code);
-        // Only 1 finding for src/a.ts (the unused file), not 2
         let a_findings: Vec<_> = result
             .combined_findings
             .iter()
@@ -542,15 +533,13 @@ mod tests {
         assert_eq!(result.clones_with_unused_exports, 1);
 
         let affected = result.affected_group_indices();
-        assert!(affected.contains(&0)); // Group 0 has clone in unused file
-        assert!(affected.contains(&1)); // Group 1 has clone overlapping unused export
-        assert!(!affected.contains(&2)); // Group 2 unaffected
+        assert!(affected.contains(&0));
+        assert!(affected.contains(&1));
+        assert!(!affected.contains(&2));
     }
 
     #[test]
     fn clone_instance_outside_export_line_range() {
-        // Clone instance at lines 1-5, unused export at line 10
-        // They don't overlap, so no finding
         let duplication = DuplicationReport {
             clone_groups: vec![make_group(vec![
                 make_instance("src/a.ts", 1, 5),
@@ -579,7 +568,6 @@ mod tests {
 
     #[test]
     fn clone_in_different_file_than_unused_export() {
-        // Clone is in src/a.ts, unused export is in src/x.ts
         let duplication = DuplicationReport {
             clone_groups: vec![make_group(vec![
                 make_instance("src/a.ts", 5, 15),
@@ -593,7 +581,7 @@ mod tests {
         dead_code
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
-                path: PathBuf::from("src/x.ts"), // different file
+                path: PathBuf::from("src/x.ts"),
                 export_name: "fn".to_string(),
                 is_type_only: false,
                 line: 10,

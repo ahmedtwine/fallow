@@ -19,10 +19,6 @@ fn init_git_index(root: &std::path::Path) {
     assert!(status.success(), "git add should succeed");
 }
 
-// ---------------------------------------------------------------------------
-// JSON output structure
-// ---------------------------------------------------------------------------
-
 /// `fallow dupes --performance` was previously a no-op: the global flag was
 /// parsed but never wired through to `DupesOptions`, so users got nothing.
 /// This pins the behaviour: human format renders a stderr "Duplication
@@ -82,10 +78,6 @@ fn dupes_json_has_stats() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Mode flags
-// ---------------------------------------------------------------------------
-
 #[test]
 fn dupes_strict_mode_accepted() {
     let output = run_fallow(
@@ -112,10 +104,6 @@ fn dupes_mild_mode_accepted() {
         "dupes --mode mild should not crash"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Filtering
-// ---------------------------------------------------------------------------
 
 #[test]
 fn dupes_min_tokens_filter() {
@@ -381,10 +369,6 @@ fn dupes_save_baseline_creates_parent_directory() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Path relativization (regression: #85)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn dupes_json_paths_are_relative() {
     let output = run_fallow("dupes", "duplicate-code", &["--format", "json", "--quiet"]);
@@ -392,7 +376,6 @@ fn dupes_json_paths_are_relative() {
     let groups = json["clone_groups"].as_array().unwrap();
     assert!(!groups.is_empty(), "fixture should have clone groups");
 
-    // All instance paths must be relative (no leading /)
     for group in groups {
         for instance in group["instances"].as_array().unwrap() {
             let path = instance["file"].as_str().unwrap();
@@ -403,7 +386,6 @@ fn dupes_json_paths_are_relative() {
         }
     }
 
-    // Clone families should also have relative paths
     if let Some(families) = json.get("clone_families").and_then(|f| f.as_array()) {
         for family in families {
             if let Some(files) = family.get("files").and_then(|f| f.as_array()) {
@@ -419,10 +401,6 @@ fn dupes_json_paths_are_relative() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Human output snapshot
-// ---------------------------------------------------------------------------
-
 #[test]
 fn dupes_human_output_snapshot() {
     let output = run_fallow("dupes", "duplicate-code", &["--quiet"]);
@@ -430,10 +408,6 @@ fn dupes_human_output_snapshot() {
     let redacted = redact_all(&output.stdout, &root);
     insta::assert_snapshot!("dupes_human_output", redacted);
 }
-
-// ---------------------------------------------------------------------------
-// Plugin-scoped hidden directory traversal
-// ---------------------------------------------------------------------------
 
 /// Standalone `fallow dupes` must include React Router's `.client` / `.server`
 /// folders in its file walk. The threshold is dropped to the minimum so the

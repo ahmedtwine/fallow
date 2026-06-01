@@ -1,7 +1,5 @@
 use fallow_core::results::AnalysisResults;
 
-// ── Regression baseline ─────────────────────────────────────────
-
 /// Regression baseline: stores issue counts per type for comparison.
 ///
 /// Unlike `BaselineData` which stores individual issue identities for suppression,
@@ -253,8 +251,6 @@ mod tests {
     use fallow_core::results::*;
     use std::path::PathBuf;
 
-    // ── CheckCounts::from_results ──────────────────────────────────
-
     #[test]
     fn check_counts_from_results() {
         let mut results = AnalysisResults::default();
@@ -280,8 +276,6 @@ mod tests {
         assert_eq!(counts.unused_exports, 1);
         assert_eq!(counts.unused_types, 0);
     }
-
-    // ── CheckCounts::deltas ────────────────────────────────────────
 
     #[test]
     fn deltas_reports_changes_only() {
@@ -315,8 +309,6 @@ mod tests {
         assert!(deltas.contains(&("unused_files", 2)));
         assert!(deltas.contains(&("unused_exports", -2)));
     }
-
-    // ── Regression baseline serialization roundtrip ────────────────
 
     #[test]
     fn regression_baseline_roundtrip() {
@@ -355,8 +347,6 @@ mod tests {
         assert_eq!(loaded.check.as_ref().unwrap().total_issues, 42);
         assert_eq!(loaded.dupes.as_ref().unwrap().clone_groups, 12);
     }
-
-    // ── CheckCounts config baseline roundtrip ────────────────────────
 
     #[test]
     fn check_counts_config_roundtrip() {
@@ -425,8 +415,6 @@ mod tests {
         assert_eq!(roundtripped.unused_files, 0);
     }
 
-    // ── deltas edge cases ──────────────────────────────────────────
-
     #[test]
     fn deltas_empty_when_identical() {
         let counts = CheckCounts {
@@ -493,7 +481,6 @@ mod tests {
             boundary_violations: 1,
         };
         let deltas = baseline.deltas(&current);
-        // total_issues is not in deltas — only per-type fields
         assert_eq!(deltas.len(), 15);
         for (_, d) in &deltas {
             assert_eq!(*d, 1);
@@ -522,10 +509,10 @@ mod tests {
             boundary_violations: 0,
         };
         let current = CheckCounts {
-            unused_files: 3,       // -2
-            unused_exports: 5,     // +2
-            unused_types: 0,       // -2
-            unresolved_imports: 1, // +1
+            unused_files: 3,
+            unused_exports: 5,
+            unused_types: 0,
+            unresolved_imports: 1,
             ..baseline
         };
         let deltas = baseline.deltas(&current);
@@ -535,8 +522,6 @@ mod tests {
         assert!(deltas.contains(&("unused_types", -2)));
         assert!(deltas.contains(&("unresolved_imports", 1)));
     }
-
-    // ── DupesCounts serialization ──────────────────────────────────
 
     #[test]
     fn dupes_counts_roundtrip() {
@@ -552,14 +537,11 @@ mod tests {
 
     #[test]
     fn dupes_counts_default_fields() {
-        // Deserializing with missing fields should default to zero
         let json = "{}";
         let loaded: DupesCounts = serde_json::from_str(json).unwrap();
         assert_eq!(loaded.clone_groups, 0);
         assert!((loaded.duplication_percentage).abs() < f64::EPSILON);
     }
-
-    // ── RegressionBaseline with missing optional sections ──────────
 
     #[test]
     fn baseline_without_check_section() {
@@ -612,13 +594,10 @@ mod tests {
             dupes: None,
         };
         let json = serde_json::to_string_pretty(&baseline).unwrap();
-        // git_sha should be skipped in serialization
         assert!(!json.contains("git_sha"));
         let loaded: RegressionBaseline = serde_json::from_str(&json).unwrap();
         assert!(loaded.git_sha.is_none());
     }
-
-    // ── Forward compatibility: extra fields are ignored ──────────────
 
     #[test]
     fn baseline_json_with_unknown_check_fields_deserializes() {
@@ -632,9 +611,7 @@ mod tests {
                 "some_future_field": 99
             }
         }"#;
-        // Should not fail — extra fields are ignored by serde default
         let loaded: Result<RegressionBaseline, _> = serde_json::from_str(json);
-        // Note: serde doesn't deny unknown fields by default, so this should work
         assert!(loaded.is_ok());
         let loaded = loaded.unwrap();
         assert_eq!(loaded.check.as_ref().unwrap().total_issues, 10);

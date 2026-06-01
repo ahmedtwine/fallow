@@ -337,8 +337,6 @@ pub fn compute_angular_template_complexity(source: &str) -> Option<FunctionCompl
         cognitive: complexity.cognitive,
         line_count,
         param_count: 0,
-        // Synthetic template-derived complexity has no source-byte span to
-        // digest; runtime coverage does not track templates.
         source_hash: None,
     })
 }
@@ -843,13 +841,11 @@ mod tests {
 
     #[test]
     fn html_comments_are_skipped() {
-        // Logical-and inside an HTML comment must not contribute.
         assert!(compute_angular_template_complexity("<!-- a && b && c --><p>plain</p>").is_none());
     }
 
     #[test]
     fn closing_tags_without_attributes_do_not_panic() {
-        // Regression: scan_attributes must short-circuit on `</tag>` form.
         let complexity =
             compute_angular_template_complexity("<section><div *ngIf=\"a\">x</div></section>")
                 .expect("template should have complexity");
@@ -858,7 +854,6 @@ mod tests {
 
     #[test]
     fn quoted_strings_inside_attributes_do_not_break_scanner() {
-        // Single-quoted attribute values containing > and { must not derail scanning.
         let complexity = compute_angular_template_complexity(
             r"<a href='https://example.com?q=1&r=2' [class.x]='a && b' />",
         )

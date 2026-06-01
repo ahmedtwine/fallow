@@ -4,9 +4,6 @@ use super::pr_comment::{CiIssue, Provider};
 
 #[must_use]
 pub fn suggestion_block(provider: Provider, issue: &CiIssue) -> Option<String> {
-    // Unused-file rules don't have a per-line target on the diff; we surface
-    // a one-line text hint instead of a `suggestion` block (GitHub doesn't
-    // support file-deletion suggestions).
     if issue.rule_id.contains("unused-file") {
         return Some(unused_file_hint());
     }
@@ -27,7 +24,6 @@ pub fn suggestion_block_for_issue_line(
     rule_id: &str,
     line: &str,
 ) -> Option<String> {
-    // Order matters: more-specific rule names first.
     if rule_id.contains("unused-import") {
         return unused_import_suggestion(provider, line);
     }
@@ -40,9 +36,8 @@ pub fn suggestion_block_for_issue_line(
     None
 }
 
-/// One-line text hint for `unused-file` findings. Not a `suggestion` block:
-/// neither GitHub nor GitLab supports applying a file-scope deletion through
-/// the review-comment API, so we surface guidance for the human reader.
+/// Text hint for `unused-file` findings. Neither GitHub nor GitLab supports
+/// file-scope deletion suggestions through the review-comment API.
 #[must_use]
 fn unused_file_hint() -> String {
     "\n\n> Run `fallow fix --files` or delete this file.".to_owned()
@@ -62,13 +57,7 @@ fn unused_export_suggestion(provider: Provider, line: &str) -> Option<String> {
     }
 }
 
-/// Suggestion that deletes the matched line entirely. Used for unused enum
-/// members and unused class members where the finding points at exactly the
-/// line that should disappear.
-///
-/// Both GitHub and GitLab render an empty `suggestion` block as "apply this
-/// to delete the line". The GitLab variant uses the line-offset-aware
-/// `:-0+0` suffix per their docs.
+/// Delete the matched line entirely for unused enum/class members.
 fn delete_line_suggestion(provider: Provider, line: &str) -> Option<String> {
     if line.trim().is_empty() {
         return None;
@@ -234,8 +223,6 @@ mod tests {
 
     #[test]
     fn renders_unused_enum_member_delete_suggestion() {
-        // Enum member line typically reads `  Deprecated,` or `  Foo = "foo",`.
-        // The fix is "delete this line" => empty suggestion block.
         assert_eq!(
             suggestion_block_for_issue_line(
                 Provider::Github,
@@ -271,9 +258,6 @@ mod tests {
 
     #[test]
     fn unused_file_hint_uses_text_not_suggestion_block() {
-        // GitHub's review-comment API has no file-deletion suggestion shape;
-        // GitLab same. We surface a one-liner hint instead of a misleading
-        // suggestion block that would not apply.
         let issue = CiIssue {
             rule_id: "fallow/unused-file".to_owned(),
             description: "File is not reachable".to_owned(),
@@ -289,7 +273,6 @@ mod tests {
 
     #[test]
     fn delete_line_suggestion_skips_blank_lines() {
-        // Edge case: if the source line is empty, deleting it again is a no-op.
         assert_eq!(
             suggestion_block_for_issue_line(Provider::Github, "fallow/unused-enum-member", "   "),
             None

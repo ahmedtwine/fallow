@@ -34,8 +34,6 @@ fn unused_file_paths(results: &fallow_types::results::AnalysisResults) -> Vec<St
         .collect()
 }
 
-// ── Case A: Vite additionalData ──────────────────────────────────────
-
 #[test]
 fn vite_additional_data_seeds_scss_entries() {
     let root = fixture_path("issue-195-vite-additional-data");
@@ -143,8 +141,6 @@ export default defineConfig({
     );
 }
 
-// ── Case B: SFC <style> blocks ───────────────────────────────────────
-
 #[test]
 fn sfc_style_block_scss_import_seeds_partial() {
     let root = fixture_path("issue-195-sfc-style-imports");
@@ -236,8 +232,6 @@ export const name = "App";
     );
 }
 
-// ── Case C: package.json scripts positional args ─────────────────────
-
 #[test]
 fn package_json_script_entry_files_seed_root_level_paths() {
     let root = fixture_path("issue-195-script-entry-files");
@@ -269,17 +263,6 @@ fn workspace_package_script_entry_files_use_workspace_prefix() {
     );
 }
 
-// Note: production-mode behaviour for `scripts/deploy.ts` is shaped by the
-// existing `discover_entry_points_with_warnings_impl` path
-// (`crates/core/src/discover/entry_points.rs`) which seeds file refs from ALL
-// scripts regardless of production mode. The Case C addition in
-// `analyze_all_scripts` only fires in non-production mode (`filter_production_scripts`
-// strips non-prod scripts first), but cannot make production mode strictly
-// conservative on its own because the discovery layer also seeds. Strictly
-// production-conservative script seeding is out of scope for this fix.
-
-// ── Case D: CI YAML positional args ──────────────────────────────────
-
 #[test]
 fn ci_yaml_file_args_seed_entry_points() {
     let root = fixture_path("issue-195-ci-file-args");
@@ -296,8 +279,6 @@ fn ci_yaml_file_args_seed_entry_points() {
         "scripts/gh-deploy.ts is referenced from .github/workflows/deploy.yml. Got: {names:?}"
     );
 }
-
-// ── Case E: Cypress specPattern + supportFile ────────────────────────
 
 #[test]
 fn cypress_spec_pattern_outside_default_dir_seeds_entry() {

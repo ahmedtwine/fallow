@@ -57,8 +57,6 @@ fn all_svelte_sfc_regexes_compile() {
 
 #[test]
 fn all_astro_regexes_compile() {
-    // Force the template-side regexes (script block, src attr, HTML comment)
-    // to compile alongside the frontmatter regex.
     parse(
         "Page.astro",
         "---\nconst title = 'hi'\n---\n\

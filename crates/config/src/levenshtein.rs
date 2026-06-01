@@ -110,8 +110,6 @@ mod tests {
     #[test]
     fn closest_match_returns_none_when_input_too_short() {
         let candidates = ["react"];
-        // input.len() / 2 (1) must be > distance, so a one-char typo on a
-        // 3-char input ("rea" vs "react", dist 2) is rejected as coincidental
         assert_eq!(closest_match("rea", candidates.iter().copied()), None);
     }
 

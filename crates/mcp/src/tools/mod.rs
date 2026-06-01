@@ -43,11 +43,7 @@ use tokio::process::Command;
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Push a `--flag VALUE` pair onto `args` only when `value` is `Some(s)` and
-/// `s` is non-empty. MCP clients (especially LLM-driven ones) sometimes send
-/// `""` for unset path or string params instead of omitting the field; an
-/// empty string forwarded as `--flag ""` would either be rejected by clap or
-/// silently mean "current directory" depending on the flag, both of which are
-/// confusing failure modes.
+/// `s` is non-empty.
 fn push_str_flag(args: &mut Vec<String>, flag: &str, value: Option<&str>) {
     if let Some(s) = value
         && !s.is_empty()
@@ -143,12 +139,7 @@ pub const VALID_DUPES_MODES: &[&str] = &["strict", "mild", "weak", "semantic"];
 pub const VALID_AUDIT_GATES: &[&str] = &["new-only", "all"];
 
 /// Build a structured validation error body matching the shape `run_fallow` emits
-/// for CLI-level errors: `{"error": true, "message": "...", "exit_code": 0}`.
-///
-/// Used by arg builders to reject invalid input before spawning fallow. `exit_code`
-/// is `0` because no subprocess ran, disambiguating validation failures from CLI
-/// error exits (which use the real exit code). The returned string is compact JSON
-/// ready to be wrapped in `CallToolResult::error(vec![Content::text(body)])`.
+/// for CLI-level errors.
 pub fn validation_error_body(message: impl Into<String>) -> String {
     serde_json::json!({
         "error": true,
@@ -215,7 +206,6 @@ pub async fn run_fallow_with_timeout(
     if !output.status.success() {
         let exit_code = output.status.code().unwrap_or(-1);
 
-        // Exit code 1 = issues found (not an error for analysis tools)
         if exit_code == 1 {
             let text = if stdout.is_empty() {
                 "{}".to_string()
@@ -225,11 +215,6 @@ pub async fn run_fallow_with_timeout(
             return Ok(CallToolResult::success(vec![Content::text(text)]));
         }
 
-        // Exit code 2+ = real error. The CLI emits structured JSON on stdout
-        // when --format json is active; prefer that over reconstructing from stderr.
-        // Invariant: stdout on error exit is either valid JSON or empty — never
-        // partial or non-JSON output. If a plugin/hook corrupts stdout, we fall
-        // through to the stderr reconstruction path below.
         if !stdout.is_empty() && serde_json::from_str::<serde_json::Value>(&stdout).is_ok() {
             return Ok(CallToolResult::error(vec![Content::text(
                 stdout.to_string(),

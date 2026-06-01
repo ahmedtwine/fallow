@@ -18,20 +18,15 @@ pub struct SourceToken {
 /// Normalized token types for clone detection.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum TokenKind {
-    // Keywords
     Keyword(KeywordType),
-    // Identifiers -- value is the actual name (blinded in semantic mode)
     Identifier(String),
-    // Literals
     StringLiteral(String),
     NumericLiteral(String),
     BooleanLiteral(bool),
     NullLiteral,
     TemplateLiteral,
     RegExpLiteral,
-    // Operators
     Operator(OperatorType),
-    // Punctuation / delimiters
     Punctuation(PunctuationType),
 }
 

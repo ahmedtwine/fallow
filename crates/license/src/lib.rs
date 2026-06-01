@@ -292,7 +292,6 @@ pub fn verify_jwt_with_skew(
 ) -> Result<LicenseStatus, LicenseError> {
     let trimmed = normalize_jwt(raw_jwt);
 
-    // Length sanity-check before crypto. Real JWTs are 700-1500 chars.
     if trimmed.len() < 200 {
         return Err(LicenseError::Truncated {
             actual: trimmed.len(),
@@ -308,8 +307,6 @@ pub fn verify_jwt_with_skew(
     }
     let (header_b64, payload_b64, signature_b64) = (parts[0], parts[1], parts[2]);
 
-    // 1. Verify header alg pinning. We never trust the header to pick the alg;
-    // we verify the header's alg matches the alg we've already pinned in code.
     let header_bytes = URL_SAFE_NO_PAD
         .decode(header_b64)
         .map_err(|err| LicenseError::BadHeader(format!("base64 decode: {err}")))?;
@@ -325,7 +322,6 @@ pub fn verify_jwt_with_skew(
         )));
     }
 
-    // 2. Verify signature over the canonical signing input (header.payload).
     let signature_bytes = URL_SAFE_NO_PAD
         .decode(signature_b64)
         .map_err(|_| LicenseError::BadSignature)?;
@@ -339,17 +335,12 @@ pub fn verify_jwt_with_skew(
         .verify_strict(signing_input.as_bytes(), &signature)
         .map_err(|_| LicenseError::BadSignature)?;
 
-    // 3. Parse payload claims.
     let payload_bytes = URL_SAFE_NO_PAD
         .decode(payload_b64)
         .map_err(|err| LicenseError::BadPayload(format!("base64 decode: {err}")))?;
     let claims: LicenseClaims = serde_json::from_slice(&payload_bytes)
         .map_err(|err| LicenseError::BadPayload(format!("json parse: {err}")))?;
 
-    // 4. Reject `iat` more than the configured tolerance in the future.
-    // Equivalent framing: reject when the local clock is more than the
-    // tolerance behind the license's issue time. Both readings of the same
-    // inequality apply.
     let earliest_iat = now.saturating_add(skew_tolerance_seconds);
     if claims.iat > earliest_iat {
         return Err(LicenseError::ClockSkew {
@@ -359,7 +350,6 @@ pub fn verify_jwt_with_skew(
         });
     }
 
-    // 5. Apply grace ladder.
     Ok(grace_state(claims, now, hard_fail_days))
 }
 
@@ -640,7 +630,6 @@ mod tests {
         let (signing, verifying) = fixed_keypair();
         let claims = make_claims(2_000_000_000);
         let mut jwt = sign_jwt(&signing, &claims);
-        // Flip a byte in the payload segment.
         let mid = jwt.find('.').unwrap() + 5;
         let bad: String = jwt
             .chars()
@@ -657,8 +646,6 @@ mod tests {
 
     #[test]
     fn rs256_header_rejected() {
-        // Build a JWT with alg=RS256 in the header but signed with Ed25519.
-        // The verifier MUST reject because we pin alg=EdDSA in code.
         let (signing, verifying) = fixed_keypair();
         let header = serde_json::json!({"alg": "RS256", "typ": "JWT"});
         let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
@@ -674,7 +661,6 @@ mod tests {
 
     #[test]
     fn alg_none_rejected() {
-        // The classic JWT footgun: alg=none with empty signature. Must reject.
         let (_, verifying) = fixed_keypair();
         let header = serde_json::json!({"alg": "none", "typ": "JWT"});
         let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
@@ -700,15 +686,11 @@ mod tests {
 
     #[test]
     fn normalize_jwt_empty_string_stays_empty() {
-        // Guards the `FALLOW_LICENSE=""` path in `load_raw_jwt`: a shell that
-        // exports an empty-string license must not be treated as a real JWT.
         assert!(normalize_jwt("").is_empty());
     }
 
     #[test]
     fn normalize_jwt_whitespace_only_becomes_empty() {
-        // Same guard as above for `FALLOW_LICENSE="   "` and tab/newline
-        // variants.
         assert!(normalize_jwt("   ").is_empty());
         assert!(normalize_jwt("\t\n\r ").is_empty());
     }
@@ -716,22 +698,18 @@ mod tests {
     #[test]
     fn grace_ladder_classifies_correctly() {
         let claims = make_claims(1_000_000_000);
-        // Now equals exp: still valid (delta == 0).
         assert!(matches!(
             grace_state(claims.clone(), 1_000_000_000, 30),
             LicenseStatus::Valid { .. }
         ));
-        // 3 days past expiry: warning.
         assert!(matches!(
             grace_state(claims.clone(), 1_000_000_000 + 3 * SECONDS_PER_DAY, 30),
             LicenseStatus::ExpiredWarning { .. }
         ));
-        // 15 days past expiry: watermark.
         assert!(matches!(
             grace_state(claims.clone(), 1_000_000_000 + 15 * SECONDS_PER_DAY, 30),
             LicenseStatus::ExpiredWatermark { .. }
         ));
-        // 35 days past expiry: hard-fail.
         assert!(matches!(
             grace_state(claims, 1_000_000_000 + 35 * SECONDS_PER_DAY, 30),
             LicenseStatus::HardFail { .. }
@@ -824,8 +802,6 @@ mod tests {
 
     #[test]
     fn user_home_from_env_skips_empty_values() {
-        // A CI runner that exports HOME="" should not be treated as "HOME is /"
-        // (was a real footgun: join(".fallow") produced "/.fallow").
         let getenv = |key: &str| match key {
             "HOME" => Some(String::new()),
             "USERPROFILE" => Some(r"C:\Users\alice".to_owned()),
@@ -849,8 +825,6 @@ mod tests {
 
     #[test]
     fn resolve_license_path_env_returns_none_for_empty_string() {
-        // Shells that export `FALLOW_LICENSE_PATH=""` must fall through to
-        // default discovery rather than attempt to read `Path::new("")`.
         assert_eq!(resolve_license_path_env(Some(String::new())), None);
     }
 
@@ -893,8 +867,6 @@ mod tests {
 
     #[test]
     fn iat_within_tolerance_passes() {
-        // Acceptance criterion #1: iat 1 hour in the future is well within
-        // the default 24h tolerance and must verify cleanly.
         let (signing, verifying) = fixed_keypair();
         let now = 1_900_000_000;
         let claims = make_claims_with_iat(now + 3_600, now + 100 * SECONDS_PER_DAY);
@@ -912,8 +884,6 @@ mod tests {
 
     #[test]
     fn iat_far_in_future_rejected_as_clock_skew() {
-        // Acceptance criterion #2: iat 48 hours in the future exceeds the
-        // 24h tolerance and is rejected as ClockSkew.
         let (signing, verifying) = fixed_keypair();
         let now = 1_900_000_000;
         let claims = make_claims_with_iat(now + 48 * 3_600, now + 100 * SECONDS_PER_DAY);
@@ -934,10 +904,6 @@ mod tests {
 
     #[test]
     fn clock_far_behind_iat_rejected_as_clock_skew() {
-        // Acceptance criterion #3: a normal license verified against a clock
-        // 60 days behind its issue time is rejected as ClockSkew (which
-        // ensures paid features fail closed because permits() is unreachable
-        // on Err).
         let (signing, verifying) = fixed_keypair();
         let iat = 1_700_000_000;
         let now = iat - 60 * SECONDS_PER_DAY;
@@ -959,8 +925,6 @@ mod tests {
 
     #[test]
     fn verify_jwt_shim_uses_default_tolerance() {
-        // The public `verify_jwt` shim must continue to compile with the
-        // pre-#453 signature AND must apply the default 24h tolerance.
         let (signing, verifying) = fixed_keypair();
         let now = 1_900_000_000;
         let claims = make_claims_with_iat(now + 48 * 3_600, now + 100 * SECONDS_PER_DAY);
@@ -972,8 +936,6 @@ mod tests {
 
     #[test]
     fn clock_skew_display_is_human_friendly() {
-        // Acceptance criterion #5: error message drops "iat" jargon,
-        // includes a human-friendly duration, names CI / container drift.
         let err = LicenseError::ClockSkew {
             iat_seconds: 1_900_000_000 + 2 * SECONDS_PER_DAY,
             now_seconds: 1_900_000_000,
@@ -1000,8 +962,6 @@ mod tests {
 
     #[test]
     fn skew_tolerance_seconds_from_env_parses_or_defaults() {
-        // Acceptance criterion #4: unset / empty / whitespace / unparsable /
-        // negative all fall back to the default; a valid integer is parsed.
         let unset = |_: &str| None;
         assert_eq!(
             skew_tolerance_seconds_from(unset),

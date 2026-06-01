@@ -12,7 +12,6 @@ fn css_module_unused_classes_detected() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // container and title are imported via named imports, should NOT be unused
     assert!(
         !unused_export_names.contains(&"container"),
         "container should NOT be unused (imported via named import)"
@@ -22,7 +21,6 @@ fn css_module_unused_classes_detected() {
         "title should NOT be unused (imported via named import)"
     );
 
-    // subtitle and hidden are not imported, should be unused
     assert!(
         unused_export_names.contains(&"subtitle"),
         "subtitle should be unused (not imported), found: {unused_export_names:?}"
@@ -57,7 +55,6 @@ fn orphan_css_module_detected_as_unused_file() {
         "orphan.module.css should be unused (not imported), found: {unused_file_names:?}"
     );
 
-    // App.module.css IS imported, should NOT be unused
     assert!(
         !unused_file_names.contains(&"App.module.css".to_string()),
         "App.module.css should NOT be unused (imported by index.ts)"

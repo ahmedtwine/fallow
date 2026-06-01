@@ -92,14 +92,10 @@ fn collect_edges_for_module(
 ) -> Vec<(FileId, Vec<ImportedSymbol>)> {
     let mut edges_by_target: FxHashMap<FileId, Vec<ImportedSymbol>> = FxHashMap::default();
 
-    // Static imports
     for import in &resolved.resolved_imports {
         collect_import_edge(import, file_id, &mut edges_by_target, acc);
     }
 
-    // Re-exports — use SideEffect edges to avoid marking source exports as "used"
-    // just because they're re-exported. Re-export chain propagation handles tracking
-    // which specific names consumers actually import.
     for re_export in &resolved.re_exports {
         if let Some(package_name) = re_export.target.package_usage_name() {
             record_package_usage(acc, package_name, file_id, re_export.info.is_type_only);
@@ -117,14 +113,10 @@ fn collect_edges_for_module(
         }
     }
 
-    // Dynamic imports — Named imports create Named edges, Namespace imports create
-    // Namespace edges with a local_name (enabling member access narrowing),
-    // Side-effect imports create SideEffect edges.
     for import in &resolved.resolved_dynamic_imports {
         collect_import_edge(import, file_id, &mut edges_by_target, acc);
     }
 
-    // Dynamic import patterns (template literals, string concat, import.meta.glob)
     for (_pattern, matched_ids) in &resolved.resolved_dynamic_patterns {
         for target_id in matched_ids {
             record_namespace_import(*target_id, &mut acc.namespace_imported, acc.total_capacity);
@@ -140,7 +132,6 @@ fn collect_edges_for_module(
         }
     }
 
-    // Sort by target FileId for deterministic edge order across runs
     let mut sorted: Vec<_> = edges_by_target.into_iter().collect();
     sorted.sort_by_key(|(target_id, _)| target_id.0);
     sorted
@@ -171,22 +162,12 @@ fn build_module_node(
         })
         .unwrap_or_default();
 
-    // Create ExportSymbol entries for re-exports so that consumers
-    // importing from this barrel can have their references attached.
-    // Without this, `export { Foo } from './source'` on a barrel would
-    // not be trackable as an export of the barrel module.
     if let Some(resolved) = module_by_id.get(&file.id) {
         for re in &resolved.re_exports {
-            // Skip star re-exports without an alias (`export * from './x'`)
-            // — they don't create a named export on the barrel.
-            // But `export * as name from './x'` does create one.
             if re.info.exported_name == "*" {
                 continue;
             }
 
-            // Avoid duplicates: if an export with this name already exists
-            // (e.g. the module both declares and re-exports the same name),
-            // skip creating another one.
             let export_name = if re.info.exported_name == "default" {
                 ExportName::Default
             } else {
@@ -202,8 +183,6 @@ fn build_module_node(
                 is_type_only: re.info.is_type_only,
                 is_side_effect_used: false,
                 visibility: VisibilityTag::None,
-                // Use the real span from the visitor when available; falls back
-                // to (0, 0) for re-exports synthesized inside the graph layer.
                 span: re.info.span,
                 references: Vec::new(),
                 members: Vec::new(),
@@ -215,7 +194,6 @@ fn build_module_node(
         .get(&file.id)
         .is_some_and(|m| m.has_cjs_exports);
 
-    // Build re-export edges
     let re_export_edges: Vec<ReExportEdge> = module_by_id
         .get(&file.id)
         .map(|m| {
@@ -368,8 +346,6 @@ mod tests {
     use fallow_types::discover::{DiscoveredFile, FileId};
     use fallow_types::extract::ImportedName;
 
-    // ── export_matches ─────────────────────────────────────────────────
-
     #[test]
     fn export_matches_named_same() {
         assert!(export_matches(
@@ -427,8 +403,6 @@ mod tests {
         ));
     }
 
-    // ── is_css_module_path ──────────────────────────────────────────────
-
     #[test]
     fn css_module_path_css() {
         assert!(is_css_module_path(std::path::Path::new(
@@ -457,7 +431,6 @@ mod tests {
 
     #[test]
     fn css_module_path_less_not_matched() {
-        // .module.less is not supported (only .css and .scss)
         assert!(!is_css_module_path(std::path::Path::new(
             "Button.module.less"
         )));
@@ -477,13 +450,10 @@ mod tests {
 
     #[test]
     fn css_module_path_double_module() {
-        // Edge case: file like "Button.module.module.css"
         assert!(is_css_module_path(std::path::Path::new(
             "Button.module.module.css"
         )));
     }
-
-    // ── record_namespace_import ─────────────────────────────────────────
 
     #[test]
     fn record_namespace_import_within_bounds() {
@@ -496,11 +466,8 @@ mod tests {
     fn record_namespace_import_out_of_bounds() {
         let mut bitset = fixedbitset::FixedBitSet::with_capacity(4);
         record_namespace_import(FileId(10), &mut bitset, 4);
-        // Should silently skip — bitset unchanged
         assert!(!bitset.contains(3));
     }
-
-    // ── record_package_usage ────────────────────────────────────────────
 
     #[test]
     fn record_package_usage_non_type_only() {
@@ -541,8 +508,6 @@ mod tests {
         assert_eq!(acc.package_usage["lodash"], vec![FileId(0), FileId(1)]);
         assert_eq!(acc.type_only_package_usage["lodash"], vec![FileId(1)]);
     }
-
-    // ── collect_import_edge ─────────────────────────────────────────────
 
     fn make_acc(cap: usize) -> EdgeAccumulator {
         EdgeAccumulator {
@@ -633,7 +598,6 @@ mod tests {
             edges[&FileId(1)][0].imported_name,
             ImportedName::SideEffect
         ));
-        // Side-effect should NOT set namespace bitset
         assert!(!acc.namespace_imported.contains(1));
     }
 
@@ -700,8 +664,6 @@ mod tests {
         assert!(edges.is_empty());
     }
 
-    // ── collect_edges_for_module ─────────────────────────────────────────
-
     #[test]
     fn collect_edges_sorted_by_target_id() {
         let resolved = ResolvedModule {
@@ -738,7 +700,6 @@ mod tests {
         let mut acc = make_acc(4);
         let sorted = collect_edges_for_module(&resolved, FileId(0), &mut acc);
 
-        // Should be sorted: FileId(1) before FileId(3)
         assert_eq!(sorted.len(), 2);
         assert_eq!(sorted[0].0, FileId(1));
         assert_eq!(sorted[1].0, FileId(3));
@@ -817,11 +778,8 @@ mod tests {
         assert!(acc.namespace_imported.contains(2));
     }
 
-    // ── build_module_node: star re-export skips creating export symbol ──
-
     #[test]
     fn star_re_export_does_not_create_named_export_symbol() {
-        // `export * from './source'` should NOT create an ExportSymbol on the barrel
         let files = vec![
             DiscoveredFile {
                 id: FileId(0),
@@ -873,20 +831,14 @@ mod tests {
 
         let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
         let barrel = &graph.modules[0];
-        // Star re-exports should NOT create named ExportSymbol entries
-        // (they are handled by re-export chain propagation instead)
         assert!(
             barrel.exports.is_empty(),
             "star re-export should not create named export symbols on barrel"
         );
     }
 
-    // ── duplicate re-export: skip if export already exists ──────────
-
     #[test]
     fn re_export_skips_duplicate_export_name() {
-        // If a module both declares and re-exports the same name, only one
-        // ExportSymbol should exist.
         let files = vec![DiscoveredFile {
             id: FileId(0),
             path: std::path::PathBuf::from("/project/barrel.ts"),

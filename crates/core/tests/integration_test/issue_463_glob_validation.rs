@@ -19,8 +19,6 @@ fn load_err(body: &str) -> String {
     err.to_string()
 }
 
-// ── entry ───────────────────────────────────────────────────────────────
-
 #[test]
 fn entry_traversal_pattern_rejected() {
     let msg = load_err(r#"{ "entry": ["../foo"] }"#);
@@ -43,8 +41,6 @@ fn entry_invalid_glob_syntax_rejected() {
     assert!(msg.contains("entry"), "msg: {msg}");
     assert!(msg.contains("[invalid"), "msg: {msg}");
 }
-
-// ── ignoreUnresolvedImports ─────────────────────────────────────────────
 
 #[test]
 fn ignore_unresolved_imports_invalid_glob_syntax_rejected() {
@@ -73,8 +69,6 @@ fn ignore_unresolved_imports_parent_relative_specifier_accepted() {
     );
 }
 
-// ── ignorePatterns ──────────────────────────────────────────────────────
-
 #[test]
 fn ignore_patterns_traversal_rejected() {
     let msg = load_err(r#"{ "ignorePatterns": ["../leak"] }"#);
@@ -89,16 +83,12 @@ fn ignore_patterns_absolute_rejected() {
     assert!(msg.contains("/var/cache/**"), "msg: {msg}");
 }
 
-// ── dynamicallyLoaded ───────────────────────────────────────────────────
-
 #[test]
 fn dynamically_loaded_traversal_rejected() {
     let msg = load_err(r#"{ "dynamicallyLoaded": ["../config/**"] }"#);
     assert!(msg.contains("dynamicallyLoaded"), "msg: {msg}");
     assert!(msg.contains("../config/**"), "msg: {msg}");
 }
-
-// ── duplicates.ignore ───────────────────────────────────────────────────
 
 #[test]
 fn duplicates_ignore_traversal_rejected() {
@@ -107,16 +97,12 @@ fn duplicates_ignore_traversal_rejected() {
     assert!(msg.contains("../sibling/**"), "msg: {msg}");
 }
 
-// ── health.ignore ───────────────────────────────────────────────────────
-
 #[test]
 fn health_ignore_traversal_rejected() {
     let msg = load_err(r#"{ "health": { "ignore": ["../vendor/**"] } }"#);
     assert!(msg.contains("health.ignore"), "msg: {msg}");
     assert!(msg.contains("../vendor/**"), "msg: {msg}");
 }
-
-// ── overrides[].files ───────────────────────────────────────────────────
 
 #[test]
 fn overrides_files_traversal_rejected() {
@@ -125,16 +111,12 @@ fn overrides_files_traversal_rejected() {
     assert!(msg.contains("../escape/**"), "msg: {msg}");
 }
 
-// ── ignoreExports[].file ────────────────────────────────────────────────
-
 #[test]
 fn ignore_exports_traversal_rejected() {
     let msg = load_err(r#"{ "ignoreExports": [ { "file": "../foo", "exports": ["*"] } ] }"#);
     assert!(msg.contains("ignoreExports[].file"), "msg: {msg}");
     assert!(msg.contains("../foo"), "msg: {msg}");
 }
-
-// ── ignoreCatalogReferences[].consumer ──────────────────────────────────
 
 #[test]
 fn ignore_catalog_references_consumer_traversal_rejected() {
@@ -148,8 +130,6 @@ fn ignore_catalog_references_consumer_traversal_rejected() {
     assert!(msg.contains("../foo/package.json"), "msg: {msg}");
 }
 
-// ── boundaries.zones[].patterns ─────────────────────────────────────────
-
 #[test]
 fn boundary_zone_pattern_traversal_rejected() {
     let msg = load_err(
@@ -158,8 +138,6 @@ fn boundary_zone_pattern_traversal_rejected() {
     assert!(msg.contains("boundaries.zones[].patterns"), "msg: {msg}");
     assert!(msg.contains("../app/**"), "msg: {msg}");
 }
-
-// ── boundaries.zones[].root + autoDiscover (directory paths, not globs) ──
 
 #[test]
 fn boundary_zone_root_traversal_rejected() {
@@ -191,15 +169,8 @@ fn boundary_zone_auto_discover_traversal_rejected() {
     assert!(msg.contains("../escape"), "msg: {msg}");
 }
 
-// ── framework[] inline plugin definitions ───────────────────────────────
-
 #[test]
 fn framework_file_exists_detection_traversal_rejected() {
-    // The security-critical case: framework[].detection.fileExists.pattern
-    // reaches glob::glob on disk via root.join(pattern) in
-    // crates/core/src/plugins/registry/helpers.rs. A `..` here is a real
-    // path traversal, not a no-op-match. See rust-reviewer BLOCK on first
-    // review pass.
     let msg = load_err(
         r#"{ "framework": [{ "name": "evil", "detection": { "type": "fileExists", "pattern": "../../etc/passwd" } }] }"#,
     );
@@ -218,8 +189,6 @@ fn framework_file_exists_detection_absolute_rejected() {
 
 #[test]
 fn framework_file_exists_nested_in_all_combinator_rejected() {
-    // PluginDetection::All { conditions } must recurse so nested
-    // FileExists patterns inside boolean combinators are also validated.
     let msg = load_err(
         r#"{
             "framework": [{
@@ -263,8 +232,6 @@ fn framework_used_exports_pattern_traversal_rejected() {
     );
 }
 
-// ── multi-error collection ──────────────────────────────────────────────
-
 #[test]
 fn all_errors_reported_in_one_run() {
     let msg = load_err(
@@ -278,8 +245,6 @@ fn all_errors_reported_in_one_run() {
     assert!(msg.contains("/abs/bad-ignore"), "msg: {msg}");
     assert!(msg.contains("[bad-syntax"), "msg: {msg}");
 }
-
-// ── happy path ──────────────────────────────────────────────────────────
 
 #[test]
 fn valid_relative_patterns_accepted() {
@@ -301,7 +266,6 @@ fn valid_relative_patterns_accepted() {
 
 #[test]
 fn empty_config_still_loads() {
-    // Sanity check: the validation pass doesn't reject a clean default config.
     let tmp = tempfile::tempdir().expect("create tempdir");
     let path = write_config(tmp.path(), r"{}");
     FallowConfig::load(&path).expect("empty config should load");

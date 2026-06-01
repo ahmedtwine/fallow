@@ -12,8 +12,6 @@ fn empty_config() -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-// -- Combined migration tests --------------------------------------------
-
 #[test]
 fn migrate_both_knip_and_jscpd() {
     let knip: serde_json::Value =
@@ -38,8 +36,6 @@ fn migrate_both_knip_and_jscpd() {
     assert_eq!(dupes.get("skipLocal").unwrap(), true);
     assert!(warnings.is_empty());
 }
-
-// -- Output format tests -------------------------------------------------
 
 #[test]
 fn jsonc_output_has_schema() {
@@ -111,8 +107,6 @@ fn toml_output_duplicates_section() {
     assert!(output.contains("skipLocal = true"));
 }
 
-// -- Deserialization roundtrip tests --------------------------------------
-
 #[test]
 fn toml_output_deserializes_as_valid_config() {
     let result = MigrationResult {
@@ -160,8 +154,6 @@ fn jsonc_output_deserializes_as_valid_config() {
     assert_eq!(config.ignore_dependencies, vec!["lodash"]);
 }
 
-// -- JSONC comment stripping test ----------------------------------------
-
 #[test]
 fn jsonc_comments_stripped() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-jsonc");
@@ -170,7 +162,6 @@ fn jsonc_comments_stripped() {
     std::fs::write(
         &path,
         r#"{
-            // Entry points
             "entry": ["src/index.ts"],
             /* Block comment */
             "ignore": ["dist/**"]
@@ -184,8 +175,6 @@ fn jsonc_comments_stripped() {
 
     let _ = std::fs::remove_dir_all(&tmpdir);
 }
-
-// -- Package.json embedded config detection ------------------------------
 
 #[test]
 fn auto_detect_package_json_knip() {
@@ -229,8 +218,6 @@ fn auto_detect_package_json_jscpd() {
     let _ = std::fs::remove_dir_all(&tmpdir);
 }
 
-// -- MigrationWarning Display tests --------------------------------------
-
 #[test]
 fn warning_display_without_suggestion() {
     let w = MigrationWarning {
@@ -259,8 +246,6 @@ fn warning_display_with_suggestion() {
     assert!(display.contains("(suggestion: use inline suppression)"));
 }
 
-// -- string_or_array tests -----------------------------------------------
-
 #[test]
 fn string_or_array_with_string_value() {
     let val = serde_json::json!("single");
@@ -284,8 +269,6 @@ fn string_or_array_with_mixed_array_filters_non_strings() {
     let val = serde_json::json!(["valid", 123, "also-valid", null]);
     assert_eq!(string_or_array(&val), vec!["valid", "also-valid"]);
 }
-
-// -- load_json_or_jsonc error handling -----------------------------------
 
 #[test]
 fn load_json_or_jsonc_file_not_found() {
@@ -324,8 +307,6 @@ fn load_json_or_jsonc_rejects_malformed_leading_comma() {
 
 #[test]
 fn load_json_or_jsonc_accepts_trailing_commas() {
-    // Reproduces issue #276: knip.jsonc with trailing commas was rejected
-    // as `trailing comma at line 6 column 3`.
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-jsonc-trailing");
     let _ = std::fs::remove_dir_all(&tmpdir);
     std::fs::create_dir_all(&tmpdir).unwrap();
@@ -358,8 +339,6 @@ fn load_json_or_jsonc_accepts_trailing_commas() {
 
 #[test]
 fn load_json_or_jsonc_handles_comments_and_trailing_commas_together() {
-    // knip.jsonc users routinely combine line comments with trailing
-    // commas — both must be accepted in the same file.
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-jsonc-mixed");
     let _ = std::fs::remove_dir_all(&tmpdir);
     std::fs::create_dir_all(&tmpdir).unwrap();
@@ -367,7 +346,6 @@ fn load_json_or_jsonc_handles_comments_and_trailing_commas_together() {
     std::fs::write(
         &path,
         r#"{
-  // Entry points
   "entry": ["src/index.ts",],
   /* block comment */
   "ignore": ["dist/**",],
@@ -387,8 +365,6 @@ fn load_json_or_jsonc_handles_comments_and_trailing_commas_together() {
 
     let _ = std::fs::remove_dir_all(&tmpdir);
 }
-
-// -- strip_trailing_commas helper ----------------------------------------
 
 #[test]
 fn strip_trailing_commas_drops_simple_object_comma() {
@@ -416,16 +392,12 @@ fn strip_trailing_commas_preserves_separator_commas() {
 
 #[test]
 fn strip_trailing_commas_ignores_commas_inside_strings() {
-    // Trailing comma inside a string literal must be preserved verbatim.
     let input = r#"{"msg":"hello, world,"}"#;
     assert_eq!(strip_trailing_commas(input), input);
 }
 
 #[test]
 fn strip_trailing_commas_handles_escaped_quote_in_string() {
-    // Escaped quotes inside the string must not flip in_string state, so
-    // the comma inside `"hi,\","` stays put while the trailing comma
-    // before `}` is stripped.
     let input = r#"{"msg":"he said \"hi,\",","n":1,}"#;
     let expected = r#"{"msg":"he said \"hi,\",","n":1}"#;
     assert_eq!(strip_trailing_commas(input), expected);
@@ -433,14 +405,10 @@ fn strip_trailing_commas_handles_escaped_quote_in_string() {
 
 #[test]
 fn strip_trailing_commas_handles_whitespace_before_brace() {
-    // Pretty-printed input puts the comma on its own line before the
-    // closing brace — still must be stripped.
     let input = "{\n  \"a\": 1,\n}";
     let expected = "{\n  \"a\": 1\n}";
     assert_eq!(strip_trailing_commas(input), expected);
 }
-
-// -- migrate_from_file tests ---------------------------------------------
 
 #[test]
 fn migrate_from_file_nonexistent_path() {
@@ -522,7 +490,6 @@ fn migrate_from_file_package_json_with_both_knip_and_jscpd() {
     .unwrap();
 
     let result = migrate_from_file(&path).unwrap();
-    // Should have 2 sources: knip key + jscpd key
     assert_eq!(result.sources.len(), 2);
     assert!(result.sources[0].contains("knip"));
     assert!(result.sources[1].contains("jscpd"));
@@ -577,7 +544,6 @@ fn migrate_from_file_unrecognized_file_detected_as_knip() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-detect-knip");
     let _ = std::fs::create_dir_all(&tmpdir);
     let path = tmpdir.join("custom-config.json");
-    // Has knip-like fields: "entry" and "ignore"
     std::fs::write(
         &path,
         r#"{"entry": ["src/index.ts"], "ignore": ["dist/**"]}"#,
@@ -597,7 +563,6 @@ fn migrate_from_file_unrecognized_file_detected_as_jscpd() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-detect-jscpd");
     let _ = std::fs::create_dir_all(&tmpdir);
     let path = tmpdir.join("custom-dupes.json");
-    // Has jscpd-like fields
     std::fs::write(&path, r#"{"minTokens": 100, "threshold": 5.0}"#).unwrap();
 
     let result = migrate_from_file(&path).unwrap();
@@ -613,7 +578,6 @@ fn migrate_from_file_unrecognized_file_unknown_format() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-detect-unknown");
     let _ = std::fs::create_dir_all(&tmpdir);
     let path = tmpdir.join("random.json");
-    // No knip-like or jscpd-like fields
     std::fs::write(&path, r#"{"foo": "bar", "baz": 123}"#).unwrap();
 
     match migrate_from_file(&path) {
@@ -692,14 +656,10 @@ fn migrate_from_file_jscpd_heuristic_via_mode() {
     let _ = std::fs::remove_dir_all(&tmpdir);
 }
 
-// -- auto_detect tests ---------------------------------------------------
-
 #[test]
 fn auto_detect_no_configs_found() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-auto-empty");
     let _ = std::fs::create_dir_all(&tmpdir);
-    // No config files at all — but also no package.json
-    // Remove any stale files
     for name in &[
         "knip.json",
         "knip.jsonc",
@@ -723,7 +683,6 @@ fn auto_detect_no_configs_found() {
 fn auto_detect_knip_ts_skipped_with_warning() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-auto-knip-ts");
     let _ = std::fs::create_dir_all(&tmpdir);
-    // Remove all possible config files to isolate test
     for name in &[
         "knip.json",
         "knip.jsonc",
@@ -738,7 +697,6 @@ fn auto_detect_knip_ts_skipped_with_warning() {
     std::fs::write(&path, "export default {};").unwrap();
 
     let result = migrate_auto_detect(&tmpdir).unwrap();
-    // knip.ts is skipped (not added to sources), but warning is generated
     assert!(result.sources.is_empty());
     assert!(!result.warnings.is_empty());
     assert!(
@@ -754,7 +712,6 @@ fn auto_detect_knip_ts_skipped_with_warning() {
 fn auto_detect_knip_json_takes_precedence_over_knip_jsonc() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-auto-precedence");
     let _ = std::fs::create_dir_all(&tmpdir);
-    // Remove stale files
     for name in &[".knip.json", ".knip.jsonc", ".jscpd.json", "package.json"] {
         let _ = std::fs::remove_file(tmpdir.join(name));
     }
@@ -782,7 +739,6 @@ fn auto_detect_knip_json_takes_precedence_over_knip_jsonc() {
 fn auto_detect_standalone_knip_prevents_package_json_knip() {
     let tmpdir = std::env::temp_dir().join("fallow-test-migrate-auto-standalone-over-pkg");
     let _ = std::fs::create_dir_all(&tmpdir);
-    // Remove stale files
     for name in &[
         "knip.jsonc",
         ".knip.json",
@@ -802,7 +758,6 @@ fn auto_detect_standalone_knip_prevents_package_json_knip() {
     .unwrap();
 
     let result = migrate_auto_detect(&tmpdir).unwrap();
-    // Should use standalone knip.json, not package.json knip key
     assert_eq!(result.sources.len(), 1);
     assert_eq!(result.sources[0], "knip.json");
     let config_obj = result.config.as_object().unwrap();
@@ -837,7 +792,6 @@ fn auto_detect_standalone_jscpd_prevents_package_json_jscpd() {
     .unwrap();
 
     let result = migrate_auto_detect(&tmpdir).unwrap();
-    // Standalone .jscpd.json used; package.json jscpd key skipped
     let jscpd_source = result
         .sources
         .iter()
@@ -881,8 +835,6 @@ fn auto_detect_package_json_with_both_knip_and_jscpd() {
     let _ = std::fs::remove_dir_all(&tmpdir);
 }
 
-// -- generate_jsonc key ordering test ------------------------------------
-
 #[test]
 fn jsonc_output_keys_ordered_correctly() {
     let result = MigrationResult {
@@ -898,7 +850,6 @@ fn jsonc_output_keys_ordered_correctly() {
         sources: vec!["knip.json".to_string(), ".jscpd.json".to_string()],
     };
     let output = generate_jsonc(&result);
-    // entry should come before ignorePatterns, which should come before rules, which should come before duplicates
     let entry_pos = output.find("\"entry\"").unwrap();
     let ignore_pos = output.find("\"ignorePatterns\"").unwrap();
     let ignore_deps_pos = output.find("\"ignoreDependencies\"").unwrap();
@@ -934,8 +885,6 @@ fn toml_output_with_multiple_sources() {
     assert!(output.contains("# Migrated from knip.json, .jscpd.json"));
 }
 
-// -- indent_json_value tests ---------------------------------------------
-
 #[test]
 fn indent_json_value_single_line_unchanged() {
     let result = indent_json_value("42", 4);
@@ -948,8 +897,6 @@ fn indent_json_value_multiline_indents_continuation_lines() {
     let result = indent_json_value(json, 2);
     assert_eq!(result, "{\n    \"a\": 1\n  }");
 }
-
-// -- generate_toml duplicates string/array values test -------------------
 
 #[test]
 fn toml_output_duplicates_string_and_array_values() {
@@ -997,8 +944,6 @@ fn toml_output_empty_duplicates_omits_section() {
     assert!(!output.contains("[duplicates]"));
 }
 
-// -- Full TOML roundtrip with all field types ----------------------------
-
 #[test]
 fn toml_full_roundtrip_with_duplicates() {
     let result = MigrationResult {
@@ -1033,8 +978,6 @@ fn toml_full_roundtrip_with_duplicates() {
     assert!(config.duplicates.skip_local);
 }
 
-// -- Full JSONC roundtrip with all field types ---------------------------
-
 #[test]
 fn jsonc_full_roundtrip_with_all_fields() {
     let result = MigrationResult {
@@ -1064,8 +1007,6 @@ fn jsonc_full_roundtrip_with_all_fields() {
     assert_eq!(config.ignore_dependencies, vec!["react", "lodash"]);
 }
 
-// -- indent_json_value edge cases ----------------------------------------
-
 #[test]
 fn indent_json_value_empty_string() {
     let result = indent_json_value("", 4);
@@ -1083,7 +1024,6 @@ fn indent_json_value_deeply_nested_object() {
     }))
     .unwrap();
     let result = indent_json_value(&json, 2);
-    // First line stays as-is, continuation lines get 2-space indent
     let lines: Vec<&str> = result.lines().collect();
     assert_eq!(lines[0], "{");
     assert!(lines[1].starts_with("  ")); // continuation indented
@@ -1097,8 +1037,6 @@ fn indent_json_value_array() {
     assert_eq!(result, "[\n      1,\n      2,\n      3\n    ]");
 }
 
-// -- generate_jsonc edge cases -------------------------------------------
-
 #[test]
 fn jsonc_output_empty_config() {
     let result = MigrationResult {
@@ -1109,12 +1047,10 @@ fn jsonc_output_empty_config() {
     let output = generate_jsonc(&result);
     assert!(output.contains("$schema"));
     assert!(output.contains("// Migrated from knip.json"));
-    // No config keys should appear (only $schema and comment)
     assert!(!output.contains("\"entry\""));
     assert!(!output.contains("\"rules\""));
     assert!(!output.contains("\"ignorePatterns\""));
     assert!(!output.contains("\"duplicates\""));
-    // Output should start with { and end with }
     assert!(output.starts_with('{'));
     assert!(output.trim_end().ends_with('}'));
 }
@@ -1132,12 +1068,10 @@ fn jsonc_output_only_rules() {
         sources: vec!["knip.json".to_string()],
     };
     let output = generate_jsonc(&result);
-    // Should contain rules but no entry/ignorePatterns/duplicates
     assert!(output.contains("\"rules\""));
     assert!(!output.contains("\"entry\""));
     assert!(!output.contains("\"ignorePatterns\""));
     assert!(!output.contains("\"duplicates\""));
-    // Should be valid JSONC that round-trips
     let parsed: serde_json::Value =
         jsonc_parser::parse_to_serde_value(&output, &jsonc_parser::ParseOptions::default())
             .unwrap();
@@ -1145,8 +1079,6 @@ fn jsonc_output_only_rules() {
     assert_eq!(rules.get("unused-files").unwrap(), "error");
     assert_eq!(rules.get("unused-exports").unwrap(), "off");
 }
-
-// -- generate_toml edge cases --------------------------------------------
 
 #[test]
 fn toml_output_empty_config() {
@@ -1157,7 +1089,6 @@ fn toml_output_empty_config() {
     };
     let output = generate_toml(&result);
     assert!(output.contains("# Migrated from knip.json"));
-    // No sections should appear
     assert!(!output.contains("[rules]"));
     assert!(!output.contains("[duplicates]"));
     assert!(!output.contains("entry"));
@@ -1177,7 +1108,6 @@ fn toml_output_only_ignore_patterns() {
     assert!(output.contains("ignorePatterns = [\"dist/**\", \"build/**\"]"));
     assert!(!output.contains("[rules]"));
     assert!(!output.contains("[duplicates]"));
-    // Should parse as valid TOML
     let config: fallow_config::FallowConfig = toml::from_str(&output).unwrap();
     assert_eq!(config.ignore_patterns, vec!["dist/**", "build/**"]);
 }
@@ -1231,8 +1161,6 @@ fn toml_output_ignore_exports_used_in_file_kind_form() {
     assert!(config.ignore_exports_used_in_file.suppresses(true));
 }
 
-// -- string_or_array additional edge cases -------------------------------
-
 #[test]
 fn string_or_array_with_empty_array() {
     let val = serde_json::json!([]);
@@ -1257,12 +1185,6 @@ fn string_or_array_with_object() {
     assert!(string_or_array(&val).is_empty());
 }
 
-// -- Glob-drift caveat (#457) --------------------------------------------
-//
-// The caveat fires only when knip was a source AND the migrated config has
-// glob-shaped fields (`entry` or `ignorePatterns`). Jscpd-only migrations
-// and rules-only knip migrations should not see it.
-
 #[test]
 fn glob_caveat_emitted_for_knip_with_entry() {
     let result = MigrationResult {
@@ -1285,7 +1207,6 @@ fn glob_caveat_emitted_for_knip_with_ignore_patterns() {
 
 #[test]
 fn glob_caveat_suppressed_for_knip_without_globs() {
-    // Rules-only knip migration: no entry, no ignorePatterns -> no caveat.
     let result = MigrationResult {
         config: serde_json::json!({"rules": {"unused-files": "warn"}}),
         warnings: vec![],
@@ -1296,8 +1217,6 @@ fn glob_caveat_suppressed_for_knip_without_globs() {
 
 #[test]
 fn glob_caveat_suppressed_for_jscpd_only() {
-    // jscpd writes `duplicates`, never `entry` / `ignorePatterns`, and the
-    // source string contains "jscpd" not "knip".
     let result = MigrationResult {
         config: serde_json::json!({"duplicates": {"minTokens": 100}}),
         warnings: vec![],
@@ -1308,8 +1227,6 @@ fn glob_caveat_suppressed_for_jscpd_only() {
 
 #[test]
 fn glob_caveat_emitted_when_knip_and_jscpd_combine() {
-    // Combined migration with knip globs present: the caveat fires because
-    // knip is at least one of the sources.
     let result = MigrationResult {
         config: serde_json::json!({
             "entry": ["src/**"],
@@ -1323,11 +1240,9 @@ fn glob_caveat_emitted_when_knip_and_jscpd_combine() {
 
 #[test]
 fn source_head_strips_tagged_suffix() {
-    // Plain filenames pass through unchanged.
     assert_eq!(source_head("knip.json"), "knip.json");
     assert_eq!(source_head("knip.jsonc"), "knip.jsonc");
 
-    // Standard tagged suffixes are stripped.
     assert_eq!(source_head("package.json (knip key)"), "package.json");
     assert_eq!(
         source_head("/path/to/my-tool.jsonc (knip config)"),
@@ -1338,27 +1253,18 @@ fn source_head_strips_tagged_suffix() {
         "/path/to/my-tool.json"
     );
 
-    // Project paths containing their own ` (...)` segment must be preserved
-    // because we strip only the TRAILING tagged suffix, not every ` (` we
-    // find. Without rsplit_once this returns "/path/to/react".
     assert_eq!(
         source_head("/path/to/react (v18)/knip.jsonc (knip config)"),
         "/path/to/react (v18)/knip.jsonc"
     );
 
-    // Unclosed paren is not a tag; the whole string is preserved.
     assert_eq!(source_head("foo (bar"), "foo (bar");
 
-    // Empty input.
     assert_eq!(source_head(""), "");
 }
 
 #[test]
 fn output_format_pick_auto_mirrors_jsonc_through_tagged_source() {
-    // Regression for the suffix-induced auto-mirror flip: a content-detected
-    // .jsonc source whose source string carries a " (knip config)" suffix
-    // must still trigger Jsonc auto-mirror. Before the OutputFormat::pick
-    // fix this returned Json. Issue #457.
     let result = MigrationResult {
         config: serde_json::json!({"entry": ["src/index.ts"]}),
         warnings: vec![],
@@ -1372,7 +1278,6 @@ fn output_format_pick_auto_mirrors_jsonc_through_tagged_source() {
 
 #[test]
 fn output_format_pick_does_not_mirror_jsonc_for_json_sources() {
-    // Negative: a plain .json content-detected source still picks Json.
     let result = MigrationResult {
         config: serde_json::json!({"entry": ["src/index.ts"]}),
         warnings: vec![],
@@ -1386,10 +1291,6 @@ fn output_format_pick_does_not_mirror_jsonc_for_json_sources() {
 
 #[test]
 fn glob_caveat_emitted_when_content_detected_knip_from_custom_filename() {
-    // `--from /path/to/my-tool-config.json` whose filename does NOT contain
-    // "knip" but whose contents are knip-shaped goes through the
-    // content-detection branch of `migrate_from_file`. The source string must
-    // carry the "knip" marker so the glob caveat still fires. See issue #457.
     let result = MigrationResult {
         config: serde_json::json!({"entry": ["src/**"]}),
         warnings: vec![],
@@ -1397,18 +1298,6 @@ fn glob_caveat_emitted_when_content_detected_knip_from_custom_filename() {
     };
     assert!(should_emit_glob_caveat(&result));
 }
-
-// -- Knip vs fallow glob-equivalence contract (#457) ---------------------
-//
-// Knip and fallow use different glob engines (knip ships its own
-// micromatch-style matcher; fallow uses the `globset` crate). These tests
-// document the patterns where the two engines AGREE today. If a future knip
-// release diverges on any of them, the migrator's silent copy of
-// `entry` / `ignorePatterns` becomes incorrect and these tests should fail.
-//
-// We do not test patterns that are KNOWN to differ in semantics (negation
-// in `ignorePatterns`, certain POSIX character classes); those cases are
-// either documented as drift or live as deliberate gaps.
 
 fn matches_set(pattern: &str, paths: &[&str]) -> Vec<String> {
     let matcher = globset::Glob::new(pattern)
@@ -1423,8 +1312,6 @@ fn matches_set(pattern: &str, paths: &[&str]) -> Vec<String> {
 
 #[test]
 fn knip_glob_equivalence_brace_expansion() {
-    // Brace expansion `{ts,tsx}` works in both engines and matches both
-    // alternatives.
     let paths = &["src/foo.ts", "src/foo.tsx", "src/foo.js", "src/a/b.tsx"];
     let matched = matches_set("src/**/*.{ts,tsx}", paths);
     assert_eq!(matched, vec!["src/foo.ts", "src/foo.tsx", "src/a/b.tsx"]);
@@ -1432,8 +1319,6 @@ fn knip_glob_equivalence_brace_expansion() {
 
 #[test]
 fn knip_glob_equivalence_double_star_cross_segment() {
-    // `**` matches across path segments in both engines, including zero
-    // segments at the root.
     let paths = &["foo.ts", "a/foo.ts", "a/b/foo.ts", "foo.js"];
     let matched = matches_set("**/foo.ts", paths);
     assert_eq!(matched, vec!["foo.ts", "a/foo.ts", "a/b/foo.ts"]);
@@ -1441,7 +1326,6 @@ fn knip_glob_equivalence_double_star_cross_segment() {
 
 #[test]
 fn knip_glob_equivalence_double_star_at_directory_root() {
-    // `src/**` matches every descendant of `src/` in both engines.
     let paths = &["src/a.ts", "src/a/b.ts", "src/a/b/c.ts", "lib/a.ts"];
     let matched = matches_set("src/**", paths);
     assert_eq!(matched, vec!["src/a.ts", "src/a/b.ts", "src/a/b/c.ts"]);
@@ -1449,14 +1333,6 @@ fn knip_glob_equivalence_double_star_at_directory_root() {
 
 #[test]
 fn knip_glob_equivalence_ignore_patterns_no_negation() {
-    // Fallow's `ignorePatterns` does NOT honor leading `!` as negation;
-    // entries are matched literally. Knip's `ignore` does support negation.
-    //
-    // This is a DOCUMENTED drift: the migrator copies entries verbatim. If a
-    // user's knip config carries `ignore: ["!keep.ts"]`, the migrated
-    // `ignorePatterns` will not undo earlier matches; it will instead try to
-    // match a file literally named `!keep.ts`. The caveat banner in
-    // `run_migrate` warns the user to verify with `fallow check`.
     let paths = &["keep.ts", "!keep.ts"];
     let matched = matches_set("!keep.ts", paths);
     assert_eq!(
@@ -1468,7 +1344,6 @@ fn knip_glob_equivalence_ignore_patterns_no_negation() {
 
 #[test]
 fn knip_glob_equivalence_question_mark_single_char() {
-    // `?` matches exactly one non-separator character in both engines.
     let paths = &["a.ts", "ab.ts", "/ts"];
     let matched = matches_set("?.ts", paths);
     assert_eq!(matched, vec!["a.ts"]);

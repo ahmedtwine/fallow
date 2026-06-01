@@ -35,9 +35,6 @@ use fallow_cov_protocol::{
 };
 
 fn main() -> ExitCode {
-    // Drain stdin so the parent CLI's writer does not get EPIPE on close.
-    // Parsing the Request is best-effort; the stub does not depend on its
-    // contents, but consuming the bytes matters.
     let mut buf = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut buf);
     let parsed: Option<Request> = serde_json::from_slice(&buf).ok();

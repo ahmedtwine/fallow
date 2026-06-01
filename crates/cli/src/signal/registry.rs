@@ -85,12 +85,6 @@ pub(super) fn drain_and_kill() {
 
 #[cfg(unix)]
 fn kill_pid(pid: u32) {
-    // SIGKILL has the value 9 on every POSIX system fallow targets.
-    // No libc dep in the workspace, so fork `/bin/kill -9 <pid>`
-    // instead. Costs one extra process per signal delivery, which
-    // happens at most once per fallow invocation, so the overhead is
-    // negligible. PIDs from Child::id() are always positive; pid 0 / -1
-    // (broadcast semantics) cannot occur on this path.
     let _ = std::process::Command::new("kill")
         .args(["-9", &pid.to_string()])
         .stdout(std::process::Stdio::null())
@@ -106,9 +100,6 @@ fn kill_pid(pid: u32) {
 fn kill_pid(pid: u32) {
     use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE};
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
-    // SAFETY: OpenProcess returns null on failure (which we check),
-    // TerminateProcess with exit code 1 is a no-op if the handle is
-    // null. CloseHandle on a valid handle is well-defined.
     unsafe {
         let handle: HANDLE = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
         if handle.is_null() {
@@ -120,9 +111,7 @@ fn kill_pid(pid: u32) {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn kill_pid(_pid: u32) {
-    // Unknown platform; no kill primitive available.
-}
+fn kill_pid(_pid: u32) {}
 
 #[cfg(unix)]
 fn pid_is_alive(pid: u32) -> bool {
@@ -144,7 +133,6 @@ fn pid_is_alive(pid: u32) -> bool {
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
     };
-    // SAFETY: identical safety contract as kill_pid.
     unsafe {
         let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if handle.is_null() {
@@ -185,7 +173,6 @@ mod tests {
         let id = register(42);
         assert!(id > 0);
         deregister(id);
-        // Idempotent: second deregister is a no-op.
         deregister(id);
     }
 

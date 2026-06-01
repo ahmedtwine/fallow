@@ -12,7 +12,6 @@ use super::{Plugin, PluginResult};
 
 const REACT_COMPILER_BABEL_PLUGIN: &str = "babel-plugin-react-compiler";
 
-// Used exports for App Router page files
 const PAGE_EXPORTS: &[&str] = &[
     "default",
     "metadata",
@@ -91,7 +90,6 @@ define_plugin!(
     struct NextJsPlugin => "nextjs",
     enablers: &["next"],
     entry_patterns: &[
-        // App Router convention files
         "app/**/page.{ts,tsx,js,jsx}",
         "app/**/layout.{ts,tsx,js,jsx}",
         "app/**/loading.{ts,tsx,js,jsx}",
@@ -104,7 +102,6 @@ define_plugin!(
         "app/**/forbidden.{ts,tsx,js,jsx}",
         "app/**/unauthorized.{ts,tsx,js,jsx}",
         "app/global-not-found.{ts,tsx,js,jsx}",
-        // App Router metadata files
         "app/**/opengraph-image.{ts,tsx,js,jsx}",
         "app/**/twitter-image.{ts,tsx,js,jsx}",
         "app/**/icon.{ts,tsx,js,jsx}",
@@ -112,9 +109,7 @@ define_plugin!(
         "app/**/manifest.{ts,tsx,js,jsx}",
         "app/**/sitemap.{ts,tsx,js,jsx}",
         "app/**/robots.{ts,tsx,js,jsx}",
-        // Pages Router
         "pages/**/*.{ts,tsx,js,jsx}",
-        // src/ variants of App Router convention files
         "src/app/**/page.{ts,tsx,js,jsx}",
         "src/app/**/layout.{ts,tsx,js,jsx}",
         "src/app/**/loading.{ts,tsx,js,jsx}",
@@ -127,7 +122,6 @@ define_plugin!(
         "src/app/**/forbidden.{ts,tsx,js,jsx}",
         "src/app/**/unauthorized.{ts,tsx,js,jsx}",
         "src/app/global-not-found.{ts,tsx,js,jsx}",
-        // src/ variants of App Router metadata files
         "src/app/**/opengraph-image.{ts,tsx,js,jsx}",
         "src/app/**/twitter-image.{ts,tsx,js,jsx}",
         "src/app/**/icon.{ts,tsx,js,jsx}",
@@ -135,14 +129,11 @@ define_plugin!(
         "src/app/**/manifest.{ts,tsx,js,jsx}",
         "src/app/**/sitemap.{ts,tsx,js,jsx}",
         "src/app/**/robots.{ts,tsx,js,jsx}",
-        // src/ Pages Router
         "src/pages/**/*.{ts,tsx,js,jsx}",
-        // Middleware and proxy
         "middleware.{ts,js}",
         "src/middleware.{ts,js}",
         "proxy.{ts,js}",
         "src/proxy.{ts,js}",
-        // Instrumentation (Next.js 14+)
         "instrumentation.{ts,js}",
         "instrumentation-client.{ts,js}",
         "src/instrumentation.{ts,js}",
@@ -166,12 +157,10 @@ define_plugin!(
         "@next/mdx",
         "@next/bundle-analyzer",
         "@next/env",
-        // Virtual packages for enforcing server/client boundaries (imported but not in package.json)
         "server-only",
         "client-only",
     ],
     used_exports: [
-        // App Router pages
         ("app/**/page.{ts,tsx,js,jsx}", PAGE_EXPORTS),
         ("app/**/layout.{ts,tsx,js,jsx}", LAYOUT_EXPORTS),
         ("app/**/loading.{ts,tsx,js,jsx}", DEFAULT_ONLY_EXPORTS),
@@ -184,11 +173,9 @@ define_plugin!(
         ("app/**/forbidden.{ts,tsx,js,jsx}", DEFAULT_ONLY_EXPORTS),
         ("app/**/unauthorized.{ts,tsx,js,jsx}", DEFAULT_ONLY_EXPORTS),
         ("app/global-not-found.{ts,tsx,js,jsx}", GLOBAL_NOT_FOUND_EXPORTS),
-        // Pages Router
         ("pages/**/*.{ts,tsx,js,jsx}", PAGES_ROUTER_EXPORTS),
         ("pages/_app.{ts,tsx,js,jsx}", PAGES_APP_EXPORTS),
         ("pages/api/**/*.{ts,tsx,js,jsx}", PAGES_API_EXPORTS),
-        // src/ variants
         ("src/app/**/page.{ts,tsx,js,jsx}", PAGE_EXPORTS),
         ("src/app/**/layout.{ts,tsx,js,jsx}", LAYOUT_EXPORTS),
         ("src/app/**/loading.{ts,tsx,js,jsx}", DEFAULT_ONLY_EXPORTS),
@@ -214,21 +201,17 @@ define_plugin!(
         ("src/instrumentation-client.{ts,js}", INSTRUMENTATION_CLIENT_EXPORTS),
         ("mdx-components.{ts,tsx,js,jsx}", MDX_COMPONENT_EXPORTS),
         ("src/mdx-components.{ts,tsx,js,jsx}", MDX_COMPONENT_EXPORTS),
-        // Metadata image files
         ("app/**/icon.{ts,tsx,js,jsx}", ICON_EXPORTS),
         ("app/**/apple-icon.{ts,tsx,js,jsx}", ICON_EXPORTS),
         ("app/**/opengraph-image.{ts,tsx,js,jsx}", OG_IMAGE_EXPORTS),
         ("app/**/twitter-image.{ts,tsx,js,jsx}", OG_IMAGE_EXPORTS),
-        // Metadata data files
         ("app/**/manifest.{ts,tsx,js,jsx}", MANIFEST_EXPORTS),
         ("app/**/sitemap.{ts,tsx,js,jsx}", SITEMAP_EXPORTS),
         ("app/**/robots.{ts,tsx,js,jsx}", ROBOTS_EXPORTS),
-        // src/ variants of metadata image files
         ("src/app/**/icon.{ts,tsx,js,jsx}", ICON_EXPORTS),
         ("src/app/**/apple-icon.{ts,tsx,js,jsx}", ICON_EXPORTS),
         ("src/app/**/opengraph-image.{ts,tsx,js,jsx}", OG_IMAGE_EXPORTS),
         ("src/app/**/twitter-image.{ts,tsx,js,jsx}", OG_IMAGE_EXPORTS),
-        // src/ variants of metadata data files
         ("src/app/**/manifest.{ts,tsx,js,jsx}", MANIFEST_EXPORTS),
         ("src/app/**/sitemap.{ts,tsx,js,jsx}", SITEMAP_EXPORTS),
         ("src/app/**/robots.{ts,tsx,js,jsx}", ROBOTS_EXPORTS),
@@ -236,19 +219,16 @@ define_plugin!(
     resolve_config(config_path, source, _root) {
         let mut result = PluginResult::default();
 
-        // Extract import sources as referenced dependencies
         let imports = config_parser::extract_imports(source, config_path);
         for imp in &imports {
             let dep = crate::resolve::extract_package_name(imp);
             result.referenced_dependencies.push(dep);
         }
 
-        // pageExtensions → modify entry patterns
         let page_extensions =
             config_parser::extract_config_string_array(source, config_path, &["pageExtensions"]);
         if !page_extensions.is_empty() {
             let ext_str = page_extensions.join(",");
-            // Generate entry patterns with custom extensions
             let base_patterns = [
                 "app/**/page",
                 "app/**/layout",
@@ -432,8 +412,6 @@ mod tests {
         assert!(mdx_entry.1.contains(&"useMDXComponents"));
     }
 
-    // ── resolve_config tests ─────────────────────────────────────
-
     #[test]
     fn resolve_config_page_extensions() {
         let source = r#"
@@ -444,7 +422,6 @@ mod tests {
         let plugin = NextJsPlugin;
         let result =
             plugin.resolve_config(Path::new("next.config.ts"), source, Path::new("/project"));
-        // Should generate entry patterns with the custom extensions
         assert!(
             !result.entry_patterns.is_empty(),
             "pageExtensions should generate entry patterns"

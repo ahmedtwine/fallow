@@ -268,7 +268,6 @@ mod tests {
         let schema = build_cli_schema(&cmd);
         let commands = schema["commands"].as_array().unwrap();
         assert!(!commands.is_empty());
-        // Should not include the "help" subcommand
         assert!(
             !commands
                 .iter()
@@ -281,7 +280,6 @@ mod tests {
         let cmd = Cli::command();
         let schema = build_cli_schema(&cmd);
         let flags = schema["global_flags"].as_array().unwrap();
-        // Should not include "help" or "version" flags
         assert!(!flags.iter().any(|f| f["name"].as_str().unwrap() == "help"));
         assert!(
             !flags
@@ -296,7 +294,6 @@ mod tests {
         let schema = build_cli_schema(&cmd);
         let issue_types = schema["issue_types"].as_array().unwrap();
         assert!(!issue_types.is_empty());
-        // Verify each issue type has required fields
         for issue_type in issue_types {
             assert!(issue_type["id"].is_string());
             assert!(issue_type["description"].is_string());
@@ -345,7 +342,6 @@ mod tests {
     #[test]
     fn build_arg_schema_bool_type() {
         let cmd = Cli::command();
-        // Find a boolean arg like --quiet
         let quiet_arg = cmd.get_arguments().find(|a| a.get_id() == "quiet").unwrap();
         let schema = build_arg_schema(quiet_arg);
         assert_eq!(schema["type"], "bool");
@@ -354,7 +350,6 @@ mod tests {
     #[test]
     fn build_arg_schema_includes_short_flag() {
         let cmd = Cli::command();
-        // Find an arg with a short flag
         let quiet_arg = cmd.get_arguments().find(|a| a.get_id() == "quiet").unwrap();
         let schema = build_arg_schema(quiet_arg);
         if quiet_arg.get_short().is_some() {

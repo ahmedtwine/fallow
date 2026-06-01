@@ -408,7 +408,6 @@ pub struct PartialRulesConfig {
 /// `PartialRulesConfig`; the `known_rule_names_count_matches_struct` test
 /// fails when the lists drift.
 pub const KNOWN_RULE_NAMES: &[&str] = &[
-    // canonical kebab-case names (rename_all = "kebab-case")
     "unused-files",
     "unused-exports",
     "unused-types",
@@ -434,7 +433,6 @@ pub const KNOWN_RULE_NAMES: &[&str] = &[
     "unresolved-catalog-references",
     "unused-dependency-overrides",
     "misconfigured-dependency-overrides",
-    // serde aliases (singular forms, plus the `boundary-violations` legacy plural)
     "unused-file",
     "unused-export",
     "unused-type",
@@ -557,7 +555,6 @@ mod tests {
         assert_eq!(rules.unused_files, Severity::Error);
         assert_eq!(rules.unused_exports, Severity::Warn);
         assert_eq!(rules.unused_types, Severity::Off);
-        // Unset fields default to error
         assert_eq!(rules.unresolved_imports, Severity::Error);
     }
 
@@ -569,7 +566,6 @@ mod tests {
 
     #[test]
     fn rules_deserialize_re_export_cycle_aliases() {
-        // All four token forms (canonical + three aliases) must round-trip.
         for token in [
             "re-export-cycle",
             "re-export-cycles",
@@ -610,9 +606,6 @@ mod tests {
 
     #[test]
     fn rules_deserialize_singular_aliases_for_every_plural_rule() {
-        // Mirrors the LSP's per-diagnostic singular codes (e.g. "unused-export")
-        // so users who copy the form they see in IDE warnings into their config
-        // get their stated severity honored instead of silently dropped.
         let json_str = r#"{
             "unused-file": "off",
             "unused-export": "off",
@@ -702,7 +695,6 @@ mod tests {
         rules.apply_partial(&partial);
         assert_eq!(rules.unused_files, Severity::Warn);
         assert_eq!(rules.unused_exports, Severity::Off);
-        // Unset fields unchanged
         assert_eq!(rules.unused_types, Severity::Error);
         assert_eq!(rules.unresolved_imports, Severity::Error);
     }
@@ -796,12 +788,8 @@ mod tests {
         );
     }
 
-    // ── Unknown-rule-name detection (issue #467 phase 1) ─────────────
-
     #[test]
     fn known_rule_names_count_matches_struct() {
-        // Drift guard. Bump both numbers together when adding a rule.
-        // 24 canonical kebab-case names + 24 aliases = 48 entries.
         assert_eq!(KNOWN_RULE_NAMES.len(), 52);
     }
 
@@ -820,27 +808,11 @@ mod tests {
 
     #[test]
     fn known_rule_names_covers_every_serde_alias_in_source() {
-        // Source-level drift guard: parse this file's text and extract every
-        // `alias = "<kebab>"` literal that appears on a `RulesConfig` /
-        // `PartialRulesConfig` field. Assert each one is in
-        // `KNOWN_RULE_NAMES`.
-        //
-        // Complements `known_rule_names_count_matches_struct` (catches new
-        // fields) and `every_known_rule_name_round_trips_through_partial`
-        // (catches stale or renamed entries). This one catches a new alias
-        // added to an existing field without a matching KNOWN_RULE_NAMES
-        // update; that's invisible to the count guard (count stays the
-        // same), invisible to the canonical-coverage walk (the canonical
-        // name is already present), and invisible to the roundtrip guard
-        // (the roundtrip walks KNOWN_RULE_NAMES, never discovering an
-        // alias that was added to the struct but not to the list).
         let source = include_str!("rules.rs");
 
         let mut aliases_found = Vec::new();
         for line in source.lines() {
             let trimmed = line.trim();
-            // Skip line comments (the test's own doc strings would otherwise
-            // pollute the count with placeholder examples).
             if trimmed.starts_with("//") {
                 continue;
             }
@@ -851,16 +823,12 @@ mod tests {
                 continue;
             };
             let alias = &after[..end];
-            // Real aliases are kebab-case ASCII; placeholder examples in any
-            // accidentally-included strings (`<kebab>`, `...`) get filtered.
             if alias.is_empty() || !alias.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
                 continue;
             }
             aliases_found.push(alias.to_owned());
         }
 
-        // 27 alias attrs on RulesConfig + 27 on PartialRulesConfig = 54.
-        // (24 + 24 base + 3 new aliases per struct on `re_export_cycle`).
         assert_eq!(
             aliases_found.len(),
             54,
@@ -879,10 +847,6 @@ mod tests {
 
     #[test]
     fn re_export_cycle_aliases_all_round_trip_to_the_same_field() {
-        // Panel catch #10 (Persona 8): pin every alias spelling of the new
-        // `re-export-cycle` rule so a future rename / typo of any of the four
-        // alias literals would fail this test instead of silently making the
-        // alias unmatched.
         for alias in [
             "re-export-cycle",
             "re-export-cycles",
@@ -897,7 +861,6 @@ mod tests {
                 Some(Severity::Warn),
                 "'{alias}' should set re_export_cycle to Warn"
             );
-            // None of the four aliases should accidentally populate any other field.
             let serialized = serde_json::to_value(&partial).unwrap();
             let map = serialized.as_object().unwrap();
             assert_eq!(
@@ -910,12 +873,6 @@ mod tests {
 
     #[test]
     fn every_known_rule_name_round_trips_through_partial() {
-        // Stronger drift guard than the count + canonical-coverage tests:
-        // every entry in KNOWN_RULE_NAMES must deserialize successfully via
-        // `PartialRulesConfig` and resolve to exactly one field. Catches the
-        // case where a developer renames an alias on the struct but forgets
-        // to update KNOWN_RULE_NAMES (the count test still passes; this one
-        // fails).
         for &name in KNOWN_RULE_NAMES {
             let json = format!(r#"{{"{name}": "warn"}}"#);
             let partial: PartialRulesConfig = serde_json::from_str(&json)
@@ -933,11 +890,6 @@ mod tests {
 
     #[test]
     fn known_rule_names_covers_every_struct_field() {
-        // Every canonical rule must serialize to a name in KNOWN_RULE_NAMES.
-        // Iterates the serialized form of a default RulesConfig (which emits
-        // canonical kebab-case for every field) and asserts each appears in
-        // the const list. Drift guard for adding a new field but forgetting
-        // to update KNOWN_RULE_NAMES.
         let json = serde_json::to_value(RulesConfig::default()).unwrap();
         let obj = json.as_object().unwrap();
         for key in obj.keys() {
@@ -981,7 +933,6 @@ mod tests {
 
     #[test]
     fn closest_known_rule_name_returns_none_for_exact_match() {
-        // A match with distance 0 is not a typo, so no suggestion.
         assert_eq!(closest_known_rule_name("unused-files"), None);
     }
 
@@ -1045,8 +996,6 @@ mod tests {
         assert_eq!(unknown.len(), 1);
         assert_eq!(unknown[0].suggestion, None);
     }
-
-    // ── PartialRulesConfig deserialization ───────────────────────────
 
     #[test]
     fn partial_rules_empty_json() {
@@ -1126,8 +1075,6 @@ mod tests {
         assert_eq!(partial.stale_suppressions, Some(Severity::Off));
     }
 
-    // ── PartialRulesConfig serialization skip_serializing_if ────────
-
     #[test]
     fn partial_rules_none_fields_not_serialized() {
         let partial = PartialRulesConfig::default();
@@ -1149,8 +1096,6 @@ mod tests {
         assert!(!json.contains("unused-exports"));
     }
 
-    // ── Severity JSON deserialization ────────────────────────────────
-
     #[test]
     fn severity_json_deserialization() {
         let error: Severity = serde_json::from_str(r#""error""#).unwrap();
@@ -1169,14 +1114,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── Severity default ────────────────────────────────────────────
-
     #[test]
     fn severity_default_is_error() {
         assert_eq!(Severity::default(), Severity::Error);
     }
-
-    // ── RulesConfig JSON serialize roundtrip ─────────────────────────
 
     #[test]
     fn rules_config_json_roundtrip() {
@@ -1194,8 +1135,6 @@ mod tests {
         assert_eq!(restored.unused_dependencies, Severity::Error); // default
     }
 
-    // ── apply_partial preserves type_only/test_only defaults ────────
-
     #[test]
     fn apply_partial_preserves_type_only_default() {
         let mut rules = RulesConfig::default();
@@ -1204,7 +1143,6 @@ mod tests {
             ..Default::default()
         };
         rules.apply_partial(&partial);
-        // type_only_dependencies defaults to Warn, should be preserved
         assert_eq!(rules.type_only_dependencies, Severity::Warn);
         assert_eq!(rules.test_only_dependencies, Severity::Warn);
     }

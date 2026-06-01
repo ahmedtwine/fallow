@@ -1,7 +1,5 @@
 use crate::tests::parse_ts as parse_source;
 
-// -- Dynamic import pattern extraction --
-
 #[test]
 fn extracts_template_literal_dynamic_import_pattern() {
     let info = parse_source("const m = import(`./locales/${lang}.json`);");
@@ -64,8 +62,6 @@ fn multi_expression_template_uses_globstar() {
     );
 }
 
-// -- import.meta.glob / require.context --
-
 #[test]
 fn extracts_import_meta_glob_pattern() {
     let info = parse_source("const mods = import.meta.glob('./components/*.tsx');");
@@ -97,9 +93,6 @@ fn extracts_require_context_recursive() {
 
 #[test]
 fn vitest_mock_records_target_and_auto_mock_sibling() {
-    // vi.mock without a factory: the target is credited as referenced AND
-    // the `__mocks__/<file>` sibling is synthesized for vitest's auto-mock
-    // convention.
     let info = parse_source("vi.mock('./services/api');");
     assert_eq!(info.dynamic_imports.len(), 2);
     let sources: Vec<&str> = info
@@ -169,11 +162,6 @@ fn vitest_mock_records_target_and_auto_mock_sibling_from_import_argument() {
 
 #[test]
 fn vitest_mock_with_factory_credits_target_only() {
-    // Issue #311: vi.mock with a factory function does NOT consult the
-    // `__mocks__/<file>` sibling at runtime, so synthesizing the auto-mock
-    // import would surface as a spurious `unresolved-import` whenever the
-    // sibling does not exist. The target itself is still credited so the
-    // file is not flagged as unused.
     let info = parse_source("vi.mock('../../bar/foo', () => ({ x: 1 }));");
     assert_eq!(
         info.dynamic_imports.len(),
@@ -202,11 +190,6 @@ fn vitest_mock_with_function_expression_factory_credits_target_only() {
 
 #[test]
 fn vitest_mock_with_nested_parenthesized_factory_credits_target_only() {
-    // Oxc preserves parens at parse time, so `vi.mock('x', (((() => ({})))))`
-    // arrives as nested `ParenthesizedExpression` nodes wrapping the arrow.
-    // The factory detector must unwrap through them to recognise the factory, otherwise
-    // a `__mocks__/x` import is synthesized and surfaces as a spurious
-    // `unresolved-import`.
     let info = parse_source("vi.mock('./pkg', (((() => ({ x: 1 })))));");
     let sources: Vec<&str> = info
         .dynamic_imports
@@ -223,9 +206,6 @@ fn vitest_mock_with_nested_parenthesized_factory_credits_target_only() {
 
 #[test]
 fn vitest_mock_with_options_object_still_synthesizes_auto_mock() {
-    // `vi.mock(spec, { spy: true })` is auto-mock with options, NOT a factory
-    // form, so vitest still consults `__mocks__/<file>`. The synthesis must
-    // still happen.
     let info = parse_source("vi.mock('./services/api', { spy: true });");
     let sources: Vec<&str> = info
         .dynamic_imports
@@ -249,8 +229,6 @@ fn vitest_mock_with_options_object_still_synthesizes_auto_mock() {
         .expect("auto-mock import should be recorded");
     assert_eq!(auto_mock.local_name, Some(String::new()));
 }
-
-// -- Dynamic import namespace tracking --
 
 #[test]
 fn dynamic_import_await_captures_local_name() {
@@ -309,8 +287,6 @@ fn dynamic_import_no_duplicate_entries() {
     assert_eq!(info.dynamic_imports.len(), 1);
 }
 
-// ── require.context with regex pattern ──────────────────────
-
 #[test]
 fn require_context_with_json_regex() {
     let info = parse_source(r"const ctx = require.context('./locale', false, /\.json$/);");
@@ -321,8 +297,6 @@ fn require_context_with_json_regex() {
         Some(".json".to_string())
     );
 }
-
-// ── Dynamic import string concatenation patterns ────────────
 
 #[test]
 fn dynamic_import_concat_prefix_only() {
@@ -345,8 +319,6 @@ fn dynamic_import_concat_prefix_and_suffix() {
         Some(".vue".to_string())
     );
 }
-
-// ── Arrow-wrapped dynamic imports ────────────────────────────
 
 #[test]
 fn arrow_wrapped_import_expression_body() {
@@ -382,7 +354,6 @@ fn arrow_wrapped_import_vue_define_async() {
 
 #[test]
 fn arrow_wrapped_import_no_duplicate() {
-    // Should NOT produce a duplicate side-effect import alongside the arrow-wrapped one
     let info = parse_source("React.lazy(() => import('./Foo'));");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].destructured_names, vec!["default"]);
@@ -390,14 +361,12 @@ fn arrow_wrapped_import_no_duplicate() {
 
 #[test]
 fn non_import_arrow_not_extracted() {
-    // Arrow that doesn't contain an import() should not produce a dynamic import
     let info = parse_source("const result = someFunc(() => doSomething());");
     assert_eq!(info.dynamic_imports.len(), 0);
 }
 
 #[test]
 fn arrow_wrapped_import_second_argument() {
-    // Import callback is the second argument, not the first
     let info = parse_source("const Foo = createLazy(config, () => import('./Foo'));");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].source, "./Foo");
@@ -407,14 +376,12 @@ fn arrow_wrapped_import_second_argument() {
 #[test]
 fn arrow_wrapped_import_async_arrow() {
     let info = parse_source("const Foo = lazy(async () => import('./Foo'));");
-    // Async arrow's body is still an expression containing import()
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].source, "./Foo");
 }
 
 #[test]
 fn arrow_wrapped_import_with_non_import_first_arg() {
-    // First arg is not an import arrow, second arg IS
     let info = parse_source("const Foo = wrapper('options', () => import('./Foo'));");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].source, "./Foo");
@@ -423,19 +390,13 @@ fn arrow_wrapped_import_with_non_import_first_arg() {
 
 #[test]
 fn arrow_wrapped_template_literal_source() {
-    // Template literal source in arrow — should NOT produce a DynamicImportInfo
-    // (it's a dynamic pattern, not a static import)
     let info = parse_source("const Foo = lazy(() => import(`./pages/${name}`));");
     assert_eq!(info.dynamic_imports.len(), 0);
-    // But it should produce a dynamic_import_pattern
     assert_eq!(info.dynamic_import_patterns.len(), 1);
 }
 
-// ── Dynamic import .then() callback patterns ────────────────
-
 #[test]
 fn then_callback_expression_body_member_access() {
-    // Angular lazy loading: `import('./x').then(m => m.Component)`
     let info = parse_source("import('./dashboard').then(m => m.DashboardComponent);");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].source, "./dashboard");
@@ -448,7 +409,6 @@ fn then_callback_expression_body_member_access() {
 
 #[test]
 fn then_callback_destructured_param() {
-    // Destructured: `import('./x').then(({ foo, bar }) => { ... })`
     let info = parse_source("import('./lib').then(({ foo, bar }) => { console.log(foo, bar); });");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].source, "./lib");
@@ -461,7 +421,6 @@ fn then_callback_destructured_param() {
 
 #[test]
 fn then_callback_namespace_block_body() {
-    // Block body with identifier param falls back to namespace binding
     let info = parse_source("import('./service').then(m => { m.doStuff(); m.doMore(); });");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].source, "./service");
@@ -471,7 +430,6 @@ fn then_callback_namespace_block_body() {
 
 #[test]
 fn then_callback_angular_routes_pattern() {
-    // Real-world Angular routing pattern
     let info = parse_source(
         r"
         const routes = [
@@ -501,11 +459,9 @@ fn then_callback_angular_routes_pattern() {
 
 #[test]
 fn then_callback_object_literal_body() {
-    // React.lazy .then pattern: `import('./x').then(m => ({ default: m.Foo }))`
     let info = parse_source(
         "const Comp = React.lazy(() => import('./Foo').then(m => ({ default: m.FooComponent })));",
     );
-    // The outer React.lazy would normally capture this, but the .then() should also fire
     assert!(
         info.dynamic_imports
             .iter()
@@ -516,7 +472,6 @@ fn then_callback_object_literal_body() {
 
 #[test]
 fn then_callback_no_duplicate_side_effect() {
-    // Should NOT produce a duplicate side-effect import alongside the .then() one
     let info = parse_source("import('./lib').then(m => m.foo);");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].destructured_names, vec!["foo"]);
@@ -524,7 +479,6 @@ fn then_callback_no_duplicate_side_effect() {
 
 #[test]
 fn then_callback_function_expression() {
-    // Function expression callback
     let info = parse_source("import('./lib').then(function(m) { return m.foo; });");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert_eq!(info.dynamic_imports[0].source, "./lib");
@@ -533,7 +487,6 @@ fn then_callback_function_expression() {
 
 #[test]
 fn then_callback_destructured_with_rest_is_namespace() {
-    // Rest element means we can't know all accessed names
     let info = parse_source("import('./lib').then(({ foo, ...rest }) => { });");
     assert_eq!(info.dynamic_imports.len(), 1);
     assert!(info.dynamic_imports[0].destructured_names.is_empty());
@@ -542,12 +495,9 @@ fn then_callback_destructured_with_rest_is_namespace() {
 
 #[test]
 fn then_callback_non_import_callee_ignored() {
-    // `.then()` on a non-import should not produce a dynamic import
     let info = parse_source("fetch('/api').then(r => r.json());");
     assert!(info.dynamic_imports.is_empty());
 }
-
-// -- child_process.fork() entrypoints (issue #638) --
 
 fn dynamic_sources(source: &str) -> Vec<String> {
     parse_source(source)
@@ -717,8 +667,6 @@ fn unresolved_or_computed_fork_targets_are_not_credited() {
     assert!(sources.is_empty());
 }
 
-// ── node:module register() loader hook (issue #293) ──────────
-
 #[test]
 fn node_module_register_named_import_credits_loader() {
     let info = parse_source(
@@ -765,8 +713,6 @@ fn node_module_register_namespace_import_credits_loader() {
 
 #[test]
 fn node_module_register_unprefixed_module_specifier_supported() {
-    // CommonJS-style `require('module')` and ESM `from 'module'` (without
-    // `node:`) are both legal Node specifiers for the same builtin.
     let info = parse_source(
         "import { register } from 'module';\n\
          register('tsx/esm', import.meta.url);",
@@ -780,7 +726,6 @@ fn node_module_register_unprefixed_module_specifier_supported() {
 
 #[test]
 fn unrelated_register_call_not_credited() {
-    // `register` from some other library must not be treated as a loader hook.
     let info = parse_source(
         "import { register } from './service-locator';\n\
          register('not-a-loader', config);",
@@ -864,14 +809,6 @@ fn node_module_register_conditional_url_binding_credits_both_loader_targets() {
 
 #[test]
 fn node_module_register_url_bindings_accumulate_across_shadowing() {
-    // The visitor keeps a module-flat map from local name to every URL ever
-    // bound to that name. When `url` is re-declared inside a nested block the
-    // outer specifier is preserved (over-credit, not replaced), so every
-    // `register(url)` call in the module credits BOTH loader files. This is
-    // safe: over-credit produces extra `DynamicImportInfo` entries whose
-    // sources either resolve correctly or fail to resolve (no-op). Losing the
-    // outer binding would silently miss real loader hooks for the post-block
-    // call.
     let info = parse_source(
         "import { register } from 'node:module';\n\
          const url = new URL('./hooks/top-loader.ts', import.meta.url);\n\
@@ -894,11 +831,6 @@ fn node_module_register_url_bindings_accumulate_across_shadowing() {
 
 #[test]
 fn node_module_register_credits_legacy_loader_hook_exports() {
-    // Issue #589: include the legacy hook names alongside the current ones.
-    // Node 16.x with --experimental-loader and downstream forks still invoke
-    // `getFormat` / `getSource` / `transformSource`; crediting them is inert
-    // when the loader does not export them and prevents a false `unused-export`
-    // finding when it does.
     let info = parse_source(
         "import { register } from 'node:module';\n\
          register('./hooks/json-loader.ts', import.meta.url);",
@@ -918,8 +850,6 @@ fn node_module_register_credits_legacy_loader_hook_exports() {
         );
     }
 
-    // `getGlobalPreload` was never a documented Node hook name (the documented
-    // form is `globalPreload`); confirm we are not inventing spurious names.
     assert!(
         !loader
             .destructured_names

@@ -50,9 +50,6 @@ mod gated {
             let home = root.join("home");
             fs::create_dir_all(&home).expect("create fake home");
 
-            // A minimal V8-shaped coverage file so the CLI accepts the input
-            // and the shape classification picks V8 (not Istanbul). The stub
-            // does not read the content, so an empty result array suffices.
             let coverage_file = root.join("coverage-final-v8.json");
             fs::write(&coverage_file, br#"{"result":[]}"#).expect("write coverage input");
 
@@ -70,28 +67,15 @@ mod gated {
             let mut cmd = Command::new(fallow_bin());
             cmd.env("NO_COLOR", "1");
             cmd.env("RUST_LOG", "");
-            // Remove any inherited license material so the developer's real
-            // license cannot leak into tests. Each test case that needs a
-            // license sets `FALLOW_LICENSE` explicitly.
             cmd.env_remove("FALLOW_LICENSE");
             cmd.env_remove("FALLOW_LICENSE_PATH");
-            // Same for the alternative sidecar override.
             cmd.env_remove("FALLOW_COV_BINARY_PATH");
-            // And for unrelated fallow env vars that could leak in from the
-            // developer's shell and perturb analysis (FALLOW_COVERAGE feeds
-            // CRAP scoring; FALLOW_BIN overrides the binary MCP looks up).
             cmd.env_remove("FALLOW_COVERAGE");
             cmd.env_remove("FALLOW_BIN");
             cmd.env_remove("FALLOW_FORMAT");
             cmd.env_remove("FALLOW_QUIET");
-            // Point HOME at a fresh directory so discovery of the default
-            // license path (`~/.fallow/license.jwt`) cannot pick up a real
-            // license from the developer's machine.
             cmd.env("HOME", &self.home);
             cmd.env("USERPROFILE", &self.home);
-            // Explicit override takes precedence over the auto-discovery
-            // ladder, so the stub is the one and only sidecar the CLI can
-            // see during each test case.
             cmd.env("FALLOW_COV_BIN", &self.stub_bin);
             cmd
         }
@@ -165,9 +149,6 @@ mod gated {
         let harness = Harness::new();
         let mut cmd = harness.fallow();
         cmd.env("FALLOW_STUB_MODE", "ok");
-        // No FALLOW_LICENSE, no file at ~/.fallow/license.jwt under the
-        // sandboxed HOME. ADR 010 makes one local coverage source free; the
-        // CLI must pass an empty JWT to the sidecar instead of pre-gating.
         for arg in harness.health_args() {
             cmd.arg(arg);
         }
@@ -262,8 +243,6 @@ mod gated {
         let harness = Harness::new();
         let mut cmd = harness.fallow();
         cmd.env("FALLOW_LICENSE", sign::mint_runtime_coverage_jwt());
-        // Deliberately point at a path that does not exist so discovery
-        // hits the explicit-beats-implicit bailout in discover_sidecar.
         cmd.env("FALLOW_COV_BIN", harness.home.join("does-not-exist"));
         for arg in harness.health_args() {
             cmd.arg(arg);
@@ -330,7 +309,6 @@ mod gated {
     #[test]
     fn bad_sidecar_signature_exits_4() {
         let harness = Harness::new();
-        // Corrupt the .sig file with zeros; Ed25519 rejects this.
         let mut sig_os = harness.stub_bin.as_os_str().to_os_string();
         sig_os.push(".sig");
         let sig_path = PathBuf::from(sig_os);
@@ -349,9 +327,6 @@ mod gated {
         );
     }
 
-    /// Happy path + JSON inspection sanity check. Re-uses the harness but
-    /// goes a little further than the headline test: the license watermark
-    /// field should be absent for a fresh (non-expired) JWT.
     #[test]
     fn happy_path_does_not_set_watermark() {
         let harness = Harness::new();
@@ -378,9 +353,6 @@ mod gated {
         );
     }
 
-    /// ADR 009 step 6b: a short-window capture must show both the warning
-    /// banner and the quantified trial CTA in human output. The stub returns
-    /// a 12-minute capture with `lazy_parse_warning: true`.
     #[test]
     fn capture_quality_short_renders_warning_and_upgrade_prompt_in_human_output() {
         let harness = Harness::new();
@@ -418,7 +390,6 @@ mod gated {
         );
     }
 
-    /// ADR 009 step 6b: a long-window capture must be quiet. No warning, no CTA.
     #[test]
     fn capture_quality_long_shows_neither_warning_nor_upgrade_prompt() {
         let harness = Harness::new();
@@ -444,9 +415,6 @@ mod gated {
         );
     }
 
-    /// The trial CTA is a human-format sales touchpoint. It must never land in
-    /// machine-readable formats (JSON, SARIF, etc.); those feed agent pipelines
-    /// and scripted consumers that would choke on free text.
     #[test]
     fn capture_quality_short_does_not_emit_upgrade_prompt_in_json() {
         let harness = Harness::new();

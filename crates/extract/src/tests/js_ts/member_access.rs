@@ -2,8 +2,6 @@ use fallow_types::extract::ImportedName;
 
 use crate::tests::parse_ts as parse_source;
 
-// -- Whole-object use detection --
-
 #[test]
 fn detects_object_values_whole_use() {
     let info = parse_source("import { Status } from './types';\nObject.values(Status);");
@@ -52,8 +50,6 @@ fn computed_member_variable_marks_whole_use() {
     let info = parse_source("import { Status } from './types';\nconst k = 'foo';\nStatus[k];");
     assert!(info.whole_object_uses.contains(&"Status".to_string()));
 }
-
-// -- Namespace destructuring detection --
 
 #[test]
 fn namespace_destructuring_generates_member_accesses() {
@@ -135,7 +131,6 @@ fn namespace_destructuring_from_require() {
 fn non_namespace_destructuring_not_captured() {
     let info =
         parse_source("import { foo } from './utils';\nconst obj = { a: 1 };\nconst { a } = obj;");
-    // 'obj' is not a namespace import, so destructuring should not add member_accesses for it
     let has_obj_a = info
         .member_accesses
         .iter()

@@ -81,8 +81,6 @@ impl Plugin for VelitePlugin {
 
         let collected = collect_config(source, config_path);
 
-        // Content root: top-level `root` (default `content`), normalized
-        // config-relative. Collection `pattern` globs are relative to it.
         let root_dir = collected
             .root_dir
             .as_deref()
@@ -90,8 +88,6 @@ impl Plugin for VelitePlugin {
             .or_else(|| config_parser::normalize_config_path(DEFAULT_ROOT, config_path, root));
 
         if let Some(root_dir) = root_dir {
-            // Keep only positive globs. Fast-glob negations (`!posts/private/**`)
-            // exclude files; they are not content entry roots.
             let positive: Vec<&str> = collected
                 .patterns
                 .iter()
@@ -100,8 +96,6 @@ impl Plugin for VelitePlugin {
                 .filter(|pattern| !pattern.is_empty())
                 .collect();
 
-            // Fall back to the whole content root when no positive collection
-            // pattern survives (no `defineCollection`, or negation-only globs).
             if positive.is_empty() {
                 result.push_entry_pattern(format!("{root_dir}/**/*.{CONTENT_EXTENSIONS}"));
             } else {
@@ -111,11 +105,6 @@ impl Plugin for VelitePlugin {
             }
         }
 
-        // Generated output: the default `.velite` is covered by the static
-        // `always_used` glob (matched anywhere, including workspace packages).
-        // Only a non-default `output.data` needs an explicit, config-relative
-        // always-used entry. Compare the raw value so a monorepo config that
-        // spells out the default does not add a redundant entry.
         if let Some(output_dir) = collected
             .output_data
             .as_deref()
@@ -146,8 +135,6 @@ fn collect_config(source: &str, config_path: &Path) -> CollectedConfig {
 
     let mut collector = ConfigCollector::default();
 
-    // Top-level `root` / `output.data` from the default-export config object
-    // (handles `defineConfig({...})`, bare object, `satisfies`/`as`, const ref).
     if let Some(config) = config_parser::find_config_object_pub(&parsed.program) {
         collector.root_dir = config_parser::find_property(config, "root")
             .and_then(|prop| config_parser::expression_to_path_string(&prop.value));
@@ -157,8 +144,6 @@ fn collect_config(source: &str, config_path: &Path) -> CollectedConfig {
             .and_then(|prop| config_parser::expression_to_path_string(&prop.value));
     }
 
-    // Collection patterns from every `defineCollection(...)` call, wherever it
-    // appears (inline in `collections`, or extracted to a `const`).
     collector.visit_program(&parsed.program);
     collector.patterns.sort();
     collector.patterns.dedup();
@@ -307,7 +292,6 @@ mod tests {
                 .referenced_dependencies
                 .contains(&"@shikijs/rehype".to_string())
         );
-        // Default output dir is covered by static always_used; no extra entry.
         assert!(result.always_used_files.is_empty());
     }
 
@@ -396,7 +380,6 @@ mod tests {
         let plugin = VelitePlugin;
         let root = Path::new("/repo");
         let config_path = root.join("apps/web/velite.config.ts");
-        // Explicitly spells out the default; static `.velite/**` already covers it.
         let source = r"
             import { defineConfig, defineCollection } from 'velite';
             export default defineConfig({
@@ -462,7 +445,6 @@ mod tests {
         let plugin = VelitePlugin;
         let root = Path::new("/repo");
         let config_path = root.join("velite.config.ts");
-        // No collections / patterns recoverable.
         let source = "export default someFactory();\n";
 
         let patterns = patterns_of(&plugin.resolve_config(&config_path, source, root));

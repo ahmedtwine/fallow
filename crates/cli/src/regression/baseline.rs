@@ -14,8 +14,6 @@ use crate::error::emit_error;
 /// Number of seconds in one day.
 const SECS_PER_DAY: u64 = 86_400;
 
-// ── Public API ──────────────────────────────────────────────────
-
 /// Where to save the regression baseline.
 #[derive(Clone, Copy)]
 pub enum SaveRegressionTarget<'a> {
@@ -95,7 +93,6 @@ pub fn save_regression_baseline(
             output,
         )
     })?;
-    // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -106,10 +103,7 @@ pub fn save_regression_baseline(
             output,
         )
     })?;
-    // Always print save confirmation — this is a side effect the user must verify,
-    // not progress noise that --quiet should suppress.
     eprintln!("Regression baseline saved to {}", path.display());
-    // Warn if the saved path appears to be gitignored
     if is_likely_gitignored(path, root) {
         eprintln!(
             "Warning: '{}' may be gitignored. Commit this file so CI can compare against it.",
@@ -133,7 +127,6 @@ pub fn save_baseline_to_config(
     counts: &CheckCounts,
     output: OutputFormat,
 ) -> Result<(), ExitCode> {
-    // If the config file doesn't exist yet, create a minimal one
     let content = match std::fs::read_to_string(config_path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -201,14 +194,12 @@ fn find_json_key(content: &str, key: &str) -> Option<usize> {
     let mut search_from = 0;
     while let Some(pos) = content[search_from..].find(&needle) {
         let abs_pos = search_from + pos;
-        // Check if this match is inside a // comment line
         let line_start = content[..abs_pos].rfind('\n').map_or(0, |i| i + 1);
         let line_prefix = content[line_start..abs_pos].trim_start();
         if line_prefix.starts_with("//") {
             search_from = abs_pos + needle.len();
             continue;
         }
-        // Check if inside a /* */ block comment
         let before = &content[..abs_pos];
         let last_open = before.rfind("/*");
         let last_close = before.rfind("*/");
@@ -230,7 +221,6 @@ fn update_json_regression(
     let baseline_json =
         serde_json::to_string_pretty(baseline).map_err(|e| format!("serialization error: {e}"))?;
 
-    // Indent the baseline JSON by 4 spaces (nested inside "regression": { "baseline": ... })
     let indented: String = baseline_json
         .lines()
         .enumerate()
@@ -245,9 +235,6 @@ fn update_json_regression(
 
     let regression_block = format!("  \"regression\": {{\n    \"baseline\": {indented}\n  }}");
 
-    // Check if "regression" key already exists — replace it.
-    // Only match "regression" that appears as a JSON key (preceded by whitespace or line start),
-    // not inside comments or string values.
     if let Some(start) = find_json_key(content, "regression") {
         let after_key = &content[start..];
         if let Some(brace_start) = after_key.find('{') {
@@ -280,9 +267,7 @@ fn update_json_regression(
         }
     }
 
-    // No existing regression key — insert before the last `}`
     if let Some(last_brace) = content.rfind('}') {
-        // Find the last non-whitespace character before the closing brace
         let before_brace = content[..last_brace].trim_end();
         let needs_comma = !before_brace.ends_with('{') && !before_brace.ends_with(',');
 
@@ -304,7 +289,6 @@ fn update_json_regression(
 /// Update a TOML config file with regression baseline.
 fn update_toml_regression(content: &str, baseline: &fallow_config::RegressionBaseline) -> String {
     use std::fmt::Write;
-    // Build the TOML section
     let mut section = String::from("[regression.baseline]\n");
     let _ = writeln!(section, "totalIssues = {}", baseline.total_issues);
     let _ = writeln!(section, "unusedFiles = {}", baseline.unused_files);
@@ -362,9 +346,7 @@ fn update_toml_regression(content: &str, baseline: &fallow_config::RegressionBas
         baseline.test_only_dependencies
     );
 
-    // Check if [regression.baseline] already exists — replace it
     if let Some(start) = content.find("[regression.baseline]") {
-        // Find the next section header or end of file
         let after = &content[start + "[regression.baseline]".len()..];
         let end_offset = after.find("\n[").map_or(content.len(), |i| {
             start + "[regression.baseline]".len() + i + 1
@@ -378,7 +360,6 @@ fn update_toml_regression(content: &str, baseline: &fallow_config::RegressionBas
         }
         result
     } else {
-        // Append the section
         let mut result = content.to_string();
         if !result.ends_with('\n') {
             result.push('\n');
@@ -467,8 +448,6 @@ pub fn load_regression_baseline(
         }
     })?;
     let baseline: RegressionBaseline = serde_json::from_str(&content).map_err(|e| {
-        // Rewrite the cryptic "missing field `schema_version`" serde error into the
-        // same actionable regenerate hint a version mismatch would produce.
         let message = if e.to_string().contains("missing field `schema_version`") {
             format_missing_schema_version_error(path)
         } else {
@@ -511,7 +490,6 @@ pub fn compare_check_regression(
         return Ok(None);
     }
 
-    // Skip if results are scoped (counts not comparable to full-project baseline)
     if opts.scoped {
         let reason = "--changed-since or --workspace is active; regression check skipped \
                       (counts not comparable to full-project baseline)";
@@ -521,9 +499,7 @@ pub fn compare_check_regression(
         return Ok(Some(RegressionOutcome::Skipped { reason }));
     }
 
-    // Resolution order: explicit file > config section > error
     let baseline_counts: CheckCounts = if let Some(baseline_path) = opts.regression_baseline_file {
-        // Explicit --regression-baseline <PATH>: load from file
         let baseline = load_regression_baseline(baseline_path, opts.output)?;
         let Some(counts) = baseline.check else {
             return Err(emit_error(
@@ -537,7 +513,6 @@ pub fn compare_check_regression(
         };
         counts
     } else if let Some(config_baseline) = config_baseline {
-        // Config-embedded baseline: read from .fallowrc.json / .fallowrc.jsonc / fallow.toml / .fallow.toml
         CheckCounts::from_config_baseline(config_baseline)
     } else {
         return Err(emit_error(
@@ -576,13 +551,11 @@ fn chrono_now() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = duration.as_secs();
-    // Manual UTC decomposition — avoids chrono dependency
     let days = secs / SECS_PER_DAY;
     let time_secs = secs % SECS_PER_DAY;
     let hours = time_secs / 3600;
     let minutes = (time_secs % 3600) / 60;
     let seconds = time_secs % 60;
-    // Days since epoch to Y-M-D (civil date algorithm)
     let z = days + 719_468;
     let era = z / 146_097;
     let doe = z - era * 146_097;
@@ -602,8 +575,6 @@ mod tests {
     use fallow_core::results::*;
     use std::path::PathBuf;
 
-    // ── update_json_regression ──────────────────────────────────────
-
     fn sample_baseline() -> fallow_config::RegressionBaseline {
         fallow_config::RegressionBaseline {
             total_issues: 5,
@@ -617,7 +588,6 @@ mod tests {
         let result = update_json_regression("{}", &sample_baseline()).unwrap();
         assert!(result.contains("\"regression\""));
         assert!(result.contains("\"totalIssues\": 5"));
-        // Should be valid JSON
         serde_json::from_str::<serde_json::Value>(&result).unwrap();
     }
 
@@ -644,7 +614,6 @@ mod tests {
   }
 }"#;
         let result = update_json_regression(config, &sample_baseline()).unwrap();
-        // Old value replaced
         assert!(!result.contains("99"));
         assert!(result.contains("\"totalIssues\": 5"));
         serde_json::from_str::<serde_json::Value>(&result).unwrap();
@@ -654,20 +623,16 @@ mod tests {
     fn json_skips_regression_in_comment() {
         let config = "{\n  // See \"regression\" docs\n  \"entry\": []\n}";
         let result = update_json_regression(config, &sample_baseline()).unwrap();
-        // Should insert new regression, not try to replace the comment
         assert!(result.contains("\"regression\":"));
         assert!(result.contains("\"entry\""));
     }
 
     #[test]
     fn json_malformed_brace_returns_error() {
-        // regression key exists but no matching closing brace
         let config = r#"{ "regression": { "baseline": { "totalIssues": 1 }"#;
         let result = update_json_regression(config, &sample_baseline());
         assert!(result.is_err());
     }
-
-    // ── update_toml_regression ──────────────────────────────────────
 
     #[test]
     fn toml_insert_into_empty() {
@@ -695,8 +660,6 @@ mod tests {
         assert!(result.contains("[rules]"));
     }
 
-    // ── find_json_key ───────────────────────────────────────────────
-
     #[test]
     fn find_json_key_basic() {
         assert_eq!(find_json_key(r#"{"foo": 1}"#, "foo"), Some(1));
@@ -717,17 +680,13 @@ mod tests {
     #[test]
     fn find_json_key_skips_block_comment() {
         let content = "{\n  /* \"foo\": old value */\n  \"foo\": 1\n}";
-        // Should find the real key, not the one inside /* */
         let pos = find_json_key(content, "foo").unwrap();
         assert!(content[pos..].starts_with("\"foo\": 1"));
     }
 
-    // ── chrono_now ─────────────────────────────────────────────────
-
     #[test]
     fn chrono_now_format() {
         let ts = chrono_now();
-        // Should be ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ
         assert_eq!(ts.len(), 20);
         assert!(ts.ends_with('Z'));
         assert_eq!(&ts[4..5], "-");
@@ -736,8 +695,6 @@ mod tests {
         assert_eq!(&ts[13..14], ":");
         assert_eq!(&ts[16..17], ":");
     }
-
-    // ── save/load roundtrip ────────────────────────────────────────
 
     #[test]
     fn save_load_roundtrip() {
@@ -843,8 +800,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── save_baseline_to_config ────────────────────────────────────
-
     #[test]
     fn save_baseline_to_json_config() {
         let dir = tempfile::tempdir().unwrap();
@@ -862,7 +817,6 @@ mod tests {
         let content = std::fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("\"regression\""));
         assert!(content.contains("\"totalIssues\": 7"));
-        // Should still be valid JSON
         serde_json::from_str::<serde_json::Value>(&content).unwrap();
     }
 
@@ -890,7 +844,6 @@ mod tests {
     fn save_baseline_to_nonexistent_json_config() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join(".fallowrc.json");
-        // File doesn't exist — should create it from scratch
 
         let counts = CheckCounts {
             total_issues: 1,
@@ -920,14 +873,11 @@ mod tests {
         assert!(content.contains("totalIssues = 0"));
     }
 
-    // ── update_json_regression edge cases ──────────────────────────
-
     #[test]
     fn json_insert_with_trailing_comma() {
         let config = r#"{
   "entry": ["src/main.ts"],
 }"#;
-        // Trailing comma — our insertion should still produce reasonable output
         let result = update_json_regression(config, &sample_baseline()).unwrap();
         assert!(result.contains("\"regression\""));
     }
@@ -955,8 +905,6 @@ mod tests {
         assert!(result.contains("\"totalIssues\": 5"));
         assert!(result.contains("\"entry\""));
     }
-
-    // ── update_toml_regression edge cases ──────────────────────────
 
     #[test]
     fn toml_content_without_trailing_newline() {
@@ -986,11 +934,8 @@ mod tests {
         assert!(result.contains("[rules]"));
     }
 
-    // ── find_json_key edge cases ────────────────────────────────────
-
     #[test]
     fn find_json_key_multiple_same_keys() {
-        // Returns the first occurrence
         let content = r#"{"foo": 1, "bar": {"foo": 2}}"#;
         let pos = find_json_key(content, "foo").unwrap();
         assert_eq!(pos, 1);
@@ -1002,8 +947,6 @@ mod tests {
         let pos = find_json_key(content, "entry").unwrap();
         assert!(content[pos..].starts_with("\"entry\": []"));
     }
-
-    // ── compare_check_regression ────────────────────────────────────
 
     fn make_opts(
         fail: bool,
@@ -1118,7 +1061,6 @@ mod tests {
 
     #[test]
     fn compare_improvement_is_pass() {
-        // Current has fewer issues than baseline
         let results = AnalysisResults::default(); // 0 issues
         let opts = make_opts(true, Tolerance::Absolute(0), false, None);
         let config_baseline = fallow_config::RegressionBaseline {
@@ -1145,7 +1087,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let baseline_path = dir.path().join("baseline.json");
 
-        // Save a baseline to file
         let counts = CheckCounts {
             total_issues: 5,
             unused_files: 5,
@@ -1160,7 +1101,6 @@ mod tests {
         )
         .unwrap();
 
-        // Compare with empty results -> pass (improvement)
         let results = AnalysisResults::default();
         let opts = make_opts(true, Tolerance::Absolute(0), false, Some(&baseline_path));
         let outcome = compare_check_regression(&results, &opts, None).unwrap();
@@ -1172,7 +1112,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let baseline_path = dir.path().join("baseline.json");
 
-        // Save a baseline with no check data (dupes only)
         save_regression_baseline(
             &baseline_path,
             dir.path(),
@@ -1243,7 +1182,6 @@ mod tests {
     #[test]
     fn compare_with_percentage_tolerance() {
         let mut results = AnalysisResults::default();
-        // Add 1 issue
         results
             .unused_files
             .push(UnusedFileFinding::with_actions(UnusedFile {
@@ -1251,9 +1189,6 @@ mod tests {
             }));
 
         let opts = make_opts(true, Tolerance::Percentage(50.0), false, None);
-        // baseline=10, 50% of 10 = 5, delta=1-10=-9 (improvement, should pass)
-        // Wait, total_issues in config is the baseline for comparison.
-        // results has 1 issue, baseline has 10 -> improvement -> pass
         let config_baseline = fallow_config::RegressionBaseline {
             total_issues: 10,
             unused_files: 10,
@@ -1262,8 +1197,6 @@ mod tests {
         let outcome = compare_check_regression(&results, &opts, Some(&config_baseline)).unwrap();
         assert!(matches!(outcome, Some(RegressionOutcome::Pass { .. })));
     }
-
-    // ── schema_version validation ──────────────────────────────────
 
     fn write_baseline_with_schema_version(dir: &Path, version: u32) -> PathBuf {
         let path = dir.join("baseline.json");
@@ -1292,7 +1225,6 @@ mod tests {
 
     #[test]
     fn load_rejects_schema_version_zero_predates_versioning() {
-        // schema_version: 0 is the "baseline predates versioning" special case.
         let dir = tempfile::tempdir().unwrap();
         let path = write_baseline_with_schema_version(dir.path(), 0);
         let result = load_regression_baseline(&path, OutputFormat::Human);
@@ -1311,8 +1243,6 @@ mod tests {
     fn load_rewrites_missing_schema_version_field_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("baseline.json");
-        // Valid JSON, but the schema_version field is absent. Without the rewrite this
-        // would surface raw serde's "missing field `schema_version`" text.
         std::fs::write(
             &path,
             r#"{
@@ -1336,9 +1266,7 @@ mod tests {
         assert!(
             msg.contains("fallow check --save-regression-baseline /repo/.fallow-baseline.json")
         );
-        // No abbreviations, no "refresh"
         assert!(!msg.to_lowercase().contains("refresh"));
-        // Stable token so CI log alerting can match on it
         assert!(msg.contains("schema_version"));
     }
 
@@ -1362,8 +1290,6 @@ mod tests {
 
     #[test]
     fn save_load_preserves_schema_version() {
-        // The save side always writes REGRESSION_SCHEMA_VERSION; loading back must
-        // accept the just-saved baseline.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("baseline.json");
         let counts = CheckCounts {

@@ -122,7 +122,6 @@ pub fn push_import_diagnostics(
                     },
                     end: Position {
                         line,
-                        // +2 accounts for the surrounding quotes on the string literal
                         character: import.import.specifier_col
                             + import.import.specifier.len() as u32
                             + 2,
@@ -145,7 +144,6 @@ pub fn push_dep_diagnostics(
     package_json_uri: Option<&Url>,
     root: &std::path::Path,
 ) {
-    // Unused deps: dependencies, devDependencies, optionalDependencies
     type DepIter<'a> = Box<dyn Iterator<Item = &'a fallow_core::results::UnusedDependency> + 'a>;
     let groups: [(DepIter<'_>, &str, &str, &str); 3] = [
         (
@@ -190,7 +188,6 @@ pub fn push_dep_diagnostics(
         }
     }
 
-    // Unlisted deps still use root package.json
     if let Some(uri) = package_json_uri {
         for dep in &results.unlisted_dependencies {
             map.entry(uri.clone()).or_default().push(Diagnostic {
@@ -208,7 +205,6 @@ pub fn push_dep_diagnostics(
         }
     }
 
-    // Type-only dependencies: could be moved to devDependencies
     for dep in &results.type_only_dependencies {
         if let Ok(dep_uri) = Url::from_file_path(&dep.dep.path) {
             let line = dep.dep.line.saturating_sub(1);
@@ -233,7 +229,6 @@ pub fn push_dep_diagnostics(
         }
     }
 
-    // Test-only dependencies: could be moved to devDependencies
     for dep in &results.test_only_dependencies {
         if let Ok(dep_uri) = Url::from_file_path(&dep.dep.path) {
             let line = dep.dep.line.saturating_sub(1);
@@ -258,9 +253,6 @@ pub fn push_dep_diagnostics(
         }
     }
 
-    // Unused pnpm catalog entries in pnpm-workspace.yaml.
-    // entry.path is project-root-relative; Url::from_file_path requires an
-    // absolute path, so join against the analyzer root before constructing.
     for entry in &results.unused_catalog_entries {
         let entry = &entry.entry;
         if let Ok(entry_uri) = Url::from_file_path(root.join(&entry.path)) {
@@ -595,10 +587,8 @@ mod tests {
             Some(NumberOrString::String("unused-export".to_string()))
         );
         assert_eq!(d.source, Some("fallow".to_string()));
-        // Line is 1-based in results, 0-based in LSP
         assert_eq!(d.range.start.line, 4);
         assert_eq!(d.range.start.character, 7);
-        // End character = col + export_name.len()
         assert_eq!(d.range.end.character, 7 + "helper".len() as u32);
         assert_eq!(d.tags, Some(vec![DiagnosticTag::UNNECESSARY]));
     }
@@ -670,8 +660,6 @@ mod tests {
     fn unresolved_import_produces_error_diagnostic() {
         let root = test_root();
         let mut results = AnalysisResults::default();
-        // import { foo } from './missing-module'
-        //                     ^--- specifier_col = 20 (quote position)
         results
             .unresolved_imports
             .push(UnresolvedImportFinding::with_actions(UnresolvedImport {
@@ -693,7 +681,6 @@ mod tests {
         assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR));
         assert_eq!(d.message, "Cannot find module './missing-module'");
         assert_eq!(d.range.start.line, 2); // 1-based -> 0-based
-        // Range covers the specifier string literal including quotes
         assert_eq!(d.range.start.character, 20);
         assert_eq!(
             d.range.end.character,
@@ -963,7 +950,6 @@ mod tests {
     #[test]
     fn line_conversion_saturates_at_zero() {
         let root = test_root();
-        // Line 0 in results (unusual) should become 0 in LSP, not underflow
         let mut results = AnalysisResults::default();
         results
             .unused_exports
@@ -987,10 +973,6 @@ mod tests {
 
     #[test]
     fn unused_catalog_entry_produces_warning_diagnostic() {
-        // Catalog entries store project-root-relative paths. The diagnostic
-        // must build its URI by joining against the analyzer root, otherwise
-        // Url::from_file_path silently fails on the relative path and no
-        // squiggle ever lands on pnpm-workspace.yaml.
         let root = test_root();
         let mut results = AnalysisResults::default();
         results
@@ -1022,7 +1004,6 @@ mod tests {
         );
         assert_eq!(d.source, Some("fallow".to_string()));
         assert!(d.message.contains("is-even"));
-        // Line is 1-based in results, 0-based in LSP
         assert_eq!(d.range.start.line, 5);
     }
 
@@ -1090,10 +1071,6 @@ mod tests {
 
     #[test]
     fn unresolved_catalog_reference_produces_error_diagnostic_with_absolute_uri() {
-        // `UnresolvedCatalogReference.path` is stored as an absolute filesystem
-        // path (matching the convention used by every other path-anchored
-        // finding type), so the LSP can pass it directly into
-        // `Url::from_file_path` without joining against any root.
         let root = test_root();
         let abs_path = root.join("packages/app/package.json");
         let mut results = AnalysisResults::default();
@@ -1126,7 +1103,6 @@ mod tests {
         assert!(d.message.contains("old-react"));
         assert!(d.message.contains("react17"));
         assert!(d.message.contains("available in: react18"));
-        // Line 14 (1-based) -> LSP line 13 (0-based)
         assert_eq!(d.range.start.line, 13);
     }
 
@@ -1163,10 +1139,6 @@ mod tests {
 
     #[test]
     fn unused_dependency_override_produces_warning_diagnostic_with_absolute_uri() {
-        // Override findings store project-root-relative paths (same convention
-        // as UnusedCatalogEntry), so the diagnostic emitter must root.join
-        // before calling Url::from_file_path. Asserting the key exists in the
-        // map under the absolute URI proves the join happened.
         use fallow_core::results::{
             DependencyOverrideSource, UnusedDependencyOverride, UnusedDependencyOverrideFinding,
         };

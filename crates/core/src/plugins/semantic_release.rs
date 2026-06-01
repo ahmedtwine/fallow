@@ -40,7 +40,6 @@ define_plugin! {
             result.referenced_dependencies.push(dep);
         }
 
-        // plugins -> referenced dependencies (shallow to avoid options objects)
         let plugins = config_parser::extract_config_shallow_strings(source, config_path, "plugins");
         for plugin in &plugins {
             let dep = crate::resolve::extract_package_name(plugin);
@@ -84,7 +83,6 @@ mod tests {
 
     #[test]
     fn resolve_config_plugins_with_options_skipped() {
-        // Shallow extraction should pick up string elements but skip array/object elements
         let source = r#"
             module.exports = {
                 plugins: [

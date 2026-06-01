@@ -10,36 +10,21 @@ pub fn is_virtual_module(name: &str) -> bool {
 
 /// Check if a package name is a platform built-in module (Node.js, Bun, Deno, Cloudflare Workers).
 pub fn is_builtin_module(name: &str) -> bool {
-    // Bun built-in modules (e.g., `bun`, `bun:sqlite`, `bun:test`, `bun:ffi`)
     if name == "bun" || name.starts_with("bun:") {
         return true;
     }
-    // Cloudflare Workers built-in modules (e.g., `cloudflare:workers`, `cloudflare:sockets`)
     if name.starts_with("cloudflare:") {
         return true;
     }
-    // Sass/SCSS built-in modules (e.g., `sass:math`, `sass:string`, `sass:color`).
-    // Imported via `@use 'sass:string'` and provided by the Sass compiler itself,
-    // never installed via npm. See issue #104.
     if name.starts_with("sass:") {
         return true;
     }
-    // Deno standard library, imported as bare `std` or subpaths like `std/path`.
-    // The `jsr:` / `npm:` Deno import schemes (e.g. `jsr:@std/path`) are handled
-    // earlier, in the resolver: `jsr:` and URL specifiers resolve to an external
-    // file and `npm:<pkg>` normalizes to its package name, so neither reaches the
-    // unresolved-import path that consults this predicate. See issue #624.
     if name == "std" || name.starts_with("std/") {
         return true;
     }
-    // k6 runtime modules (e.g., `k6`, `k6/http`, `k6/execution`) are provided
-    // by the k6 load-test runtime, not npm resolution.
     if name == "k6" || name.starts_with("k6/") {
         return true;
     }
-    // Node built-in modules importable with OR without the `node:` prefix. The
-    // mandatory-`node:`-prefix family (`sqlite`, `sea`, `test`, `test/reporters`)
-    // is intentionally absent here; see `NODE_PREFIX_ONLY_BUILTINS` below.
     let builtins = [
         "assert",
         "assert/strict",
@@ -96,24 +81,11 @@ pub fn is_builtin_module(name: &str) -> bool {
         "worker_threads",
         "zlib",
     ];
-    // Node built-in modules that ONLY exist with a mandatory `node:` prefix. Node
-    // refuses to resolve these as bare specifiers, and real npm packages share the
-    // bare names (`sqlite`, `sea`, `test`), so they are classified as builtins only
-    // when the `node:` prefix is present.
-    // https://nodejs.org/api/modules.html#built-in-modules-with-mandatory-node-prefix
     const NODE_PREFIX_ONLY_BUILTINS: &[&str] = &["sea", "sqlite", "test", "test/reporters"];
 
     if let Some(stripped) = name.strip_prefix("node:") {
-        // With the `node:` prefix, both the always-available list and the
-        // mandatory-prefix list are valid builtin specifiers.
         return builtins.contains(&stripped) || NODE_PREFIX_ONLY_BUILTINS.contains(&stripped);
     }
-    // Bare specifier (no `node:` prefix): only the always-available list matches.
-    // Mandatory-prefix modules written without the prefix are real npm packages,
-    // not builtins. All known builtins and their subpaths (fs/promises, path/posix,
-    // stream/consumers, etc.) are listed explicitly in the array above. No fallback
-    // root-segment matching: it would false-positive on npm packages like
-    // test-utils, url-parse, path-browserify, stream-browserify, events-emitter.
     builtins.contains(&name)
 }
 
@@ -123,8 +95,6 @@ pub(in crate::analyze) fn is_implicit_dependency(name: &str) -> bool {
         return true;
     }
 
-    // Framework runtime dependencies that are used implicitly (e.g., JSX runtime,
-    // bundler injection) and never appear as explicit imports in source code.
     let implicit_deps = [
         "react-dom",
         "react-dom/client",
@@ -133,7 +103,6 @@ pub(in crate::analyze) fn is_implicit_dependency(name: &str) -> bool {
         "@next/mdx",
         "@next/bundle-analyzer",
         "@next/env",
-        // WebSocket optional native addons (peer deps of ws)
         "utf-8-validate",
         "bufferutil",
     ];
@@ -146,22 +115,15 @@ pub(in crate::analyze) fn is_implicit_dependency(name: &str) -> bool {
 /// `@Components/Button` (`PascalCase` tsconfig paths).
 /// These are typically defined in tsconfig.json `paths` or package.json `imports`.
 pub(in crate::analyze) fn is_path_alias(name: &str) -> bool {
-    // `#` prefix is Node.js imports maps (package.json "imports" field)
     if name.starts_with('#') {
         return true;
     }
-    // `~/`, `~~/`, and `@@/` are common alias conventions
-    // (e.g., Nuxt, custom tsconfig)
     if name.starts_with("~/") || name.starts_with("~~/") || name.starts_with("@@/") {
         return true;
     }
-    // `@/` is a very common path alias (e.g., `@/components/Foo`)
     if name.starts_with("@/") {
         return true;
     }
-    // npm scoped packages MUST be lowercase (npm registry requirement).
-    // PascalCase `@Scope` or `@Scope/path` patterns are tsconfig path aliases,
-    // not npm packages. E.g., `@Components`, `@Hooks/useApi`, `@Services/auth`.
     if name.starts_with('@') {
         let scope = name.split('/').next().unwrap_or(name);
         if scope.len() > 1 && scope.chars().nth(1).is_some_and(|c| c.is_ascii_uppercase()) {
@@ -176,7 +138,6 @@ pub(in crate::analyze) fn is_path_alias(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    // is_builtin_module tests
     #[test]
     fn builtin_module_fs() {
         assert!(is_builtin_module("fs"));
@@ -285,7 +246,6 @@ mod tests {
         assert!(!is_builtin_module("@types/k6"));
     }
 
-    // is_implicit_dependency tests
     #[test]
     fn implicit_dep_types_packages() {
         assert!(is_implicit_dependency("@types/node"));
@@ -303,7 +263,6 @@ mod tests {
         assert!(!is_implicit_dependency("eslint"));
     }
 
-    // is_tooling_dependency tests
     #[test]
     fn tooling_dep_prefixes() {
         assert!(crate::plugins::is_known_tooling_dependency("@types/node"));
@@ -319,7 +278,6 @@ mod tests {
 
     #[test]
     fn tooling_dep_plugin_handled_not_blanket() {
-        // These prefixes removed — handled by plugin config parsing
         assert!(!crate::plugins::is_known_tooling_dependency("eslint"));
         assert!(!crate::plugins::is_known_tooling_dependency(
             "eslint-plugin-react"
@@ -360,7 +318,6 @@ mod tests {
         ));
     }
 
-    // New tooling dependency tests (Issue 2)
     #[test]
     fn tooling_dep_testing_frameworks() {
         assert!(crate::plugins::is_known_tooling_dependency("jest"));
@@ -387,7 +344,6 @@ mod tests {
         assert!(crate::plugins::is_known_tooling_dependency("knip"));
     }
 
-    // is_path_alias tests
     #[test]
     fn path_alias_at_slash() {
         assert!(is_path_alias("@/components"));
@@ -433,7 +389,6 @@ mod tests {
         assert!(!is_path_alias("@s/lowercase"));
     }
 
-    // is_virtual_module tests
     #[test]
     fn virtual_module_vite_convention() {
         assert!(is_virtual_module("virtual:pwa-register"));
@@ -459,10 +414,6 @@ mod tests {
         assert!(!is_virtual_module("cloudflare:workers"));
     }
 
-    // ---------------------------------------------------------------
-    // is_path_alias edge cases
-    // ---------------------------------------------------------------
-
     #[test]
     fn path_alias_pascal_case_scopes() {
         assert!(is_path_alias("@Components/Button"));
@@ -474,8 +425,6 @@ mod tests {
 
     #[test]
     fn path_alias_hash_imports() {
-        // All hash-prefixed imports are treated as path aliases
-        // (Node.js package.json "imports" field or custom aliases)
         assert!(is_path_alias("#/utils"));
         assert!(is_path_alias("#subpath"));
         assert!(is_path_alias("#internal/module"));
@@ -548,10 +497,6 @@ mod tests {
         assert!(!is_path_alias("@"));
     }
 
-    // ---------------------------------------------------------------
-    // Builtin module edge cases
-    // ---------------------------------------------------------------
-
     /// Subpath imports of builtins should be recognized.
     #[test]
     fn builtin_module_subpath_imports() {
@@ -567,8 +512,6 @@ mod tests {
         assert!(is_builtin_module("timers/promises"));
         assert!(is_builtin_module("util/types"));
         assert!(is_builtin_module("inspector/promises"));
-        // `test/reporters` is a mandatory-`node:`-prefix module; the bare form is
-        // covered as a non-builtin in `not_builtin_module_bare_prefix_only_names`.
     }
 
     /// Subpath builtins with `node:` prefix.
@@ -603,13 +546,11 @@ mod tests {
         assert!(!is_builtin_module("sea"));
         assert!(!is_builtin_module("test"));
         assert!(!is_builtin_module("test/reporters"));
-        // npm packages with a prefix-only builtin as a name prefix.
         assert!(!is_builtin_module("sqlite3"));
         assert!(!is_builtin_module("better-sqlite3"));
         assert!(!is_builtin_module("node-sqlite3"));
         assert!(!is_builtin_module("seamless"));
         assert!(!is_builtin_module("test-utils"));
-        // Unknown names under the `node:` scheme are still not builtins.
         assert!(!is_builtin_module("node:sqlite3"));
         assert!(!is_builtin_module("node:not-a-builtin"));
     }
@@ -680,10 +621,6 @@ mod tests {
         assert!(!is_builtin_module("stream/transform"));
     }
 
-    // ---------------------------------------------------------------
-    // is_virtual_module edge cases
-    // ---------------------------------------------------------------
-
     /// Empty string and prefix-only edge cases.
     #[test]
     fn virtual_module_edge_cases() {
@@ -692,10 +629,6 @@ mod tests {
         assert!(!is_virtual_module("Virtual:something"));
         assert!(!is_virtual_module("VIRTUAL:something"));
     }
-
-    // ---------------------------------------------------------------
-    // is_implicit_dependency edge cases
-    // ---------------------------------------------------------------
 
     #[test]
     fn implicit_dep_react_dom_and_native() {
@@ -727,10 +660,6 @@ mod tests {
         assert!(!is_implicit_dependency("react-native-web"));
         assert!(!is_implicit_dependency("@types"));
     }
-
-    // ---------------------------------------------------------------
-    // is_path_alias additional coverage
-    // ---------------------------------------------------------------
 
     #[test]
     fn path_alias_hash_prefix() {
@@ -768,10 +697,6 @@ mod tests {
         assert!(!is_path_alias("lodash"));
         assert!(!is_path_alias("express"));
     }
-
-    // ---------------------------------------------------------------
-    // is_virtual_module
-    // ---------------------------------------------------------------
 
     #[test]
     fn virtual_module_prefix() {

@@ -1,13 +1,4 @@
-//! Issue #601: the Vitest plugin parses `test.alias` so mock / virtual-module
-//! consumers are visible.
-//!
-//! Two false-positive classes are covered:
-//! 1. Imports that only resolve through a test-only alias (a virtual module like
-//!    `vscode` aliased to a local mock) must not surface as `unresolved-import`
-//!    or `unlisted-dependency`.
-//! 2. `__mocks__` files aliased to mock a REAL installed package must keep their
-//!    exports credited (no `unused-export` / `fallow fix` removal), even when the
-//!    production import resolves through `node_modules`.
+//! Issue #601: the Vitest plugin parses `test.alias` so virtual-module and mock aliases stay visible.
 
 use super::common::create_config;
 
@@ -71,8 +62,6 @@ fn aliased_mock_for_installed_package_credits_exports() {
             export const run = () => query();
         "#,
     );
-    // Stub the real installed package so the production import resolves through
-    // node_modules (the case where mechanism B is load-bearing).
     write(
         &root.join("node_modules/@scope/pkg/package.json"),
         r#"{ "name": "@scope/pkg", "version": "1.0.0", "main": "index.js" }"#,
@@ -120,9 +109,7 @@ fn aliased_mock_for_installed_package_credits_exports() {
     );
 }
 
-/// Class 1: a virtual module (`vscode`, not an npm dependency) aliased to a local
-/// mock. The import must resolve through the alias (no `unresolved-import`, no
-/// `unlisted-dependency`) and the mock file must stay reachable.
+/// Virtual module alias to a local mock must resolve cleanly.
 #[test]
 fn virtual_module_alias_resolves_and_credits_mock() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -198,10 +185,7 @@ fn virtual_module_alias_resolves_and_credits_mock() {
     );
 }
 
-/// Production-graph safety: a `test.alias` on a tsconfig-aliased prefix must NOT
-/// shadow the real source. `@/api` resolves through tsconfig paths to
-/// `src/api.ts` (the standard resolver wins over the plugin path-alias fallback),
-/// so `src/api.ts` stays referenced rather than unused.
+/// `test.alias` must not shadow tsconfig-based source resolution.
 #[test]
 fn test_alias_does_not_shadow_tsconfig_alias() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -235,7 +219,6 @@ fn test_alias_does_not_shadow_tsconfig_alias() {
             });
         "#,
     );
-    // A test file is a Vitest entry point. It imports through the tsconfig alias.
     write(
         &root.join("src/feature.test.ts"),
         r#"
@@ -383,7 +366,6 @@ fn vitest_config_resolve_alias_directory_and_project_mock() {
             });
         "#,
     );
-    // A test file is a Vitest entry point.
     write(
         &root.join("src/feature.test.ts"),
         r#"
@@ -425,9 +407,6 @@ fn vitest_config_resolve_alias_directory_and_project_mock() {
         !unresolved.contains(&"@app/api"),
         "`@app/api` must resolve via the directory alias, found: {unresolved:?}"
     );
-    // bare `vscode` would classify as an npm package (unlisted) without the
-    // project-level resolve.alias extraction; assert NOT unlisted so the
-    // project-mock assertion is not vacuous.
     let unlisted: Vec<&str> = results
         .unlisted_dependencies
         .iter()
@@ -493,9 +472,6 @@ fn vitest_workspace_array_file_aliases_resolve() {
         !unresolved.contains(&"vscode"),
         "vitest.workspace array-file alias must resolve the virtual module, found: {unresolved:?}"
     );
-    // Without alias extraction, bare `vscode` classifies as an npm package and
-    // surfaces as unlisted (not unresolved); assert NOT unlisted so this test is
-    // not vacuous (it must fail if the workspace-array extraction is removed).
     let unlisted: Vec<&str> = results
         .unlisted_dependencies
         .iter()

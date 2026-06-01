@@ -1,4 +1,4 @@
-//! Module extraction types: exports, imports, re-exports, members, and parse results.
+//! Module extraction types.
 
 use oxc_span::Span;
 
@@ -18,27 +18,17 @@ pub struct ModuleInfo {
     pub re_exports: Vec<ReExportInfo>,
     /// All dynamic `import()` calls with string literal sources.
     pub dynamic_imports: Vec<DynamicImportInfo>,
-    /// Dynamic import patterns from template literals, string concat, or `import.meta.glob`.
+    /// Dynamic import patterns.
     pub dynamic_import_patterns: Vec<DynamicImportPattern>,
     /// All `require()` calls.
     pub require_calls: Vec<RequireCallInfo>,
     /// Static member access expressions (e.g., `Status.Active`).
     pub member_accesses: Vec<MemberAccess>,
-    /// Identifiers used in "all members consumed" patterns
-    /// (Object.values, Object.keys, Object.entries, Object.getOwnPropertyNames, for..in, spread, computed dynamic access).
+    /// Identifiers used in whole-object access patterns.
     pub whole_object_uses: Vec<String>,
-    /// Whether this module uses `CommonJS` exports (`module.exports` or `exports.*`).
+    /// Whether this module uses CommonJS exports.
     pub has_cjs_exports: bool,
-    /// True when this module declares at least one Angular `@Component({
-    /// templateUrl: ... })` (the visitor emits a SideEffect import for each
-    /// such templateUrl, and this flag is set in the same branch). Used by
-    /// the CRAP-inherit walker (`crates/cli/src/health/scoring.rs::build_template_inherit_contexts`)
-    /// to gate the discriminator `coverage_source == "estimated_component_inherited"`:
-    /// a `.ts` file that imports an `.html` via plain `import './x.html'` is
-    /// NOT a component owner and must not trigger the inherit path. Without
-    /// this gate, the contract documented on `ComplexityViolation.inherited_from`
-    /// (Angular component `.ts` reached via the inverse `templateUrl` edge)
-    /// is silently violated for any non-Angular file importing an `.html`.
+    /// Whether this module declares an Angular component `templateUrl`.
     pub has_angular_component_template_url: bool,
     /// xxh3 hash of the file content for incremental caching.
     pub content_hash: u64,
@@ -58,91 +48,40 @@ pub struct ModuleInfo {
     /// Used to distinguish value-namespace and type-namespace references when a
     /// module exports both `const X` and `type X`.
     pub type_referenced_import_bindings: Vec<String>,
-    /// Local import bindings that are referenced from runtime/value positions.
-    /// Used alongside `type_referenced_import_bindings` for TS namespace-split
-    /// exports that share the same name.
+    /// Local import bindings referenced from runtime/value positions.
     pub value_referenced_import_bindings: Vec<String>,
-    /// Pre-computed byte offsets where each line starts, for O(log N) byte-to-line/col conversion.
-    /// Entry `i` is the byte offset of the start of line `i` (0-indexed).
-    /// Example: for "abc\ndef\n", `line_offsets` = \[0, 4\].
+    /// Pre-computed byte offsets where each line starts.
     pub line_offsets: Vec<u32>,
-    /// Per-function complexity metrics computed during AST traversal.
-    /// Used by the `fallow health` subcommand to report high-complexity functions.
+    /// Per-function complexity metrics.
     pub complexity: Vec<FunctionComplexity>,
-    /// Feature flag use sites detected during AST traversal.
-    /// Used by the `fallow flags` subcommand to report feature flag patterns.
+    /// Feature flag use sites.
     pub flag_uses: Vec<FlagUse>,
     /// Heritage metadata for exported classes that declare `implements`.
-    /// Used to scope `usedClassMembers` rules during analysis.
     pub class_heritage: Vec<ClassHeritageInfo>,
-    /// Local type-capable declarations in this module.
-    /// Used to detect exported signatures that expose a same-file private type.
+    /// Local type-capable declarations.
     pub local_type_declarations: Vec<LocalTypeDeclaration>,
-    /// Type references that appear in exported symbols' public signatures.
-    /// The analysis layer checks these against `local_type_declarations`.
+    /// Type references in exported public signatures.
     pub public_signature_type_references: Vec<PublicSignatureTypeReference>,
-    /// Aliases of namespace imports re-exported through an object literal
-    /// (`import * as foo from './bar'; export const API = { foo }`).
-    ///
-    /// Each entry says: "downstream consumer accessing `<my-export>.<suffix>.<X>`
-    /// is really accessing `<X>` on the namespace whose local name is
-    /// `namespace_local`". The graph layer uses these to propagate references
-    /// from cross-package consumers to the namespace's source module so that
-    /// `<X>` is not falsely reported as `unused-export`. See issue #303.
+    /// Aliases of namespace imports re-exported through an object literal.
     pub namespace_object_aliases: Vec<NamespaceObjectAlias>,
-    /// Deduped Iconify collection prefixes found in static icon props in this
-    /// file's markup, e.g. `["ic", "jam"]` from `<Icon name="jam:github" />` and
-    /// `<List icon="ic:round-home" />`. The analysis layer maps each prefix to
-    /// the `@iconify-json/<prefix>` package and credits it as a referenced
-    /// dependency (gated on the project declaring an Iconify-ecosystem dep), so
-    /// icon-set packages consumed only through build-time string names are not
-    /// flagged as unused. Populated for markup/JSX file kinds only. See issue #608.
+    /// Deduped Iconify collection prefixes found in static icon props.
     pub iconify_prefixes: Vec<String>,
-    /// Bare identifier names referenced in this file that matched no local
-    /// binding and no explicit import, and are therefore candidates for
-    /// framework convention auto-import resolution (Nuxt `<Card001 />` template
-    /// tags today; script-level composable/util identifiers later). Captured
-    /// from this file's own bytes only (content-local, so it round-trips through
-    /// the per-file extraction cache). Resolution against the active plugins'
-    /// `auto_imports` table happens at graph-build time and is never cached as an
-    /// edge, so adding a new convention target file re-credits unchanged
-    /// consumers on the next run. See issue #704.
+    /// Bare identifiers that may be resolved by framework auto-imports.
     pub auto_import_candidates: Vec<String>,
 }
 
-/// One alias entry tying an exported object's dotted property path to a
-/// namespace import on the same module.
-///
-/// Produced when the visitor sees `export const API = { foo }` (or any deeper
-/// nesting) and detects that the property's source identifier is a namespace
-/// import (`import * as foo from './bar'`). The graph layer reads these to
-/// resolve cross-package consumer accesses like `API.foo.bar` so that `bar`
-/// is credited as referenced on `./bar.ts`.
+/// One alias entry tying an exported object's dotted property path to a namespace import.
 #[derive(Debug, Clone)]
 pub struct NamespaceObjectAlias {
-    /// Canonical export name on this module (the `API` in `export const API = { foo }`).
+    /// Canonical export name.
     pub via_export_name: String,
-    /// Dotted suffix of the property path relative to the export
-    /// (e.g. `"foo"` for `API.foo`, `"motionNet.adEngine"` for `API.motionNet.adEngine`).
+    /// Dotted suffix of the property path relative to the export.
     pub suffix: String,
-    /// Local name of the namespace import on this module
-    /// (the `foo` in `import * as foo from './bar'`).
+    /// Local name of the namespace import.
     pub namespace_local: String,
 }
 
 /// Compute a table of line-start byte offsets from source text.
-///
-/// The returned vec contains one entry per line: `line_offsets[i]` is the byte
-/// offset where line `i` starts (0-indexed). The first entry is always `0`.
-///
-/// # Examples
-///
-/// ```
-/// use fallow_types::extract::compute_line_offsets;
-///
-/// let offsets = compute_line_offsets("abc\ndef\nghi");
-/// assert_eq!(offsets, vec![0, 4, 8]);
-/// ```
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
@@ -162,33 +101,18 @@ pub fn compute_line_offsets(source: &str) -> Vec<u32> {
     offsets
 }
 
-/// Convert a byte offset to a 1-based line number and 0-based byte column
-/// using a pre-computed line offset table (from [`compute_line_offsets`]).
-///
-/// Uses binary search for O(log L) lookup where L is the number of lines.
-///
-/// # Examples
-///
-/// ```
-/// use fallow_types::extract::{compute_line_offsets, byte_offset_to_line_col};
-///
-/// let offsets = compute_line_offsets("abc\ndef\nghi");
-/// assert_eq!(byte_offset_to_line_col(&offsets, 0), (1, 0)); // 'a' on line 1
-/// assert_eq!(byte_offset_to_line_col(&offsets, 4), (2, 0)); // 'd' on line 2
-/// assert_eq!(byte_offset_to_line_col(&offsets, 9), (3, 1)); // 'h' on line 3
-/// ```
+/// Convert a byte offset to a 1-based line number and 0-based byte column.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "line count is bounded by source size"
 )]
 pub fn byte_offset_to_line_col(line_offsets: &[u32], byte_offset: u32) -> (u32, u32) {
-    // Binary search: find the last line whose start is <= byte_offset
     let line_idx = match line_offsets.binary_search(&byte_offset) {
         Ok(idx) => idx,
         Err(idx) => idx.saturating_sub(1),
     };
-    let line = line_idx as u32 + 1; // 1-based
+    let line = line_idx as u32 + 1;
     let col = byte_offset - line_offsets[line_idx];
     (line, col)
 }
@@ -210,12 +134,7 @@ pub struct FunctionComplexity {
     pub line_count: u32,
     /// Number of parameters (excluding TypeScript's `this` parameter).
     pub param_count: u8,
-    /// Content digest of the function's full-span source slice
-    /// (`&source[span.start..span.end]`): first 8 bytes of SHA-256 as 16
-    /// lowercase hex characters, computed via
-    /// `fallow_cov_protocol::source_hash_for`. Stable across line moves, so a
-    /// moved-but-unedited function keeps the same hash. `None` when the source
-    /// slice is unavailable (defensive: never expected for valid AST spans).
+    /// Content digest of the function's full-span source slice.
     pub source_hash: Option<String>,
 }
 
@@ -230,29 +149,28 @@ pub enum FlagUseKind {
     ConfigObject,
 }
 
-/// A feature flag use site detected during AST traversal.
+/// A feature flag use site.
 #[derive(Debug, Clone, bitcode::Encode, bitcode::Decode)]
 pub struct FlagUse {
-    /// Name/identifier of the flag (e.g., `ENABLE_NEW_CHECKOUT`, `new-checkout`).
+    /// Flag identifier.
     pub flag_name: String,
-    /// How the flag was detected.
+    /// Detection kind.
     pub kind: FlagUseKind,
     /// 1-based line number.
     pub line: u32,
     /// 0-based byte column offset.
     pub col: u32,
-    /// Start byte offset of the guarded code block (if-branch span), if detected.
+    /// Start byte offset of the guarded block.
     pub guard_span_start: Option<u32>,
-    /// End byte offset of the guarded code block (if-branch span), if detected.
+    /// End byte offset of the guarded block.
     pub guard_span_end: Option<u32>,
-    /// SDK/provider name if detected from SDK call pattern (e.g., "LaunchDarkly").
+    /// SDK/provider name.
     pub sdk_name: Option<String>,
 }
 
-// Size assertion: FlagUse is stored in a Vec per file in the cache.
 const _: () = assert!(std::mem::size_of::<FlagUse>() <= 96);
 
-/// A dynamic import with a pattern that can be partially resolved (e.g., template literals).
+/// A dynamic import with a partially resolved pattern.
 #[derive(Debug, Clone)]
 pub struct DynamicImportPattern {
     /// Static prefix of the import path (e.g., "./locales/"). May contain glob characters.
@@ -263,11 +181,7 @@ pub struct DynamicImportPattern {
     pub span: Span,
 }
 
-/// Visibility tag from JSDoc/TSDoc comments.
-///
-/// Controls whether an export is reported as unused. All non-`None` variants
-/// suppress unused-export detection, but preserve the semantic distinction
-/// for API surface reporting and filtering.
+/// Visibility tag from JSDoc/TSDoc comments that suppresses unused-export detection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
@@ -313,16 +227,10 @@ pub struct ExportInfo {
     pub local_name: Option<String>,
     /// Whether this is a type-only export (`export type`).
     pub is_type_only: bool,
-    /// Whether this export is registered through a runtime side effect at module
-    /// load time (e.g. a Lit `@customElement('tag')` class decorator or a
-    /// `customElements.define('tag', ClassRef)` call). Such classes are
-    /// referenced by their registered tag string, not by their identifier, so
-    /// no other file imports them by name. The unused-export detector treats
-    /// this flag as an effective reference.
+    /// Whether this export is registered through a runtime side effect at module load time.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_side_effect_used: bool,
-    /// Visibility tag from JSDoc/TSDoc comment (`@public`, `@internal`, `@alpha`, `@beta`).
-    /// Exports with any visibility tag are never reported as unused.
+    /// Visibility tag from JSDoc/TSDoc comment.
     #[serde(default, skip_serializing_if = "VisibilityTag::is_none")]
     pub visibility: VisibilityTag,
     /// Source span of the export declaration.
@@ -332,7 +240,6 @@ pub struct ExportInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<MemberInfo>,
     /// The local name of the parent class from `extends` clause, if any.
-    /// Used to build inheritance maps for unused class member detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub super_class: Option<String>,
 }
@@ -355,20 +262,7 @@ pub struct ClassHeritageInfo {
     pub super_class: Option<String>,
     /// Interface names from the class `implements` clause.
     pub implements: Vec<String>,
-    /// Typed instance bindings on this class: pairs of `(local_name, type_name)`
-    /// from typed constructor parameters with accessibility modifiers
-    /// (`constructor(public svc: Svc)`), non-private typed property
-    /// declarations (`svc: Svc`), and non-private typed getters
-    /// (`get svc(): Svc`).
-    ///
-    /// Used by the analysis layer to resolve typed member-access chains
-    /// (`factory.service.getTotal()`) and Angular template member-access chains
-    /// on external templates (`templateUrl`), where the HTML file is parsed
-    /// independently and cannot see the component's constructor types.
-    /// For `constructor(public dataService: DataService)` in a component that
-    /// uses an external template with `{{ dataService.getTotal() }}`, this
-    /// field carries `("dataService", "DataService")` so the bridge can credit
-    /// `DataService.getTotal` as used.
+    /// Typed instance bindings used to resolve member-access chains in external templates.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instance_bindings: Vec<(String, String)>,
 }
@@ -439,17 +333,6 @@ pub struct MemberInfo {
 }
 
 /// The kind of member.
-///
-/// # Examples
-///
-/// ```
-/// use fallow_types::extract::MemberKind;
-///
-/// let kind = MemberKind::EnumMember;
-/// assert_eq!(kind, MemberKind::EnumMember);
-/// assert_ne!(kind, MemberKind::ClassMethod);
-/// assert_ne!(MemberKind::ClassMethod, MemberKind::ClassProperty);
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, bitcode::Encode, bitcode::Decode)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -465,19 +348,6 @@ pub enum MemberKind {
 }
 
 /// A static member access expression (e.g., `Status.Active`, `MyClass.create()`).
-///
-/// # Examples
-///
-/// ```
-/// use fallow_types::extract::MemberAccess;
-///
-/// let access = MemberAccess {
-///     object: "Status".to_string(),
-///     member: "Active".to_string(),
-/// };
-/// assert_eq!(access.object, "Status");
-/// assert_eq!(access.member, "Active");
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bitcode::Encode, bitcode::Decode)]
 pub struct MemberAccess {
     /// The identifier being accessed (the import name).
@@ -499,20 +369,6 @@ fn serialize_span<S: serde::Serializer>(span: &Span, serializer: S) -> Result<S:
 }
 
 /// Export identifier.
-///
-/// # Examples
-///
-/// ```
-/// use fallow_types::extract::ExportName;
-///
-/// let named = ExportName::Named("foo".to_string());
-/// assert_eq!(named.to_string(), "foo");
-/// assert!(named.matches_str("foo"));
-///
-/// let default = ExportName::Default;
-/// assert_eq!(default.to_string(), "default");
-/// assert!(default.matches_str("default"));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum ExportName {
     /// A named export (e.g., `export const foo`).
@@ -552,32 +408,15 @@ pub struct ImportInfo {
     pub local_name: String,
     /// Whether this is a type-only import (`import type`).
     pub is_type_only: bool,
-    /// Whether this import originated from a CSS-context (an SFC `<style lang="scss">` block,
-    /// `<style src="...">` reference, or other style-section parser). The resolver uses this
-    /// to enable SCSS partial / include-path / node_modules fallbacks for SFC importers
-    /// without applying them to JS-context imports from the same file.
+    /// Whether this import originated from a CSS-context.
     pub from_style: bool,
     /// Source span of the import declaration.
     pub span: Span,
-    /// Span of the source string literal (e.g., the `'./utils'` in `import { foo } from './utils'`).
-    /// Used by the LSP to highlight just the specifier in diagnostics.
+    /// Span of the source string literal used by the LSP to highlight the specifier.
     pub source_span: Span,
 }
 
 /// How a symbol is imported.
-///
-/// # Examples
-///
-/// ```
-/// use fallow_types::extract::ImportedName;
-///
-/// let named = ImportedName::Named("useState".to_string());
-/// assert_eq!(named, ImportedName::Named("useState".to_string()));
-/// assert_ne!(named, ImportedName::Default);
-///
-/// // Side-effect imports have no binding
-/// assert_eq!(ImportedName::SideEffect, ImportedName::SideEffect);
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportedName {
     /// A named import (e.g., `import { foo }`).
@@ -590,10 +429,6 @@ pub enum ImportedName {
     SideEffect,
 }
 
-// Size assertions to prevent memory regressions in hot-path types.
-// These types are stored in Vecs inside `ModuleInfo` (one per file) and are
-// iterated during graph construction and analysis. Keeping them compact
-// improves cache locality on large projects with thousands of files.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<ExportInfo>() == 112);
 #[cfg(target_pointer_width = "64")]
@@ -604,7 +439,6 @@ const _: () = assert!(std::mem::size_of::<ExportName>() == 24);
 const _: () = assert!(std::mem::size_of::<ImportedName>() == 24);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<MemberAccess>() == 48);
-// `ModuleInfo` is the per-file extraction result, stored in a Vec during parallel parsing.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<ModuleInfo>() == 544);
 
@@ -620,9 +454,6 @@ pub struct ReExportInfo {
     /// Whether this is a type-only re-export.
     pub is_type_only: bool,
     /// Source span of the re-export declaration on this module.
-    /// Used for line-number reporting when an unused re-export is detected.
-    /// Defaults to `Span::default()` (0, 0) for re-exports without a meaningful
-    /// source location (e.g., synthesized in the graph layer).
     pub span: oxc_span::Span,
 }
 
@@ -640,12 +471,7 @@ pub struct DynamicImportInfo {
     /// The local variable name for `const x = await import(...)`.
     /// Used for namespace import narrowing via member access tracking.
     pub local_name: Option<String>,
-    /// True when this dynamic import was synthesised by fallow rather than
-    /// appearing in user source (e.g. the Vitest `__mocks__/<file>` auto-mock
-    /// sibling that pairs with a `vi.mock('./foo')` call). When the resolver
-    /// cannot find the synthesised target, the entry is dropped silently
-    /// instead of surfacing as an `unresolved-import` finding pointing at a
-    /// path the user never wrote.
+    /// True when this dynamic import was synthesised by fallow rather than appearing in user source.
     pub is_speculative: bool,
 }
 
@@ -657,11 +483,8 @@ pub struct RequireCallInfo {
     /// Source span of the `require()` call.
     pub span: Span,
     /// Names destructured from the `require()` result.
-    /// Non-empty means `const { a, b } = require(...)` -> Named imports.
-    /// Empty means simple `require(...)` or `const x = require(...)` -> Namespace.
     pub destructured_names: Vec<String>,
     /// The local variable name for `const x = require(...)`.
-    /// Used for namespace import narrowing via member access tracking.
     pub local_name: Option<String>,
 }
 
@@ -673,19 +496,13 @@ pub struct ParseResult {
     pub cache_hits: usize,
     /// Number of files that required a full parse (new or changed).
     pub cache_misses: usize,
-    /// Summed wall-clock time of the actual AST parses, across all rayon
-    /// workers (cache hits and file IO excluded). Divided by the parse
-    /// stage's own wall-clock time this yields the effective parallelism of
-    /// the parse work. Observational only: a wall-clock-derived figure that
-    /// varies run to run; do not assert against it.
+    /// Summed wall-clock time of the actual AST parses across all rayon workers.
     pub parse_cpu_ms: f64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── compute_line_offsets ──────────────────────────────────────────
 
     #[test]
     fn line_offsets_empty_string() {
@@ -699,58 +516,46 @@ mod tests {
 
     #[test]
     fn line_offsets_single_line_with_newline() {
-        // "hello\n" => line 0 starts at 0, line 1 starts at 6
         assert_eq!(compute_line_offsets("hello\n"), vec![0, 6]);
     }
 
     #[test]
     fn line_offsets_multiple_lines() {
-        // "abc\ndef\nghi"
-        // line 0: offset 0 ("abc")
-        // line 1: offset 4 ("def")
-        // line 2: offset 8 ("ghi")
         assert_eq!(compute_line_offsets("abc\ndef\nghi"), vec![0, 4, 8]);
     }
 
     #[test]
     fn line_offsets_trailing_newline() {
-        // "abc\ndef\n"
-        // line 0: offset 0, line 1: offset 4, line 2: offset 8 (empty line after trailing \n)
         assert_eq!(compute_line_offsets("abc\ndef\n"), vec![0, 4, 8]);
     }
 
     #[test]
     fn line_offsets_consecutive_newlines() {
-        // "\n\n\n" = 3 newlines => 4 lines
         assert_eq!(compute_line_offsets("\n\n\n"), vec![0, 1, 2, 3]);
     }
 
     #[test]
     fn line_offsets_multibyte_utf8() {
-        // "á\n" => 'á' is 2 bytes (0xC3 0xA1), '\n' at byte 2 => next line at byte 3
         assert_eq!(compute_line_offsets("á\n"), vec![0, 3]);
     }
-
-    // ── byte_offset_to_line_col ──────────────────────────────────────
 
     #[test]
     fn line_col_offset_zero() {
         let offsets = compute_line_offsets("abc\ndef\nghi");
         let (line, col) = byte_offset_to_line_col(&offsets, 0);
-        assert_eq!((line, col), (1, 0)); // line 1, col 0
+        assert_eq!((line, col), (1, 0));
     }
 
     #[test]
     fn line_col_middle_of_first_line() {
         let offsets = compute_line_offsets("abc\ndef\nghi");
         let (line, col) = byte_offset_to_line_col(&offsets, 2);
-        assert_eq!((line, col), (1, 2)); // 'c' in "abc"
+        assert_eq!((line, col), (1, 2));
     }
 
     #[test]
     fn line_col_start_of_second_line() {
         let offsets = compute_line_offsets("abc\ndef\nghi");
-        // byte 4 = start of "def"
         let (line, col) = byte_offset_to_line_col(&offsets, 4);
         assert_eq!((line, col), (2, 0));
     }
@@ -758,7 +563,6 @@ mod tests {
     #[test]
     fn line_col_middle_of_second_line() {
         let offsets = compute_line_offsets("abc\ndef\nghi");
-        // byte 5 = 'e' in "def"
         let (line, col) = byte_offset_to_line_col(&offsets, 5);
         assert_eq!((line, col), (2, 1));
     }
@@ -766,7 +570,6 @@ mod tests {
     #[test]
     fn line_col_start_of_third_line() {
         let offsets = compute_line_offsets("abc\ndef\nghi");
-        // byte 8 = start of "ghi"
         let (line, col) = byte_offset_to_line_col(&offsets, 8);
         assert_eq!((line, col), (3, 0));
     }
@@ -774,7 +577,6 @@ mod tests {
     #[test]
     fn line_col_end_of_file() {
         let offsets = compute_line_offsets("abc\ndef\nghi");
-        // byte 10 = 'i' (last char)
         let (line, col) = byte_offset_to_line_col(&offsets, 10);
         assert_eq!((line, col), (3, 2));
     }
@@ -789,12 +591,9 @@ mod tests {
     #[test]
     fn line_col_at_newline_byte() {
         let offsets = compute_line_offsets("abc\ndef");
-        // byte 3 = the '\n' character itself, still part of line 1
         let (line, col) = byte_offset_to_line_col(&offsets, 3);
         assert_eq!((line, col), (1, 3));
     }
-
-    // ── ExportName ───────────────────────────────────────────────────
 
     #[test]
     fn export_name_matches_str_named() {
@@ -822,8 +621,6 @@ mod tests {
         let name = ExportName::Default;
         assert_eq!(name.to_string(), "default");
     }
-
-    // ── ExportName equality & hashing ────────────────────────────
 
     #[test]
     fn export_name_equality_named() {
@@ -860,8 +657,6 @@ mod tests {
         assert_eq!(h1.finish(), h2.finish());
     }
 
-    // ── ExportName::matches_str edge cases ───────────────────────
-
     #[test]
     fn export_name_matches_str_empty_string() {
         let name = ExportName::Named(String::new());
@@ -874,8 +669,6 @@ mod tests {
         let name = ExportName::Default;
         assert!(!name.matches_str(""));
     }
-
-    // ── ImportedName equality ────────────────────────────────────
 
     #[test]
     fn imported_name_equality() {
@@ -897,8 +690,6 @@ mod tests {
         );
     }
 
-    // ── MemberKind equality ────────────────────────────────────
-
     #[test]
     fn member_kind_equality() {
         assert_eq!(MemberKind::EnumMember, MemberKind::EnumMember);
@@ -909,8 +700,6 @@ mod tests {
         assert_ne!(MemberKind::ClassMethod, MemberKind::ClassProperty);
         assert_ne!(MemberKind::NamespaceMember, MemberKind::EnumMember);
     }
-
-    // ── MemberKind bitcode roundtrip ─────────────────────────────
 
     #[test]
     fn member_kind_bitcode_roundtrip() {
@@ -927,8 +716,6 @@ mod tests {
         }
     }
 
-    // ── MemberAccess bitcode roundtrip ─────────────────────────
-
     #[test]
     fn member_access_bitcode_roundtrip() {
         let access = MemberAccess {
@@ -941,18 +728,11 @@ mod tests {
         assert_eq!(decoded.member, "Active");
     }
 
-    // ── compute_line_offsets with Windows line endings ───────────
-
     #[test]
     fn line_offsets_crlf_only_counts_lf() {
-        // \r\n should produce offsets at the \n boundary
-        // "ab\r\ncd" => bytes: a(0) b(1) \r(2) \n(3) c(4) d(5)
-        // Line 0: offset 0, line 1: offset 4
         let offsets = compute_line_offsets("ab\r\ncd");
         assert_eq!(offsets, vec![0, 4]);
     }
-
-    // ── byte_offset_to_line_col edge cases ──────────────────────
 
     #[test]
     fn line_col_empty_file_offset_zero() {
@@ -960,8 +740,6 @@ mod tests {
         let (line, col) = byte_offset_to_line_col(&offsets, 0);
         assert_eq!((line, col), (1, 0));
     }
-
-    // ── FunctionComplexity bitcode roundtrip ──────────────────────
 
     #[test]
     fn function_complexity_bitcode_roundtrip() {

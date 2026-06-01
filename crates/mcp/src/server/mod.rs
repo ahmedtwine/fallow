@@ -22,8 +22,6 @@ use crate::tools::{
 #[cfg(test)]
 mod tests;
 
-// ── Server ─────────────────────────────────────────────────────────
-
 #[derive(Clone)]
 pub struct FallowMcp {
     binary: String,
@@ -54,7 +52,6 @@ fn resolve_binary() -> String {
         return bin;
     }
 
-    // Check for sibling binary next to the current executable (npm install scenario)
     if let Ok(exe) = std::env::current_exe() {
         let sibling = exe.with_file_name("fallow");
         if sibling.is_file()
@@ -66,8 +63,6 @@ fn resolve_binary() -> String {
 
     "fallow".to_string()
 }
-
-// ── Tool implementations ───────────────────────────────────────────
 
 #[tool_router]
 impl FallowMcp {
@@ -324,8 +319,6 @@ impl FallowMcp {
         run_fallow_with_top_level_warnings(&self.binary, &args).await
     }
 }
-
-// ── ServerHandler ──────────────────────────────────────────────────
 
 #[rmcp::tool_handler]
 impl ServerHandler for FallowMcp {

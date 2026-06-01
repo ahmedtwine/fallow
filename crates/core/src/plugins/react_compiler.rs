@@ -1,29 +1,4 @@
-//! React Compiler dependency crediting, shared by the Vite and Electron plugins.
-//!
-//! `babel-plugin-react-compiler` is rarely referenced by its literal package
-//! name in a config; it is enabled through `@vitejs/plugin-react` / the
-//! standalone `@rolldown/plugin-babel` plugin. This module credits the
-//! dependency when React Compiler is wired through the documented shapes so it
-//! is not reported as an unused dependency.
-//!
-//! Supported shapes (all provenance-checked: the `react` / `babel` callees and
-//! the `reactCompilerPreset` helper must be imported from their real packages):
-//!
-//! - `react({ babel: { plugins: ["babel-plugin-react-compiler"] } })` (#623)
-//! - `react({ babel: { plugins: [["react-compiler", {}]] } })` (#623)
-//! - `babel({ babel: { plugins: ["babel-plugin-react-compiler"] } })` (#623)
-//! - `babel({ presets: [reactCompilerPreset()] })` (#751, the documented
-//!   `@vitejs/plugin-react` 6.x + `@rolldown/plugin-babel` canonical shape)
-//! - `react({ babel: { presets: [reactCompilerPreset()] } })` (#751)
-//! - the same arrays inside electron-vite `main` / `preload` / `renderer`
-//!   sections (#751)
-//!
-//! Out of scope (documented limitations, reported as unused so the user is at
-//! least told the dependency looks unreferenced): the namespace-import form
-//! `import * as vr from '@vitejs/plugin-react'; vr.reactCompilerPreset()`, the
-//! variable-indirection form `const p = reactCompilerPreset(); babel({ presets:
-//! [p] })`, and a local re-export barrel that does not import directly from
-//! `@vitejs/plugin-react`.
+//! React Compiler dependency crediting for Vite and Electron configs.
 
 use super::config_parser;
 use oxc_ast::ast::{
@@ -139,15 +114,9 @@ fn collect_from_plugins_array(
         };
 
         if is_local_call(call, &locals.react_calls) {
-            // @vitejs/plugin-react: babel options live under the `babel` key.
-            // Plugin-name strings in `babel.plugins` (#623); the preset helper
-            // in `babel.presets` (#751).
             credit_plugin_name_strings(call, &["babel", "plugins"], deps);
             credit_preset_helper_calls(call, &["babel", "presets"], locals, deps);
         } else if is_local_call(call, &locals.babel_calls) {
-            // @rolldown/plugin-babel: plugin-name strings in `plugins` /
-            // `babel.plugins`; the preset helper in the top-level `presets` (the
-            // canonical reactCompilerPreset shape) or nested `babel.presets`.
             credit_plugin_name_strings(call, &["plugins"], deps);
             credit_plugin_name_strings(call, &["babel", "plugins"], deps);
             credit_preset_helper_calls(call, &["presets"], locals, deps);
@@ -156,10 +125,7 @@ fn collect_from_plugins_array(
     }
 }
 
-/// Credit react-compiler when it appears as a Babel plugin-name string or
-/// `[name, opts]` tuple in a `plugins` array (the #623 shape). Restricted to
-/// `plugins` paths: this resolves Babel PLUGIN names, and the `reactCompilerPreset`
-/// helper is handled separately for `presets` paths.
+/// Credit react-compiler when it appears as a Babel plugin-name string or tuple.
 fn credit_plugin_name_strings(
     call: &CallExpression<'_>,
     option_path: &[&str],
@@ -175,14 +141,7 @@ fn credit_plugin_name_strings(
     }
 }
 
-/// Credit react-compiler when the `reactCompilerPreset()` helper appears in a
-/// `presets` array. The callee must be a provenance-checked `reactCompilerPreset`
-/// named import from `@vitejs/plugin-react`; the call is credited directly (a
-/// preset call has no string name, so it must not be routed through
-/// `resolve_babel_plugin_name`). Argument-agnostic: `reactCompilerPreset({ target:
-/// "19" })` still credits. Restricted to `presets` paths: a preset helper inside a
-/// `plugins` array is an invalid shape that does not enable React Compiler, so it
-/// is not credited (see .claude/rules/detection.md).
+/// Credit react-compiler when the `reactCompilerPreset()` helper appears in a presets array.
 fn credit_preset_helper_calls(
     call: &CallExpression<'_>,
     option_path: &[&str],
@@ -294,8 +253,6 @@ mod tests {
 
     #[test]
     fn rolldown_babel_preset_call_credits_react_compiler() {
-        // The canonical @vitejs/plugin-react 6.x + @rolldown/plugin-babel shape
-        // with a mixed default + named import on a single declaration.
         let source = r#"
             import { defineConfig } from "vite";
             import react, { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -364,9 +321,6 @@ mod tests {
 
     #[test]
     fn preset_helper_call_in_babel_plugins_array_does_not_credit() {
-        // A preset helper in a `plugins` slot is an invalid shape that does not
-        // enable React Compiler; the preset-call scan is restricted to `presets`
-        // arrays, so this must NOT credit (matches detection.md).
         let source = r#"
             import { defineConfig } from "vite";
             import { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -394,9 +348,6 @@ mod tests {
 
     #[test]
     fn electron_renderer_preset_call_credits_react_compiler() {
-        // electron-vite per-section nesting: plugins live under renderer.plugins,
-        // and `defineConfig` is imported from electron-vite (the config-object
-        // finder is import-source-agnostic).
         let source = r#"
             import { defineConfig } from "electron-vite";
             import react, { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -414,8 +365,6 @@ mod tests {
 
     #[test]
     fn vite_paths_do_not_reach_electron_renderer_plugins() {
-        // The Vite path set is top-level `plugins` only, so an electron-vite
-        // renderer.plugins preset must NOT be credited when scanned as Vite.
         let source = r#"
             import { defineConfig } from "electron-vite";
             import react, { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -432,8 +381,6 @@ mod tests {
 
     #[test]
     fn local_preset_function_does_not_credit() {
-        // A local `reactCompilerPreset` not imported from @vitejs/plugin-react
-        // must not credit (provenance gate).
         let source = r#"
             import { defineConfig } from "vite";
             import babel from "@rolldown/plugin-babel";
@@ -451,8 +398,6 @@ mod tests {
 
     #[test]
     fn variable_indirection_does_not_credit() {
-        // Out of scope: the preset call is assigned to a variable rather than
-        // appearing directly in the presets array.
         let source = r#"
             import { defineConfig } from "vite";
             import { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -469,8 +414,6 @@ mod tests {
 
     #[test]
     fn namespace_import_preset_call_does_not_credit() {
-        // Out of scope: namespace import; the callee is a member expression, not
-        // a bare identifier, so the provenance gate does not match.
         let source = r#"
             import { defineConfig } from "vite";
             import * as vr from "@vitejs/plugin-react";

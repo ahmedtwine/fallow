@@ -13,7 +13,6 @@ pub struct SvelteKitPlugin;
 const ENABLERS: &[&str] = &["@sveltejs/kit"];
 
 const ENTRY_PATTERNS: &[&str] = &[
-    // Route files (split svelte/ts for correct used_exports matching)
     "src/routes/**/+page.svelte",
     "src/routes/**/+page.{ts,js}",
     "src/routes/**/+page.server.{ts,js}",
@@ -22,22 +21,13 @@ const ENTRY_PATTERNS: &[&str] = &[
     "src/routes/**/+layout.server.{ts,js}",
     "src/routes/**/+server.{ts,js}",
     "src/routes/**/+error.svelte",
-    // Layout-reset variants (`+page@.svelte`, `+page@named.svelte`, etc.): the `@`
-    // suffix breaks a route out of its parent layout chain. Only the component files
-    // (`.svelte`) take this suffix; the co-located load files keep their plain names.
-    // `*` matches both the empty (`@.svelte`) and named (`@named.svelte`) forms.
     "src/routes/**/+page@*.svelte",
     "src/routes/**/+layout@*.svelte",
-    // Hooks
     "src/hooks.server.{ts,js}",
     "src/hooks.client.{ts,js}",
     "src/hooks.{ts,js}",
-    // Service worker
     "src/service-worker.{ts,js}",
-    // Params matchers
     "src/params/**/*.{ts,js}",
-    // Remote functions (SvelteKit 2.27+): invoked through generated client/server
-    // bindings, so the file is never reached through fallow's import graph.
     "src/**/*.remote.{ts,js}",
 ];
 
@@ -76,7 +66,6 @@ const VIRTUAL_MODULE_PREFIXES: &[&str] = &["$app/", "$env/", "$lib/", "$service-
 /// containing type definitions for `PageLoad`, `PageData`, etc.
 const GENERATED_IMPORT_PATTERNS: &[&str] = &["/$types"];
 
-// SvelteKit route convention exports
 const PAGE_EXPORTS: &[&str] = &["default"];
 const PAGE_LOAD_EXPORTS: &[&str] = &[
     "load",
@@ -104,10 +93,6 @@ const HOOKS_SERVER_EXPORTS: &[&str] = &["handle", "handleError", "handleFetch", 
 const HOOKS_CLIENT_EXPORTS: &[&str] = &["handleError", "init"];
 const HOOKS_SHARED_EXPORTS: &[&str] = &["reroute", "transport", "handleError", "init"];
 const PARAM_MATCHER_EXPORTS: &[&str] = &["match"];
-// Remote-function exports (`export const getPosts = query(...)`) carry
-// user-defined names rather than a fixed convention set, so every export is
-// credited via the `"*"` wildcard. SvelteKit consumes them through generated
-// bindings, keeping them exempt even under `--include-entry-exports`.
 const REMOTE_EXPORTS: &[&str] = &["*"];
 
 impl Plugin for SvelteKitPlugin {
@@ -144,7 +129,6 @@ impl Plugin for SvelteKitPlugin {
     }
 
     fn path_aliases(&self, _root: &Path) -> Vec<(&'static str, String)> {
-        // $lib/ is SvelteKit's built-in alias for src/lib/
         vec![
             ("$lib/", "src/lib".to_string()),
             ("$lib", "src/lib".to_string()),
@@ -173,7 +157,6 @@ impl Plugin for SvelteKitPlugin {
     fn resolve_config(&self, config_path: &Path, source: &str, root: &Path) -> PluginResult {
         let mut result = PluginResult::default();
 
-        // Extract import sources as referenced dependencies
         let imports = config_parser::extract_imports(source, config_path);
         for imp in &imports {
             let dep = crate::resolve::extract_package_name(imp);
@@ -190,7 +173,6 @@ impl Plugin for SvelteKitPlugin {
             }
         }
 
-        // Extract require() calls (CJS configs)
         let require_deps =
             config_parser::extract_config_require_strings(source, config_path, "adapter");
         for dep in &require_deps {
@@ -199,7 +181,6 @@ impl Plugin for SvelteKitPlugin {
                 .push(crate::resolve::extract_package_name(dep));
         }
 
-        // Extract preprocess plugins
         let preprocess_deps =
             config_parser::extract_config_require_strings(source, config_path, "preprocess");
         for dep in &preprocess_deps {

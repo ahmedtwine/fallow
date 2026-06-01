@@ -153,23 +153,15 @@ pub(super) fn narrow_namespace_references(
     let source_mod = module_by_id.get(&source_id);
     let accessed_members = extract_accessed_members(source_mod, sym_local_name);
 
-    // Check if the namespace is consumed as a whole object
-    // (Object.values, for..in, spread, destructuring with rest, etc.)
     let is_whole_object =
         source_mod.is_some_and(|m| m.whole_object_uses.iter().any(|n| n == sym_local_name));
 
-    // Check if the namespace variable is re-exported (export { ns } or export default ns)
-    // from a NON-entry-point file. If the importing file IS an entry point,
-    // the re-export is for external consumption and doesn't prove internal usage.
     let is_re_exported_from_non_entry = source_mod.is_some_and(|m| {
         m.exports
             .iter()
             .any(|e| e.local_name.as_deref() == Some(sym_local_name))
     }) && !entry_point_ids.contains(&source_id);
 
-    // For entry point files with no member accesses, the namespace
-    // is purely re-exported for external use — don't mark all exports
-    // as used internally. The `export *` path handles individual tracking.
     let is_entry_with_no_access =
         accessed_members.is_empty() && !is_whole_object && entry_point_ids.contains(&source_id);
 
@@ -177,7 +169,6 @@ pub(super) fn narrow_namespace_references(
         || (!is_entry_with_no_access
             && (accessed_members.is_empty() || is_re_exported_from_non_entry))
     {
-        // Can't narrow — mark all exports as referenced (conservative)
         mark_all_exports_referenced(
             &mut module.exports,
             source_id,
@@ -185,7 +176,6 @@ pub(super) fn narrow_namespace_references(
             ReferenceKind::NamespaceImport,
         );
     } else {
-        // Narrow: only mark accessed members as referenced
         let found_members = mark_member_exports_referenced(
             &mut module.exports,
             source_id,
@@ -194,11 +184,6 @@ pub(super) fn narrow_namespace_references(
             ReferenceKind::NamespaceImport,
         );
 
-        // For members not found on the target (e.g., barrel with
-        // `export *` that has no own exports for these names),
-        // create synthetic ExportSymbol entries so that
-        // resolve_re_export_chains can propagate them to the
-        // actual source modules.
         create_synthetic_exports_for_star_re_exports(
             &mut module.exports,
             &module.re_exports,
@@ -345,8 +330,6 @@ fn attach_direct_export_references(
         return;
     }
 
-    // No usage split available. Preserve the old behavior as a fallback, but
-    // bias `import type` toward type exports when both namespaces exist.
     let fallback_idx = if sym.is_type_only {
         type_exports
             .first()
@@ -382,18 +365,14 @@ pub(super) fn attach_symbol_reference(
     let ref_kind = reference_kind_for(&sym.imported_name);
     let source_mod = module_by_id.get(&source_id);
 
-    // Skip references for import bindings that are never used in the importing file.
     if is_unused_import_binding(&sym.local_name, &sym.imported_name, source_mod) {
         return;
     }
 
     attach_direct_export_references(target_module, source_id, sym, source_mod, ref_kind);
 
-    // Namespace imports: narrow to specific member accesses when possible,
-    // otherwise conservatively mark all exports as used.
     if matches!(sym.imported_name, ImportedName::Namespace) {
         if sym.local_name.is_empty() {
-            // No local name available — mark all (conservative)
             mark_all_exports_referenced(
                 &mut target_module.exports,
                 source_id,
@@ -412,8 +391,6 @@ pub(super) fn attach_symbol_reference(
         }
     }
 
-    // CSS Module default imports: member accesses like `styles.primary` mark
-    // the `primary` named export as referenced.
     if matches!(sym.imported_name, ImportedName::Default)
         && !sym.local_name.is_empty()
         && is_css_module_path(&target_module.path)
@@ -436,8 +413,6 @@ mod tests {
     use fallow_types::extract::{ExportName, VisibilityTag};
 
     use super::super::ModuleGraph;
-
-    // ── is_unused_import_binding ────────────────────────────────────────
 
     #[test]
     fn is_unused_binding_true() {
@@ -480,7 +455,6 @@ mod tests {
             value_referenced_import_bindings: vec![],
             ..Default::default()
         };
-        // SideEffect imports are never "unused bindings"
         assert!(!is_unused_import_binding(
             "x",
             &ImportedName::SideEffect,
@@ -509,8 +483,6 @@ mod tests {
             None,
         ));
     }
-
-    // ── extract_accessed_members ─────────────────────────────────────────
 
     #[test]
     fn extract_accessed_members_found() {
@@ -541,8 +513,6 @@ mod tests {
         let members = extract_accessed_members(None, "ns");
         assert!(members.is_empty());
     }
-
-    // ── mark_all_exports_referenced ─────────────────────────────────────
 
     #[test]
     fn mark_all_exports_referenced_adds_refs() {
@@ -592,7 +562,6 @@ mod tests {
             }],
             members: Vec::new(),
         }];
-        // Same source file — should not add a duplicate
         mark_all_exports_referenced(
             &mut exports,
             FileId(5),
@@ -601,8 +570,6 @@ mod tests {
         );
         assert_eq!(exports[0].references.len(), 1);
     }
-
-    // ── mark_member_exports_referenced ──────────────────────────────────
 
     #[test]
     fn mark_member_exports_referenced_only_accessed() {
@@ -640,8 +607,6 @@ mod tests {
         assert!(found.contains("foo"));
         assert!(!found.contains("bar"));
     }
-
-    // ── create_synthetic_exports_for_star_re_exports ────────────────────
 
     #[test]
     fn create_synthetic_exports_with_star_re_export() {
@@ -735,8 +700,6 @@ mod tests {
         );
     }
 
-    // ── reference_kind_for ──────────────────────────────────────────────
-
     #[test]
     fn reference_kind_for_named() {
         assert_eq!(
@@ -769,11 +732,8 @@ mod tests {
         );
     }
 
-    // ── attach_symbol_reference (integration-level, through public build) ──
-
     #[test]
     fn attach_ref_skips_unused_binding() {
-        // entry imports "foo" from utils, but "foo" is in unused_import_bindings
         let files = vec![
             DiscoveredFile {
                 id: FileId(0),
@@ -841,7 +801,6 @@ mod tests {
 
     #[test]
     fn attach_ref_namespace_narrows_to_member_accesses() {
-        // entry.ts: import * as utils from './utils'; uses utils.foo, not utils.bar
         let files = vec![
             DiscoveredFile {
                 id: FileId(0),
@@ -933,7 +892,6 @@ mod tests {
 
     #[test]
     fn attach_ref_namespace_whole_object_marks_all() {
-        // entry.ts: import * as utils from './utils'; Object.values(utils)
         let files = vec![
             DiscoveredFile {
                 id: FileId(0),
@@ -999,7 +957,6 @@ mod tests {
         ];
         let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-        // Both exports should be referenced because the namespace is used as whole object
         for export in &graph.modules[1].exports {
             assert!(
                 !export.references.is_empty(),
@@ -1011,7 +968,6 @@ mod tests {
 
     #[test]
     fn attach_ref_css_module_narrows_to_member_accesses() {
-        // entry.ts: import styles from './Button.module.css'; uses styles.primary
         let files = vec![
             DiscoveredFile {
                 id: FileId(0),
@@ -1201,8 +1157,6 @@ mod tests {
         assert!(graph.type_only_package_usage.contains_key("react"));
     }
 
-    // ── mark_member_exports_referenced: edge cases ───────────────────
-
     #[test]
     fn mark_member_exports_referenced_default_export() {
         let mut exports = vec![ExportSymbol {
@@ -1249,7 +1203,6 @@ mod tests {
             oxc_span::Span::new(0, 10),
             ReferenceKind::NamespaceImport,
         );
-        // Should not add duplicate reference from same file
         assert_eq!(exports[0].references.len(), 1);
         assert!(found.contains("foo"));
     }
@@ -1276,8 +1229,6 @@ mod tests {
         assert!(exports[0].references.is_empty());
         assert!(found.is_empty());
     }
-
-    // ── create_synthetic_exports_for_star_re_exports: default export ──
 
     #[test]
     fn create_synthetic_exports_default_member() {

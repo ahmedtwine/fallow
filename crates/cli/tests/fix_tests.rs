@@ -3,10 +3,6 @@ mod common;
 
 use common::{fixture_path, parse_json, run_fallow, run_fallow_in_root};
 
-// ---------------------------------------------------------------------------
-// fix --dry-run
-// ---------------------------------------------------------------------------
-
 #[test]
 fn fix_dry_run_exits_0() {
     let output = run_fallow(
@@ -47,10 +43,8 @@ fn fix_dry_run_finds_fixable_items() {
     let fixes = json["fixes"].as_array().unwrap();
     assert!(!fixes.is_empty(), "basic-project should have fixable items");
 
-    // Each fix should have a type
     for fix in fixes {
         assert!(fix.get("type").is_some(), "fix should have 'type'");
-        // Export fixes have "path", dependency fixes have "package"
         let has_path = fix.get("path").is_some() || fix.get("package").is_some();
         assert!(has_path, "fix should have 'path' or 'package'");
     }
@@ -109,9 +103,6 @@ fn fix_removes_unused_exported_enum_declaration() {
 
 #[test]
 fn fix_folds_imported_enum_with_all_members_unused() {
-    // Regression for issue #232: an exported enum that has importers but
-    // whose members are all unused should be removed entirely, not stripped
-    // member-by-member into a zombie `export enum X {}` shell.
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -155,8 +146,6 @@ fn fix_folds_imported_enum_with_all_members_unused() {
         "enum.ts should be empty after the fold (single trailing newline)"
     );
 
-    // Second pass: the empty-shell zombie that 2.54.3 would have left behind
-    // must not be present, and the fold must not produce any new fix.
     let output = run_fallow_in_root("fix", root, &["--dry-run", "--format", "json", "--quiet"]);
     let json = parse_json(&output);
     assert!(
@@ -262,7 +251,6 @@ fn fix_round_trips_utf8_bom_on_json_config() {
         &written.as_bytes()[..written.len().min(8)]
     );
 
-    // Round-trip: a follow-up analysis must still load this config cleanly.
     let post = run_fallow_in_root(
         "dead-code",
         root,
@@ -312,15 +300,12 @@ fn fix_writes_through_symlinked_config() {
         output.stderr
     );
 
-    // The symlink must still BE a symlink after the write (atomic_write
-    // canonicalized to the target).
     let meta = std::fs::symlink_metadata(root.join(".fallowrc.json")).unwrap();
     assert!(
         meta.file_type().is_symlink(),
         "symlink was replaced with regular file by atomic_write"
     );
 
-    // The target must contain the new ignoreExports entries.
     let target_content = std::fs::read_to_string(&real_path).unwrap();
     assert!(
         target_content.contains("\"ignoreExports\""),
@@ -328,14 +313,8 @@ fn fix_writes_through_symlinked_config() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// fix without --yes in non-TTY
-// ---------------------------------------------------------------------------
-
 #[test]
 fn fix_without_yes_in_non_tty_exits_2() {
-    // Running fix without --dry-run and without --yes in a non-TTY (test runner)
-    // should exit 2 with an error
     let output = run_fallow("fix", "basic-project", &["--format", "json", "--quiet"]);
     assert_eq!(output.code, 2, "fix without --yes in non-TTY should exit 2");
 }
@@ -403,9 +382,6 @@ fn fix_catalog_delete_preceding_comments_config_is_consumed() {
 
 #[test]
 fn fix_catalog_fallow_keep_marker_preserves_block() {
-    // Regression: `# fallow-keep` marker preserves a comment block even
-    // under `policy: always`. Mirrors the inline-suppression convention
-    // (`fallow-ignore-*`) so users discover it without docs.
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("packages/app")).unwrap();
@@ -454,10 +430,6 @@ fn fix_catalog_fallow_keep_marker_preserves_block() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// fix --yes on the canonical pnpm-catalog fixture (issue #335)
-// ---------------------------------------------------------------------------
-
 /// End-to-end regression for the issue #335 fix: running `fallow fix --yes`
 /// against the canonical `issue-329-pnpm-catalog` fixture must produce a
 /// `pnpm-workspace.yaml` whose emptied named catalog (`react17`, whose
@@ -489,9 +461,6 @@ fn fix_catalog_issue_335_empties_parent_to_empty_map_not_null() {
     let workspace_path = root.join("pnpm-workspace.yaml");
     let after = std::fs::read_to_string(&workspace_path).expect("read workspace file");
 
-    // Regression assertion: `react17` is the named catalog whose only entries
-    // (react, react-dom) get removed by the fix. The header MUST be rewritten
-    // to `react17: {}`, not left bare as `react17:`.
     let parsed: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&after).expect("post-fix YAML must parse");
     let react17 = parsed
@@ -506,8 +475,6 @@ fn fix_catalog_issue_335_empties_parent_to_empty_map_not_null() {
          Got value: {react17:?}\nFile content:\n{after}"
     );
 
-    // Sanity: the sibling `legacy` catalog is untouched (its `is-odd` entry
-    // is still consumed by `packages/lib/package.json`).
     let legacy = parsed
         .get("catalogs")
         .and_then(|c| c.get("legacy"))
@@ -518,8 +485,6 @@ fn fix_catalog_issue_335_empties_parent_to_empty_map_not_null() {
         "catalogs.legacy must still declare `is-odd`. Got: {legacy:?}"
     );
 
-    // Sanity: the default `catalog:` map still has the entry that was kept
-    // (`react` is consumed via `catalog:` from `packages/app`).
     let default_catalog = parsed
         .get("catalog")
         .and_then(serde_yaml_ng::Value::as_mapping)
@@ -529,9 +494,6 @@ fn fix_catalog_issue_335_empties_parent_to_empty_map_not_null() {
         "default catalog must still declare `react` (it has consumers). Got: {default_catalog:?}"
     );
 
-    // The fix output's JSON envelope must include the new top-level
-    // `skipped` count, with one skip (hardcoded-pkg, which has a
-    // hardcoded consumer in this fixture).
     let json = parse_json(&output);
     assert_eq!(
         json["skipped"].as_u64(),
@@ -541,16 +503,8 @@ fn fix_catalog_issue_335_empties_parent_to_empty_map_not_null() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Issue #454: hash precondition + batch atomicity
-// ---------------------------------------------------------------------------
-
 #[test]
 fn fix_json_envelope_carries_skipped_content_changed_count() {
-    // The orchestrator MUST surface the new envelope field even when
-    // every fixer ran cleanly; the count is 0 here but the field's
-    // presence is the contract that consumers (CI scripts, MCP tools)
-    // depend on.
     let output = run_fallow(
         "fix",
         "basic-project",
@@ -571,10 +525,6 @@ fn fix_json_envelope_carries_skipped_content_changed_count() {
 
 #[test]
 fn fix_round_trip_clears_targeted_findings() {
-    // Round-trip: apply fix on a fresh tmpdir, then re-run check, then
-    // assert the targeted unused-exports findings are gone and no new
-    // findings surfaced. Validates batch-atomic commit + the per-file
-    // edits land coherent enough that the next analysis passes.
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -604,8 +554,6 @@ fn fix_round_trip_clears_targeted_findings() {
     let total_fixed = fix_json["total_fixed"].as_u64().unwrap_or(0);
     assert!(total_fixed >= 2, "fix should remove both stale exports");
 
-    // Re-analyze; the same exports must NOT reappear, and no new
-    // findings should have been introduced by the rewrite.
     let check = run_fallow_in_root("check", root, &["--format", "json", "--quiet"]);
     let check_json = parse_json(&check);
     let unused_exports = check_json["unused_exports"].as_array().map_or(0, Vec::len);
@@ -619,11 +567,6 @@ fn fix_round_trip_clears_targeted_findings() {
 #[cfg(unix)]
 #[test]
 fn fix_batch_aborts_when_a_target_directory_is_read_only() {
-    // Batch atomicity: when staging a write fails for one target, NO
-    // renames must have occurred. We make a sibling source file's parent
-    // directory read-only so the temp-file-in-same-dir stage fails for
-    // that path; the orchestrator must leave the OTHER, healthy source
-    // file untouched.
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
@@ -643,9 +586,6 @@ fn fix_batch_aborts_when_a_target_directory_is_read_only() {
     let sealed_original = "export const also = 1;\nexport const sealed_stale = 2;\n";
     std::fs::write(root.join("src/sealed/locked.ts"), sealed_original).unwrap();
 
-    // Seal the sealed/ directory so NamedTempFile::new_in() inside it fails.
-    // We chmod 0o555 (read+exec, no write) so the existing file is still
-    // readable but no new temp can be created beside it.
     let sealed_dir = root.join("src/sealed");
     let mut perms = std::fs::metadata(&sealed_dir).unwrap().permissions();
     perms.set_mode(0o555);
@@ -653,7 +593,6 @@ fn fix_batch_aborts_when_a_target_directory_is_read_only() {
 
     let fix = run_fallow_in_root("fix", root, &["--yes", "--format", "json", "--quiet"]);
 
-    // Restore permissions before any assertion can panic and skip cleanup.
     let mut restore = std::fs::metadata(&sealed_dir).unwrap().permissions();
     restore.set_mode(0o755);
     std::fs::set_permissions(&sealed_dir, restore).unwrap();
@@ -663,7 +602,6 @@ fn fix_batch_aborts_when_a_target_directory_is_read_only() {
         "batch commit failure must surface as exit 2; stdout: {} stderr: {}",
         fix.stdout, fix.stderr,
     );
-    // Healthy file must be untouched (the batch aborted before any rename).
     let post_open = std::fs::read_to_string(root.join("src/open/utils.ts")).unwrap();
     assert_eq!(
         post_open, open_original,
@@ -675,10 +613,6 @@ fn fix_batch_aborts_when_a_target_directory_is_read_only() {
         "sealed file must be untouched (stage couldn't even land its temp)",
     );
 }
-
-// ---------------------------------------------------------------------------
-// issue #602: low-confidence off-graph export gate
-// ---------------------------------------------------------------------------
 
 /// Build a project where two unused exports are reachable: one in a normal
 /// `src/` file (high confidence) and one in an off-graph `e2e/` directory
@@ -693,9 +627,6 @@ fn write_off_graph_project(root: &std::path::Path) {
         r#"{"name":"off-graph","main":"src/index.ts"}"#,
     )
     .unwrap();
-    // Entry imports one export from each module, leaving `deadSrc` and
-    // `deadE2e` unreferenced (and therefore reported as unused-exports),
-    // while keeping both files reachable so neither is an unused-FILE.
     std::fs::write(
         root.join("src/index.ts"),
         "import { realUsed } from './lib';\nimport { e2eUsed } from '../e2e/shared';\nconsole.log(realUsed, e2eUsed);\n",
@@ -728,7 +659,6 @@ fn fix_dry_run_withholds_off_graph_export_but_plans_high_confidence_one() {
     let json = parse_json(&output);
     let fixes = json["fixes"].as_array().unwrap();
 
-    // The high-confidence src export is planned for removal.
     let removed_names: Vec<&str> = fixes
         .iter()
         .filter(|f| f["type"] == "remove_export")
@@ -745,7 +675,6 @@ fn fix_dry_run_withholds_off_graph_export_but_plans_high_confidence_one() {
         output.stdout
     );
 
-    // The off-graph file surfaces as a low-confidence skip record.
     let skip = fixes
         .iter()
         .find(|f| f["skip_reason"].as_str() == Some("low_confidence_off_graph"));
@@ -776,13 +705,11 @@ fn fix_apply_keeps_off_graph_export_and_removes_high_confidence_one() {
         fix.stderr
     );
 
-    // High-confidence export removed from disk.
     let lib = std::fs::read_to_string(root.join("src/lib.ts")).unwrap();
     assert_eq!(
         lib, "export const realUsed = 1;\nconst deadSrc = 2;\n",
         "high-confidence src export should have lost its `export` keyword",
     );
-    // Off-graph export untouched on disk.
     let shared = std::fs::read_to_string(root.join("e2e/shared.ts")).unwrap();
     assert_eq!(
         shared, "export const e2eUsed = 1;\nexport const deadE2e = 2;\n",
@@ -795,8 +722,6 @@ fn fix_apply_keeps_off_graph_export_and_removes_high_confidence_one() {
 
 #[test]
 fn fix_envelope_always_carries_skipped_low_confidence_exports() {
-    // Presence-of-field contract: consumers (CI jq, MCP, VS Code) gate on
-    // the key existing even when the count is 0.
     let output = run_fallow(
         "fix",
         "basic-project",
@@ -823,9 +748,6 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
         if ty.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
-            // Includes regular files AND symlinks; the fixture contains
-            // only regular files but the broader match is safer than
-            // `is_file()` (which excludes symlinks).
             std::fs::copy(&src_path, &dst_path)?;
         }
     }

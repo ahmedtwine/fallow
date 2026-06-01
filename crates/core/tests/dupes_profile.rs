@@ -94,7 +94,6 @@ fn profile_scenario(name: &str, data: &DupeInput, runs: usize) {
 
     eprintln!("\n=== {name} ({n_files} files, {total_tokens} total tokens) ===");
 
-    // Warmup
     let _ = CloneDetector::new(30, 5, false).detect(data.clone());
 
     let mut times = Vec::with_capacity(runs);
@@ -125,7 +124,6 @@ fn profile_scenario(name: &str, data: &DupeInput, runs: usize) {
 
 #[test]
 fn profile_dupe_detection() {
-    // Install tracing if FALLOW_PROFILE is set
     if std::env::var("FALLOW_PROFILE").is_ok() {
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)

@@ -1,7 +1,5 @@
 use super::*;
 
-// ── token_visitor: var declaration ────────────────────────────
-
 #[test]
 fn tokenize_var_declaration() {
     let tokens = tokenize("var x = 1;");
@@ -10,8 +8,6 @@ fn tokenize_var_declaration() {
         TokenKind::Keyword(KeywordType::Var)
     ));
 }
-
-// ── token_visitor: empty function body ───────────────────────
 
 #[test]
 fn tokenize_empty_function_body() {
@@ -24,8 +20,6 @@ fn tokenize_empty_function_body() {
         .any(|t| matches!(&t.kind, TokenKind::Identifier(n) if n == "noop"));
     assert!(has_function, "Should have function keyword");
     assert!(has_noop, "Should have identifier 'noop'");
-    // FunctionBody is not a BlockStatement, so no braces are emitted for
-    // the empty body. The visitor emits: function, noop, (, )
     let open_parens = tokens
         .iter()
         .filter(|t| matches!(t.kind, TokenKind::Punctuation(PunctuationType::OpenParen)))
@@ -56,15 +50,11 @@ fn tokenize_empty_arrow_function_body() {
     assert_eq!(open_braces, close_braces, "Braces should be balanced");
 }
 
-// ── token_visitor: exact token ordering ──────────────────────
-
 #[test]
 fn tokenize_binary_expression_preserves_left_op_right_order() {
     let tokens = tokenize("const r = a + b;");
-    // Expected sequence: const, r, =, a, +, b, ;
     let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
 
-    // Find the assign, then check: identifier before +, + before second identifier
     let assign_idx = kinds
         .iter()
         .position(|k| matches!(k, TokenKind::Operator(OperatorType::Assign)))
@@ -74,12 +64,10 @@ fn tokenize_binary_expression_preserves_left_op_right_order() {
         .position(|k| matches!(k, TokenKind::Operator(OperatorType::Add)))
         .unwrap();
 
-    // 'a' should appear between assign and add
     let a_idx = kinds
         .iter()
         .position(|k| matches!(k, TokenKind::Identifier(n) if n == "a"))
         .unwrap();
-    // 'b' should appear after add
     let b_idx = kinds
         .iter()
         .position(|k| matches!(k, TokenKind::Identifier(n) if n == "b"))
@@ -92,7 +80,6 @@ fn tokenize_binary_expression_preserves_left_op_right_order() {
 
 #[test]
 fn tokenize_nested_binary_expressions_maintain_order() {
-    // (a + b) * c  => a, +, b, *, c (infix traversal)
     let tokens = tokenize("const r = (a + b) * c;");
     let ops: Vec<&OperatorType> = tokens
         .iter()
@@ -101,7 +88,6 @@ fn tokenize_nested_binary_expressions_maintain_order() {
             _ => None,
         })
         .collect();
-    // Should see Assign, Add, Mul (and the semicolon-related tokens)
     let assign_pos = ops
         .iter()
         .position(|o| **o == OperatorType::Assign)
@@ -115,8 +101,6 @@ fn tokenize_nested_binary_expressions_maintain_order() {
     );
 }
 
-// ── token_visitor: deeply nested expressions ─────────────────
-
 #[test]
 fn tokenize_deeply_nested_call_chain_ordering() {
     let tokens = tokenize("a.b().c().d();");
@@ -127,7 +111,6 @@ fn tokenize_deeply_nested_call_chain_ordering() {
             _ => None,
         })
         .collect();
-    // The identifiers should appear in order: a, b, c, d
     assert_eq!(
         idents,
         vec!["a", "b", "c", "d"],
@@ -152,8 +135,6 @@ fn tokenize_nested_function_calls() {
     );
 }
 
-// ── token_visitor: export named with value declaration ────────
-
 #[test]
 fn tokenize_export_named_value_declaration() {
     let tokens = tokenize("export const x = 1;");
@@ -165,7 +146,6 @@ fn tokenize_export_named_value_declaration() {
         .any(|t| matches!(t.kind, TokenKind::Keyword(KeywordType::Const)));
     assert!(has_export, "Should have export keyword");
     assert!(has_const, "Should have const keyword");
-    // Export should come before const
     let export_idx = tokens
         .iter()
         .position(|t| matches!(t.kind, TokenKind::Keyword(KeywordType::Export)))
@@ -176,8 +156,6 @@ fn tokenize_export_named_value_declaration() {
         .unwrap();
     assert!(export_idx < const_idx, "export should precede const");
 }
-
-// ── token_visitor: call expressions use point spans ──────────
 
 #[test]
 fn tokenize_call_expression_parens_use_point_spans() {
@@ -206,8 +184,6 @@ fn tokenize_call_expression_parens_use_point_spans() {
     }
 }
 
-// ── token_visitor: multiple expression statements ────────────
-
 #[test]
 fn tokenize_multiple_expression_statements_all_have_semicolons() {
     let tokens = tokenize("foo();\nbar();\nbaz();");
@@ -221,8 +197,6 @@ fn tokenize_multiple_expression_statements_all_have_semicolons() {
     );
 }
 
-// ── token_visitor: self-closing JSX element ──────────────────
-
 #[test]
 fn tokenize_jsx_self_closing_element() {
     let tokens = tokenize_tsx("const x = <Input type=\"text\" />;");
@@ -235,8 +209,6 @@ fn tokenize_jsx_self_closing_element() {
     assert!(has_input, "Should contain JSX element name 'Input'");
     assert!(has_type, "Should contain JSX attribute name 'type'");
 }
-
-// ── token_visitor: logical expression produces correct ops ───
 
 #[test]
 fn tokenize_logical_expression_order() {
@@ -257,8 +229,6 @@ fn tokenize_logical_expression_order() {
     assert!(a_idx < and_idx, "'a' should come before '&&'");
     assert!(and_idx < b_idx, "'&&' should come before 'b'");
 }
-
-// ── token_visitor: conditional expression token order ────────
 
 #[test]
 fn tokenize_conditional_expression_ordering() {
@@ -290,8 +260,6 @@ fn tokenize_conditional_expression_ordering() {
     assert!(colon_idx < no_idx, ": before alternate");
 }
 
-// ── token_visitor: assignment expression token order ─────────
-
 #[test]
 fn tokenize_assignment_expression_ordering() {
     let tokens = tokenize("x += 5;");
@@ -312,8 +280,6 @@ fn tokenize_assignment_expression_ordering() {
     assert!(add_assign_idx < five_idx, "operator before rhs");
 }
 
-// ── token_visitor: if without else ───────────────────────────
-
 #[test]
 fn tokenize_if_without_else() {
     let tokens = tokenize("if (x) { y; }");
@@ -327,12 +293,9 @@ fn tokenize_if_without_else() {
     assert!(!has_else, "if without else should not have else keyword");
 }
 
-// ── token_visitor: postfix update operator order ─────────────
-
 #[test]
 fn tokenize_postfix_decrement_order() {
     let tokens = tokenize("x--;");
-    // For postfix x--, the identifier should come before the operator
     let x_idx = tokens
         .iter()
         .position(|t| matches!(&t.kind, TokenKind::Identifier(n) if n == "x"))
@@ -346,8 +309,6 @@ fn tokenize_postfix_decrement_order() {
         "Postfix x-- should have identifier before operator"
     );
 }
-
-// ── token_visitor: deeply nested if-else chain ───────────────
 
 #[test]
 fn tokenize_deeply_nested_if_else_chain() {
@@ -367,15 +328,12 @@ fn tokenize_deeply_nested_if_else_chain() {
     );
 }
 
-// ── token_visitor: object with computed member in value ───────
-
 #[test]
 fn tokenize_object_with_nested_member_access() {
     let tokens = tokenize("const x = { a: obj.b, c: arr[0] };");
     let has_dot = tokens
         .iter()
         .any(|t| matches!(t.kind, TokenKind::Punctuation(PunctuationType::Dot)));
-    // arr[0] should produce brackets
     let bracket_count = tokens
         .iter()
         .filter(|t| {
@@ -393,8 +351,6 @@ fn tokenize_object_with_nested_member_access() {
         "Should have brackets for arr[0], got {bracket_count}"
     );
 }
-
-// ── Token sequence determinism ──────────────────────────────
 
 #[test]
 fn tokenize_same_source_produces_identical_tokens() {
@@ -425,13 +381,10 @@ function processData(items) {
     }
 }
 
-// ── Full exact token sequence tests ─────────────────────────
-
 #[test]
 fn exact_token_sequence_for_simple_const_assignment() {
     let tokens = tokenize("const x = 42;");
     let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
-    // Expected: const, x, =, 42, ;
     assert_eq!(kinds.len(), 5, "const x = 42; should produce 5 tokens");
     assert!(matches!(kinds[0], TokenKind::Keyword(KeywordType::Const)));
     assert!(matches!(kinds[1], TokenKind::Identifier(n) if n == "x"));
@@ -468,7 +421,6 @@ fn exact_token_sequence_for_let_string_assignment() {
 fn exact_token_sequence_for_return_statement() {
     let tokens = tokenize("function f() { return null; }");
     let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
-    // function, f, (, ), {return, null, ;, }
     assert!(matches!(
         kinds[0],
         TokenKind::Keyword(KeywordType::Function)
@@ -482,8 +434,6 @@ fn exact_token_sequence_for_return_statement() {
         kinds[3],
         TokenKind::Punctuation(PunctuationType::CloseParen)
     ));
-    // The walk visits FunctionBody directives and statements but not the
-    // body block directly. A BlockStatement visit emits the { and }.
     let return_idx = kinds
         .iter()
         .position(|k| matches!(k, TokenKind::Keyword(KeywordType::Return)))
@@ -494,8 +444,6 @@ fn exact_token_sequence_for_return_statement() {
         .expect("Should have null literal");
     assert!(return_idx < null_idx, "return should come before null");
 }
-
-// ── Cross-language: non-null assertion produces same tokens as JS ──
 
 #[test]
 fn strip_types_non_null_assertion_matches_js() {
@@ -513,21 +461,14 @@ fn strip_types_non_null_assertion_matches_js() {
     );
 }
 
-// ── Cross-language: class with type parameters ──────────────
-
 #[test]
 fn strip_types_class_with_generics() {
     let stripped =
         tokenize_cross_language("class Container<T> { value: T; constructor(v: T) { } }");
-    // Generic <T> and type annotations should be stripped.
-    // In cross-language mode, the type parameter T and type annotations
-    // are stripped, so T should not appear as a standalone identifier from
-    // the generic or annotation positions.
     let has_class = stripped
         .iter()
         .any(|t| matches!(t.kind, TokenKind::Keyword(KeywordType::Class)));
     assert!(has_class, "Should still have class keyword");
-    // The colon from `: T` and `: T` (constructor param) should be gone
     let colon_count = stripped
         .iter()
         .filter(|t| matches!(t.kind, TokenKind::Punctuation(PunctuationType::Colon)))
@@ -537,8 +478,6 @@ fn strip_types_class_with_generics() {
         "Type annotation colons should be stripped, got {colon_count}"
     );
 }
-
-// ── Cross-language: arrow function with types ───────────────
 
 #[test]
 fn strip_types_arrow_function_matches_js() {
@@ -554,7 +493,6 @@ fn strip_types_arrow_function_matches_js() {
         stripped.len(),
         js_tokens.len()
     );
-    // Verify token kinds match
     for (i, (ts_tok, js_tok)) in stripped.iter().zip(js_tokens.iter()).enumerate() {
         assert_eq!(
             ts_tok.kind, js_tok.kind,
@@ -564,11 +502,8 @@ fn strip_types_arrow_function_matches_js() {
     }
 }
 
-// ── Mixed runtime/type imports in cross-language mode ───────
-
 #[test]
 fn strip_types_mixed_import_keeps_only_value_import() {
-    // Two separate import statements: one type, one value
     let stripped = tokenize_cross_language(
         "import type { Type } from './mod';\nimport { value } from './mod';",
     );
@@ -581,8 +516,6 @@ fn strip_types_mixed_import_keeps_only_value_import() {
         "Only value import should remain, got {import_count}"
     );
 }
-
-// ── Span correctness ───────────────────────────────────────
 
 #[test]
 #[expect(
@@ -621,14 +554,9 @@ fn token_spans_are_within_source_bounds() {
 
 #[test]
 fn token_spans_are_monotonically_non_decreasing() {
-    // For most constructs, token spans should generally advance through the source.
-    // Some synthetic tokens (point spans for parens/commas) may overlap, but
-    // the start positions should be non-decreasing overall.
     let source = "const a = 1;\nconst b = 2;\nconst c = 3;";
     let path = PathBuf::from("test.ts");
     let result = tokenize_file(&path, source, false);
-    // Group by top-level statement boundaries (each `const` keyword)
-    // and verify spans within each group are non-decreasing.
     let mut last_keyword_start = 0u32;
     for token in &result.tokens {
         if matches!(token.kind, TokenKind::Keyword(KeywordType::Const)) {

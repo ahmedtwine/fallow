@@ -1090,7 +1090,6 @@ pub(super) fn print_grouped_sarif(
 ) -> ExitCode {
     let mut sarif = build_sarif(results, root, rules);
 
-    // Post-process each result to inject the owner property.
     if let Some(runs) = sarif.get_mut("runs").and_then(|r| r.as_array_mut()) {
         for run in runs {
             if let Some(results) = run.get_mut("results").and_then(|r| r.as_array_mut()) {
@@ -1099,8 +1098,6 @@ pub(super) fn print_grouped_sarif(
                         .pointer("/locations/0/physicalLocation/artifactLocation/uri")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    // Decode percent-encoded brackets before ownership lookup
-                    // (SARIF URIs encode `[`/`]` as `%5B`/`%5D`)
                     let decoded = uri.replace("%5B", "[").replace("%5D", "]");
                     let owner =
                         grouping::resolve_owner(Path::new(&decoded), Path::new(""), resolver);
@@ -1191,9 +1188,6 @@ pub(super) fn print_grouped_duplication_sarif(
     let mut snippets = SourceSnippetCache::default();
 
     for (i, group) in report.clone_groups.iter().enumerate() {
-        // Compute the group's primary owner once. Every result emitted for
-        // this group carries the same `properties.group` value (the GROUP'S
-        // owner, not the per-instance owner).
         let primary_owner = super::dupes_grouping::largest_owner(group, root, resolver);
         for instance in &group.instances {
             let uri = relative_uri(&instance.file, root);
@@ -1246,11 +1240,6 @@ pub(super) fn print_grouped_duplication_sarif(
     emit_json(&sarif, "SARIF")
 }
 
-// ── Health SARIF output ────────────────────────────────────────────
-// Note: file_scores are intentionally omitted from SARIF output.
-// SARIF is designed for diagnostic results (issues/findings), not metric tables.
-// File health scores are available in JSON, human, compact, and markdown formats.
-
 #[must_use]
 #[expect(
     clippy::too_many_lines,
@@ -1267,9 +1256,6 @@ pub fn build_health_sarif(
 
     for finding in &report.findings {
         let uri = relative_uri(&finding.path, root);
-        // When CRAP contributes alongside complexity, use the CRAP rule as the
-        // most actionable identifier (CRAP combines complexity and coverage)
-        // and surface all exceeded dimensions in the message.
         let (rule_id, message) = match finding.exceeded {
             ExceededThreshold::Cyclomatic => (
                 "fallow/high-cyclomatic-complexity",
@@ -1347,7 +1333,6 @@ pub fn build_health_sarif(
         );
     }
 
-    // Refactoring targets as SARIF results (warning level — advisory recommendations)
     for target in &report.targets {
         let uri = relative_uri(&target.path, root);
         let message = format!(
@@ -1507,15 +1492,6 @@ pub fn build_health_sarif(
     })
 }
 
-// Note: `production.hot_paths`, `production.signals`, and per-hot-path
-// `end_line` are intentionally omitted from SARIF output. SARIF is
-// designed for diagnostic results (issues a reviewer should act on),
-// not for state observations. `hot-path-touched` is informational
-// (PR-context heads-up that a touched function is on the hot path),
-// not a finding to fix; surfacing it as a SARIF result would clutter
-// Code Scanning's UI with non-actionable entries. JSON consumers that
-// want the full picture read `runtime_coverage.signals[]` and
-// `runtime_coverage.hot_paths[]` directly.
 fn append_runtime_coverage_sarif_results(
     sarif_results: &mut Vec<serde_json::Value>,
     production: &crate::health_types::RuntimeCoverageReport,
@@ -1565,9 +1541,6 @@ fn append_runtime_coverage_sarif_results(
     }
 }
 
-// Summary-only coverage-intelligence state is intentionally omitted from SARIF.
-// SARIF should contain actionable diagnostic results, while JSON carries the
-// full verdict, skipped-match counts, and evidence matrix for agents.
 fn append_coverage_intelligence_sarif_results(
     sarif_results: &mut Vec<serde_json::Value>,
     intelligence: &crate::health_types::CoverageIntelligenceReport,
@@ -1786,7 +1759,6 @@ mod tests {
 
         let entry = &entries[0];
         assert_eq!(entry["ruleId"], "fallow/unused-file");
-        // Default severity is "error" per RulesConfig::default()
         assert_eq!(entry["level"], "error");
         assert_eq!(
             entry["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
@@ -1816,7 +1788,6 @@ mod tests {
 
         let region = &entry["locations"][0]["physicalLocation"]["region"];
         assert_eq!(region["startLine"], 10);
-        // SARIF columns are 1-based, code adds +1 to the 0-based col
         assert_eq!(region["startColumn"], 5);
     }
 
@@ -1927,7 +1898,6 @@ mod tests {
 
         let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
-        // One SARIF result per location, not one per DuplicateExport
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0]["ruleId"], "fallow/duplicate-export");
         assert_eq!(entries[1]["ruleId"], "fallow/duplicate-export");
@@ -1948,7 +1918,6 @@ mod tests {
         let sarif = build_sarif(&results, &root, &RulesConfig::default());
 
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
-        // All issue types with one entry each; duplicate_exports has 2 locations => one extra SARIF result
         assert_eq!(entries.len(), results.total_issues() + 1);
 
         let rule_ids: Vec<&str> = entries
@@ -2008,12 +1977,9 @@ mod tests {
             .expect("results should be an array");
         assert!(!sarif_results.is_empty());
 
-        // Clean up
         let _ = std::fs::remove_file(&sarif_path);
         let _ = std::fs::remove_dir(&dir);
     }
-
-    // ── Health SARIF ──
 
     #[test]
     fn health_sarif_empty_no_results() {
@@ -2246,8 +2212,6 @@ mod tests {
 
     #[test]
     fn health_sarif_crap_only_emits_crap_rule() {
-        // CRAP-only: cyclomatic + cognitive below their thresholds, CRAP at or
-        // above the CRAP threshold. Rule must be `fallow/high-crap-score`.
         let root = PathBuf::from("/project");
         let report = crate::health_types::HealthReport {
             findings: vec![
@@ -2289,8 +2253,6 @@ mod tests {
 
     #[test]
     fn health_sarif_cyclomatic_crap_uses_crap_rule() {
-        // Cyclomatic + CRAP both exceeded. The CRAP-centric rule subsumes
-        // the cyclomatic breach; only one SARIF result is emitted.
         let root = PathBuf::from("/project");
         let report = crate::health_types::HealthReport {
             findings: vec![
@@ -2332,11 +2294,8 @@ mod tests {
         assert_eq!(results[0]["ruleId"], "fallow/high-crap-score");
         let msg = results[0]["message"]["text"].as_str().unwrap();
         assert!(msg.contains("CRAP score 182"), "msg: {msg}");
-        // coverage_pct absent => no coverage suffix
         assert!(!msg.contains("coverage"), "msg: {msg}");
     }
-
-    // ── Severity mapping ──
 
     #[test]
     fn severity_to_sarif_level_error() {
@@ -2353,8 +2312,6 @@ mod tests {
     fn severity_to_sarif_level_off() {
         let _ = severity_to_sarif_level(Severity::Off);
     }
-
-    // ── Re-export properties ──
 
     #[test]
     fn sarif_re_export_has_properties() {
@@ -2402,8 +2359,6 @@ mod tests {
         assert!(msg.starts_with("Export"));
     }
 
-    // ── Type re-export ──
-
     #[test]
     fn sarif_type_re_export_message() {
         let root = PathBuf::from("/project");
@@ -2427,8 +2382,6 @@ mod tests {
         assert!(msg.starts_with("Type re-export"));
         assert_eq!(entry["properties"]["is_re_export"], true);
     }
-
-    // ── Dependency line == 0 skips region ──
 
     #[test]
     fn sarif_dependency_line_zero_skips_region() {
@@ -2471,8 +2424,6 @@ mod tests {
         assert_eq!(region["startColumn"], 1);
     }
 
-    // ── Type-only dependency line == 0 skips region ──
-
     #[test]
     fn sarif_type_only_dep_line_zero_skips_region() {
         let root = PathBuf::from("/project");
@@ -2492,8 +2443,6 @@ mod tests {
         let phys = &entry["locations"][0]["physicalLocation"];
         assert!(phys.get("region").is_none());
     }
-
-    // ── Circular dependency line == 0 skips region ──
 
     #[test]
     fn sarif_circular_dep_line_zero_skips_region() {
@@ -2540,8 +2489,6 @@ mod tests {
         assert_eq!(region["startColumn"], 3);
     }
 
-    // ── Unused optional dependency ──
-
     #[test]
     fn sarif_unused_optional_dependency_result() {
         let root = PathBuf::from("/project");
@@ -2564,8 +2511,6 @@ mod tests {
         let msg = entry["message"]["text"].as_str().unwrap();
         assert!(msg.contains("optionalDependencies"));
     }
-
-    // ── Enum and class member SARIF messages ──
 
     #[test]
     fn sarif_enum_member_message_format() {
@@ -2612,8 +2557,6 @@ mod tests {
         let msg = entry["message"]["text"].as_str().unwrap();
         assert!(msg.contains("Class member 'API.fetch'"));
     }
-
-    // ── Duplication SARIF ──
 
     #[test]
     #[expect(
@@ -2667,10 +2610,8 @@ mod tests {
                 "results": []
             }]
         });
-        // Just verify the function doesn't panic and produces expected structure
         let _ = sarif;
 
-        // Test the actual build path through print_duplication_sarif internals
         let mut sarif_results = Vec::new();
         for (i, group) in report.clone_groups.iter().enumerate() {
             for instance in &group.instances {
@@ -2704,8 +2645,6 @@ mod tests {
         assert_eq!(region1["startColumn"], 3); // start_col 2 + 1
     }
 
-    // ── sarif_rule fallback (unknown rule ID) ──
-
     #[test]
     fn sarif_rule_known_id_has_full_description() {
         let rule = sarif_rule("fallow/unused-file", "fallback text", "error");
@@ -2721,8 +2660,6 @@ mod tests {
         assert!(rule.get("helpUri").is_none());
         assert_eq!(rule["defaultConfiguration"]["level"], "warning");
     }
-
-    // ── sarif_result without region ──
 
     #[test]
     fn sarif_result_no_region_omits_region_key() {
@@ -2767,8 +2704,6 @@ mod tests {
             b["partialFingerprints"][fingerprint::FINGERPRINT_KEY]
         );
     }
-
-    // ── Health SARIF refactoring targets ──
 
     #[test]
     fn health_sarif_includes_refactoring_targets() {
@@ -2873,8 +2808,6 @@ mod tests {
         );
     }
 
-    // ── Health SARIF rules include fullDescription from explain module ──
-
     #[test]
     fn health_sarif_rules_have_full_descriptions() {
         let root = PathBuf::from("/project");
@@ -2896,8 +2829,6 @@ mod tests {
         }
     }
 
-    // ── Warn severity propagates correctly ──
-
     #[test]
     fn sarif_warn_severity_produces_warning_level() {
         let root = PathBuf::from("/project");
@@ -2918,8 +2849,6 @@ mod tests {
         assert_eq!(entry["level"], "warning");
     }
 
-    // ── Unused file has no region ──
-
     #[test]
     fn sarif_unused_file_has_no_region() {
         let root = PathBuf::from("/project");
@@ -2935,8 +2864,6 @@ mod tests {
         let phys = &entry["locations"][0]["physicalLocation"];
         assert!(phys.get("region").is_none());
     }
-
-    // ── Multiple unlisted deps with multiple import sites ──
 
     #[test]
     fn sarif_unlisted_dep_multiple_import_sites() {
@@ -2964,7 +2891,6 @@ mod tests {
 
         let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
-        // One SARIF result per import site
         assert_eq!(entries.len(), 2);
         assert_eq!(
             entries[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
@@ -2975,8 +2901,6 @@ mod tests {
             "src/b.ts"
         );
     }
-
-    // ── Empty unlisted dep (no import sites) produces zero results ──
 
     #[test]
     fn sarif_unlisted_dep_no_import_sites() {
@@ -2993,7 +2917,6 @@ mod tests {
 
         let sarif = build_sarif(&results, &root, &RulesConfig::default());
         let entries = sarif["runs"][0]["results"].as_array().unwrap();
-        // No import sites => no SARIF results for this unlisted dep
         assert!(entries.is_empty());
     }
 }

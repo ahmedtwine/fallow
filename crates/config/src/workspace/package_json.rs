@@ -92,12 +92,6 @@ impl PackageJson {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-        // Strip UTF-8 BOM if present (common in Windows-authored
-        // package.json files, and a deliberate vite test fixture).
-        // `parse_tsconfig_references` already does the same; without this
-        // symmetric step, a BOM-prefixed package.json surfaces as a
-        // false-positive `malformed-package-json` diagnostic on workspaces
-        // that pnpm/npm/yarn happily install.
         let content = content.trim_start_matches('\u{FEFF}');
         serde_json::from_str(content)
             .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
@@ -191,7 +185,6 @@ impl PackageJson {
             entries.push(source.clone());
         }
 
-        // Handle browser field (string or object with path values)
         if let Some(browser) = &self.browser {
             match browser {
                 serde_json::Value::String(s) => entries.push(s.clone()),
@@ -208,7 +201,6 @@ impl PackageJson {
             }
         }
 
-        // Handle bin field (string or object)
         if let Some(bin) = &self.bin {
             match bin {
                 serde_json::Value::String(s) => entries.push(s.clone()),
@@ -223,7 +215,6 @@ impl PackageJson {
             }
         }
 
-        // Handle exports field (recursive)
         if let Some(exports) = &self.exports {
             extract_exports_entries(exports, &mut entries);
         }
@@ -281,7 +272,6 @@ fn extract_exports_subdirectories(exports: &serde_json::Value) -> Vec<String> {
     let mut dirs = rustc_hash::FxHashSet::default();
 
     for key in map.keys() {
-        // Keys are like "./compat", "./hooks/client", "."
         let stripped = key.strip_prefix("./").unwrap_or(key);
         if let Some(first_segment) = stripped.split('/').next()
             && !first_segment.is_empty()
@@ -475,7 +465,6 @@ mod tests {
         )
         .unwrap();
         let entries = pkg.entry_points();
-        // "not-a-relative-path" doesn't start with "./" so should be excluded
         assert!(entries.is_empty());
     }
 
@@ -518,7 +507,6 @@ mod tests {
         .unwrap();
         let entries = pkg.entry_points();
         assert!(entries.contains(&"./browser.js".to_string()));
-        // non-relative paths and false values should be excluded
         assert_eq!(entries.len(), 1);
     }
 
@@ -646,8 +634,6 @@ mod tests {
         assert!(entries.contains(&"./dist/browser.mjs".to_string()));
     }
 
-    // ── Peer dependency names ───────────────────────────────────────
-
     #[test]
     fn package_json_peer_deps_only() {
         let pkg: PackageJson =
@@ -658,7 +644,6 @@ mod tests {
         assert!(all.contains(&"react".to_string()));
         assert!(all.contains(&"react-dom".to_string()));
 
-        // No production or dev deps
         assert!(pkg.production_dependency_names().is_empty());
         assert!(pkg.dev_dependency_names().is_empty());
     }
@@ -675,8 +660,6 @@ mod tests {
         assert_eq!(pkg.required_peer_dependency_names(), vec!["react"]);
     }
 
-    // ── Optional dependencies ───────────────────────────────────────
-
     #[test]
     fn package_json_optional_deps_in_all_names() {
         let pkg: PackageJson =
@@ -685,11 +668,8 @@ mod tests {
         assert!(all.contains(&"fsevents".to_string()));
     }
 
-    // ── Browser field edge cases ────────────────────────────────────
-
     #[test]
     fn package_json_browser_array_ignored() {
-        // Browser field as array is not supported -- should not crash
         let pkg: PackageJson =
             serde_json::from_str(r#"{"browser": ["./a.js", "./b.js"]}"#).unwrap();
         let entries = pkg.entry_points();
@@ -706,17 +686,12 @@ mod tests {
         )
         .unwrap();
         let entries = pkg.entry_points();
-        // false is not a string, "crypto" is not relative
-        // only "./browser-local.js" starts with "./"
         assert_eq!(entries.len(), 1);
         assert!(entries.contains(&"./browser-local.js".to_string()));
     }
 
-    // ── Exports field edge cases ────────────────────────────────────
-
     #[test]
     fn package_json_exports_null_value() {
-        // Some packages use null for subpath exclusions
         let pkg: PackageJson =
             serde_json::from_str(r#"{"exports": {".": "./dist/index.js", "./internal": null}}"#)
                 .unwrap();
@@ -732,11 +707,8 @@ mod tests {
         assert!(entries.is_empty());
     }
 
-    // ── Workspace patterns edge cases ───────────────────────────────
-
     #[test]
     fn package_json_workspace_patterns_string_value_ignored() {
-        // workspaces as a string is not a valid format
         let pkg: PackageJson = serde_json::from_str(r#"{"workspaces": "packages/*"}"#).unwrap();
         let patterns = pkg.workspace_patterns();
         assert!(patterns.is_empty());
@@ -749,8 +721,6 @@ mod tests {
         let patterns = pkg.workspace_patterns();
         assert!(patterns.is_empty());
     }
-
-    // ── Load from invalid JSON ──────────────────────────────────────
 
     #[test]
     fn package_json_load_invalid_json() {
@@ -767,8 +737,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    // ── Bin field with non-string value ─────────────────────────────
-
     #[test]
     fn package_json_bin_object_non_string_values_skipped() {
         let pkg: PackageJson =
@@ -777,8 +745,6 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries.contains(&"./bin/cli.js".to_string()));
     }
-
-    // ── Default trait ───────────────────────────────────────────────
 
     #[test]
     fn package_json_default() {
@@ -789,8 +755,6 @@ mod tests {
         assert!(pkg.all_dependency_names().is_empty());
         assert!(pkg.workspace_patterns().is_empty());
     }
-
-    // ── Exports subdirectories ─────────────────────────────────────
 
     #[test]
     fn exports_subdirectories_preact_style() {
@@ -826,7 +790,6 @@ mod tests {
         )
         .unwrap();
         let dirs = pkg.exports_subdirectories();
-        // dist, build, lib are skipped
         assert_eq!(dirs, vec!["compat"]);
     }
 

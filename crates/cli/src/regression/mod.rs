@@ -3,9 +3,6 @@ mod counts;
 mod outcome;
 mod tolerance;
 
-// Re-exports for the public library API (lib.rs). The binary target does not
-// use every re-exported symbol directly, so we suppress unused-import warnings
-// that only fire when this module is compiled as part of the bin crate.
 #[allow(unused_imports, reason = "re-exports for lib.rs public API")]
 pub use baseline::load_regression_baseline;
 pub use baseline::{

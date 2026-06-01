@@ -2,8 +2,6 @@ use fallow_types::extract::{ExportName, MemberKind};
 
 use crate::tests::parse_ts as parse_source;
 
-// ── Declaration extraction edge cases ────────────────────────────
-
 #[test]
 fn enum_with_string_values_extracts_members() {
     let info = parse_source(
@@ -44,7 +42,6 @@ fn enum_with_numeric_values_extracts_members() {
 
 #[test]
 fn enum_not_type_only() {
-    // Enums are runtime values, not type-only
     let info = parse_source("export enum Color { Red, Green, Blue }");
     assert_eq!(info.exports.len(), 1);
     assert!(!info.exports[0].is_type_only);
@@ -54,7 +51,6 @@ fn enum_not_type_only() {
 fn const_enum_not_type_only() {
     let info = parse_source("export const enum Direction { Up, Down }");
     assert_eq!(info.exports.len(), 1);
-    // const enums are still exported as values (unless isolated modules)
     assert!(!info.exports[0].is_type_only);
 }
 
@@ -81,7 +77,6 @@ fn abstract_class_with_concrete_members() {
         .iter()
         .map(|m| m.name.as_str())
         .collect();
-    // Abstract methods and concrete methods/properties are all tracked
     assert!(members.contains(&"doWork"));
     assert!(members.contains(&"getName"));
     assert!(members.contains(&"label"));
@@ -207,9 +202,6 @@ fn class_decorated_members_tracked() {
 
 #[test]
 fn class_decorator_path_shapes() {
-    // Exercise the five decorator AST shapes the visitor must handle: bare
-    // identifier, call expression, namespaced static-member, namespaced
-    // static-member call, and multi-level static-member chain. Issue #471.
     let info = parse_source(
         r"export class Demo {
             @Bare
@@ -422,12 +414,9 @@ fn ts_module_declaration_identifier() {
 #[test]
 fn ts_namespace_declaration() {
     let info = parse_source("export namespace Utils { export function helper() {} }");
-    // Only the namespace itself is a top-level export; inner exports become members
     assert_eq!(info.exports.len(), 1);
     assert_eq!(info.exports[0].name, ExportName::Named("Utils".to_string()));
-    // Runtime namespace (no `declare`) is NOT type-only
     assert!(!info.exports[0].is_type_only);
-    // Inner function extracted as namespace member
     assert_eq!(info.exports[0].members.len(), 1);
     assert_eq!(info.exports[0].members[0].name, "helper");
     assert_eq!(info.exports[0].members[0].kind, MemberKind::NamespaceMember);
@@ -478,10 +467,8 @@ fn ts_namespace_inner_exports_not_top_level() {
     let info = parse_source(
         "export namespace Ns { export function a() {} export class B {} export enum C {} }",
     );
-    // Only the namespace should be a top-level export
     assert_eq!(info.exports.len(), 1);
     assert_eq!(info.exports[0].name, ExportName::Named("Ns".to_string()));
-    // All inner declarations should be namespace members
     assert_eq!(info.exports[0].members.len(), 3);
 }
 
@@ -492,7 +479,6 @@ fn ts_nested_namespace() {
     );
     assert_eq!(info.exports.len(), 1);
     assert_eq!(info.exports[0].name, ExportName::Named("Outer".to_string()));
-    // Inner namespace and its contents are flattened into Outer's members
     assert_eq!(info.exports[0].members.len(), 2);
     let names: Vec<&str> = info.exports[0]
         .members
@@ -694,7 +680,6 @@ fn enum_empty() {
 
 #[test]
 fn enum_string_literal_member_name() {
-    // Enum members can use string literal keys
     let info = parse_source("export enum Weird { 'hello-world' = 1 }");
     assert_eq!(info.exports.len(), 1);
     assert_eq!(info.exports[0].members.len(), 1);
@@ -732,7 +717,6 @@ fn mixed_value_and_type_exports() {
 
 #[test]
 fn array_destructured_export_with_skip() {
-    // Skipping elements in array destructuring with holes
     let info = parse_source("export const [, second, , fourth] = arr;");
     assert_eq!(info.exports.len(), 2);
     assert_eq!(
@@ -778,7 +762,6 @@ fn export_local_name_matches_for_simple_declarations() {
 
 #[test]
 fn export_specifier_with_as_default() {
-    // `export { foo as default }` uses a named specifier with "default" as the exported name
     let info = parse_source("const foo = 1;\nexport { foo as default };");
     assert_eq!(info.exports.len(), 1);
     assert_eq!(
@@ -786,8 +769,6 @@ fn export_specifier_with_as_default() {
         ExportName::Named("default".to_string())
     );
 }
-
-// ── Class member extraction: static properties ──────────────
 
 #[test]
 fn class_static_property_tracked() {
@@ -817,8 +798,6 @@ fn class_static_property_tracked() {
         "Regular property should also be tracked"
     );
 }
-
-// ── Class member extraction: getter/setter kinds ────────────
 
 #[test]
 fn class_getter_setter_are_class_method_kind() {
@@ -853,8 +832,6 @@ fn class_getter_setter_are_class_method_kind() {
     assert_eq!(normal.kind, MemberKind::ClassMethod);
 }
 
-// ── Class member extraction: decorated property ─────────────
-
 #[test]
 fn class_decorated_property_with_column_decorator() {
     let info = parse_source(
@@ -886,8 +863,6 @@ fn class_decorated_property_with_column_decorator() {
     );
 }
 
-// ── Instance member tracking via new expression ─────────────
-
 #[test]
 fn instance_member_access_via_new_expression() {
     let info = parse_source(
@@ -912,8 +887,6 @@ fn instance_member_access_via_new_expression() {
     );
 }
 
-// ── Builtin constructor not tracked ─────────────────────────
-
 #[test]
 fn builtin_constructor_instance_not_tracked() {
     let info = parse_source(
@@ -931,8 +904,6 @@ fn builtin_constructor_instance_not_tracked() {
         "new URL() should not create instance binding for member tracking"
     );
 }
-
-// ── Class with mixed accessibility and decorators ───────────
 
 #[test]
 fn class_mixed_members_comprehensive() {
@@ -955,7 +926,6 @@ fn class_mixed_members_comprehensive() {
     let members = &info.exports[0].members;
     let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
 
-    // Public and static members included
     assert!(
         names.contains(&"version"),
         "Static property should be included"
@@ -973,7 +943,6 @@ fn class_mixed_members_comprehensive() {
         "Decorated public method should be included"
     );
 
-    // Private, protected, and constructor excluded
     assert!(
         !names.contains(&"db"),
         "Private property should be excluded"
@@ -995,7 +964,6 @@ fn class_mixed_members_comprehensive() {
         "Protected method should be excluded"
     );
 
-    // Decorator tracking
     let health_check = members.iter().find(|m| m.name == "healthCheck").unwrap();
     assert!(
         health_check.has_decorator,
@@ -1008,14 +976,8 @@ fn class_mixed_members_comprehensive() {
     );
 }
 
-// ── super.member access tracking ────────────────────────────
-
 #[test]
 fn super_method_access_attributed_to_parent_class() {
-    // `super.speak()` in a subclass is a use of the parent's `speak`.
-    // Must be recorded with `object` = the local `extends` identifier, so
-    // `local_to_imported` in unused-member analysis can map it to the
-    // parent's export name. See issue #130.
     let info = parse_source(
         r"import { Animal } from './animal';
         export class Dog extends Animal {
@@ -1033,7 +995,6 @@ fn super_method_access_attributed_to_parent_class() {
 
 #[test]
 fn super_property_access_attributed_to_parent_class() {
-    // Property access through `super` should also be credited to the parent.
     let info = parse_source(
         r"import { Base } from './base';
         export class Child extends Base {
@@ -1051,9 +1012,6 @@ fn super_property_access_attributed_to_parent_class() {
 
 #[test]
 fn super_access_same_file_parent_uses_local_name() {
-    // Parent class defined in the same file: the `extends` identifier is
-    // a local name, not an import. `find_unused_members` falls back to
-    // the raw object name when no import mapping exists.
     let info = parse_source(
         r"class Animal { speak(): string { return 'base'; } }
         export class Dog extends Animal {
@@ -1071,11 +1029,6 @@ fn super_access_same_file_parent_uses_local_name() {
 
 #[test]
 fn super_access_in_object_literal_method_is_dropped() {
-    // `super.X` inside an object literal method is syntactically valid JS
-    // (refers to the prototype chain). We cannot attribute it to a class,
-    // so it must be silently dropped. This exercises the `None` branch of
-    // the `class_super_stack.last()` guard: the object method is visited
-    // without any class frame on the stack.
     let info = parse_source(
         r"export const obj = {
             greet() { return super.toString(); }
@@ -1090,9 +1043,6 @@ fn super_access_in_object_literal_method_is_dropped() {
 
 #[test]
 fn super_access_respects_nested_class_boundary() {
-    // When a class expression is nested inside an outer class's method,
-    // `super` inside the INNER class must resolve to the INNER's parent,
-    // not the outer's. Tests the push/pop stack discipline.
     let info = parse_source(
         r"import { Outer } from './outer';
         import { Inner } from './inner';
@@ -1120,8 +1070,6 @@ fn super_access_respects_nested_class_boundary() {
         info.member_accesses
     );
 }
-
-// ── Static factory methods (issue #346) ─────────────────────
 
 #[test]
 fn static_factory_method_returning_new_this_is_flagged() {
@@ -1181,9 +1129,6 @@ fn static_factory_method_returning_new_same_class_name_is_flagged() {
 
 #[test]
 fn static_factory_method_returning_other_class_not_flagged() {
-    // `new SomeOther()` is not an instance of MyClass, so the static method
-    // must NOT be flagged as instance-returning. Conservative: only
-    // `new this()` or `new <SameClassName>()` qualifies.
     let info = parse_source(
         r"export class MyClass {
             static getBuilder() { return new Builder(); }
@@ -1207,8 +1152,6 @@ fn static_factory_method_returning_other_class_not_flagged() {
 
 #[test]
 fn instance_method_with_new_this_return_not_flagged() {
-    // The flag applies only to STATIC methods. An instance method returning
-    // `new this.constructor()` or similar is a different pattern out of scope.
     let info = parse_source(
         r"export class MyClass {
             clone() { return new this.constructor(); }
@@ -1232,10 +1175,6 @@ fn instance_method_with_new_this_return_not_flagged() {
 
 #[test]
 fn static_factory_binding_emits_sentinel_member_access() {
-    // Cross-file case: `MyClass` comes from an import, so `resolve_factory_call_candidates`
-    // takes the import-match branch and emits a sentinel binding the analyze
-    // layer decodes. The visitor surface check is that the sentinel access
-    // appears on `myInstance.getData()`.
     let info = parse_source(
         r"import { MyClass } from './my-class';
         const myInstance = MyClass.getInstance();
@@ -1256,11 +1195,6 @@ fn static_factory_binding_emits_sentinel_member_access() {
 
 #[test]
 fn static_factory_binding_same_file_emits_direct_access() {
-    // Same-file case: `MyClass` is a locally declared class with an
-    // instance-returning static method. `resolve_factory_call_candidates`
-    // takes the local-class branch and binds directly to `MyClass` instead
-    // of the sentinel. The visitor surface check is the direct
-    // `MemberAccess { object: "MyClass", member: "getData" }`.
     let info = parse_source(
         r"export class MyClass {
             static getInstance() { return new this(); }
@@ -1288,11 +1222,6 @@ fn static_factory_binding_same_file_emits_direct_access() {
 
 #[test]
 fn static_factory_with_early_guard_return_is_flagged() {
-    // `if (cond) return null;` is a top-level `IfStatement` (the nested
-    // `return null` lives inside the consequent block) so it does not count
-    // as a top-level qualifying return. The last top-level statement is
-    // `return new this()`, which IS the canonical factory shape, so the
-    // method must stay flagged as instance-returning.
     let info = parse_source(
         r"export class MyClass {
             static getInstance(cond: boolean) {
@@ -1319,10 +1248,6 @@ fn static_factory_with_early_guard_return_is_flagged() {
 
 #[test]
 fn static_method_returning_conditional_expression_is_not_flagged() {
-    // `return cond ? new this() : null;` returns a ConditionalExpression,
-    // not a bare NewExpression. The conservative detection requires the
-    // return argument to be a `new ...` directly, so this shape must NOT
-    // be flagged.
     let info = parse_source(
         r"export class MyClass {
             static maybe(cond: boolean) {
@@ -1348,8 +1273,6 @@ fn static_method_returning_conditional_expression_is_not_flagged() {
 
 #[test]
 fn factory_call_candidate_with_unknown_object_is_dropped() {
-    // `Math.floor()` is not a known import and not a local class. The
-    // visitor must not emit a sentinel-prefixed access for it.
     let info = parse_source(
         r"const n = Math.floor(1.5);
         n.toString();",

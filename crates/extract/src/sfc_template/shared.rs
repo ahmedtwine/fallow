@@ -196,10 +196,6 @@ pub(super) fn merge_component_tag_usage(
     allow_kebab_case: bool,
 ) {
     let tag_name = tag_name.trim();
-    // Note: no `imported_bindings.is_empty()` short-circuit. A file with zero
-    // imports can still reference framework convention auto-imports (a Nuxt page
-    // using only `<Card001 />`), so unmatched tags must reach the capture path
-    // below regardless of whether any imports exist. See issue #704.
     if tag_name.is_empty() {
         return;
     }
@@ -236,14 +232,6 @@ fn mark_binding_used(
         return;
     }
 
-    // No matching import and no local binding: a candidate for framework
-    // convention auto-import resolution. Only PascalCase names are component
-    // references (native HTML elements are lowercase), so capturing those keeps
-    // the candidate set tight. For kebab tags only the derived Pascal form lands
-    // here; the raw and camel forms are lowercase-first and skipped. The graph
-    // layer matches these against the active plugins' auto-import table and
-    // synthesizes an edge on a hit; non-matches resolve to nothing and are
-    // harmless. See issue #704.
     if binding
         .chars()
         .next()
@@ -546,8 +534,6 @@ fn valid_identifier(source: &str) -> Option<&str> {
         .then_some(source)
 }
 
-// ── Shared HTML tag attribute parser ─────────────────────────────
-
 /// A parsed HTML/SFC tag with its name, attributes, and self-closing status.
 #[derive(Debug)]
 pub(super) struct ParsedTag {
@@ -664,8 +650,6 @@ mod tests {
     };
     use crate::template_usage::TemplateUsage;
 
-    // --- extract_pattern_binding_names ---
-
     #[test]
     fn extracts_nested_object_pattern_bindings() {
         assert_eq!(
@@ -733,8 +717,6 @@ mod tests {
         assert_eq!(extract_pattern_binding_names("x = 42"), vec!["x"],);
     }
 
-    // --- merge_pattern_binding_usage ---
-
     #[test]
     fn pattern_usage_tracks_default_initializer_references() {
         let mut usage = TemplateUsage::default();
@@ -788,15 +770,12 @@ mod tests {
 
     #[test]
     fn pattern_usage_typed_destructure_does_not_infinite_recurse() {
-        // Regression: `{ id, name }: Item` caused infinite recursion via
-        // the same mechanism as extract_pattern_binding_names.
         let mut usage = TemplateUsage::default();
         let imported_bindings = FxHashSet::from_iter(["id".to_string(), "name".to_string()]);
 
         let locals =
             merge_pattern_binding_usage(&mut usage, "{ id, name }: Item", &imported_bindings, &[]);
 
-        // id and name become locals (shadowing imports)
         assert_eq!(locals.len(), 2);
         assert!(locals.contains(&"id".to_string()));
         assert!(locals.contains(&"name".to_string()));
@@ -814,8 +793,6 @@ mod tests {
         assert!(locals.contains(&"a".to_string()));
         assert!(locals.contains(&"b".to_string()));
     }
-
-    // --- merge_component_tag_usage ---
 
     #[test]
     fn component_tag_usage_marks_exact_binding_used() {
@@ -928,8 +905,6 @@ mod tests {
         assert!(usage.used_bindings.is_empty());
     }
 
-    // --- merge_expression_usage ---
-
     #[test]
     fn expression_usage_marks_imported_binding() {
         let mut usage = TemplateUsage::default();
@@ -939,8 +914,6 @@ mod tests {
 
         assert!(usage.used_bindings.contains("formatDate"));
     }
-
-    // --- merge_statement_usage ---
 
     #[test]
     fn statement_usage_marks_imported_binding() {
@@ -952,8 +925,6 @@ mod tests {
         assert!(usage.used_bindings.contains("doSomething"));
     }
 
-    // --- merge_expression_usage_allow_dollar_refs ---
-
     #[test]
     fn expression_usage_dollar_refs_resolves_store_binding() {
         let mut usage = TemplateUsage::default();
@@ -963,8 +934,6 @@ mod tests {
 
         assert!(usage.used_bindings.contains("count"));
     }
-
-    // --- merge_statement_usage_allow_dollar_refs ---
 
     #[test]
     fn statement_usage_dollar_refs_resolves_store_binding() {
@@ -980,8 +949,6 @@ mod tests {
 
         assert!(usage.used_bindings.contains("store"));
     }
-
-    // --- kebab_to_camel_case ---
 
     #[test]
     fn kebab_to_camel_basic() {
@@ -1021,8 +988,6 @@ mod tests {
         assert_eq!(kebab_to_camel_case(""), "");
     }
 
-    // --- uppercase_first ---
-
     #[test]
     fn uppercase_first_basic() {
         assert_eq!(uppercase_first("hello"), "Hello");
@@ -1042,8 +1007,6 @@ mod tests {
     fn uppercase_first_single_char() {
         assert_eq!(uppercase_first("a"), "A");
     }
-
-    // --- valid_identifier ---
 
     #[test]
     fn valid_identifier_simple() {
@@ -1085,8 +1048,6 @@ mod tests {
         assert_eq!(valid_identifier("my var"), None);
     }
 
-    // --- trim_outer_parens ---
-
     #[test]
     fn trim_parens_removes_outer() {
         assert_eq!(trim_outer_parens("(foo)"), "foo");
@@ -1112,8 +1073,6 @@ mod tests {
         assert_eq!(trim_outer_parens(""), "");
     }
 
-    // --- strip_wrapping ---
-
     #[test]
     fn strip_wrapping_curly() {
         assert_eq!(strip_wrapping("{ a, b }", '{', '}'), Some(" a, b "));
@@ -1133,8 +1092,6 @@ mod tests {
     fn strip_wrapping_mismatched() {
         assert_eq!(strip_wrapping("{a, b", '{', '}'), None);
     }
-
-    // --- strip_trailing_type_annotation ---
 
     #[test]
     fn strip_type_from_object_destructure() {
@@ -1182,10 +1139,6 @@ mod tests {
 
     #[test]
     fn extract_pattern_typed_tuple_param() {
-        // Regression: `{#snippet foo(x: [number, number])}` recursed forever
-        // because `x: [number, number]` contains a comma that `split_top_level`
-        // refused to split (depth=1 inside the tuple), yet the comma branch
-        // recursed with the same input.
         assert_eq!(
             extract_pattern_binding_names("x: [number, number]"),
             vec!["x"]
@@ -1199,8 +1152,6 @@ mod tests {
             vec!["a", "b"]
         );
     }
-
-    // --- split_top_level ---
 
     #[test]
     fn split_top_level_simple() {
@@ -1246,8 +1197,6 @@ mod tests {
     fn split_top_level_no_delimiter() {
         assert_eq!(split_top_level("abc", ','), vec!["abc"]);
     }
-
-    // --- split_top_level_once ---
 
     #[test]
     fn split_top_level_once_simple() {
@@ -1296,8 +1245,6 @@ mod tests {
         );
     }
 
-    // --- mark_binding_used edge cases ---
-
     #[test]
     fn component_tag_kebab_all_dashes_does_not_mark_empty() {
         let mut usage = TemplateUsage::default();
@@ -1305,7 +1252,6 @@ mod tests {
 
         merge_component_tag_usage(&mut usage, "---", &imported_bindings, &[], true);
 
-        // kebab_to_camel_case("---") returns "" which is empty, so no conversion marking
         assert!(usage.used_bindings.is_empty());
     }
 }

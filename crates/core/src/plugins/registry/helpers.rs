@@ -45,9 +45,7 @@ pub fn is_source_ext_root_pattern(pat: &str) -> bool {
     true
 }
 
-/// Prepare a config pattern for `globset::Glob`. Source-extension root-anchored
-/// patterns get a `**/` prefix so they match nested files (where Phase 3b's FS
-/// walk previously caught them); other patterns pass through unchanged.
+/// Prepare a config pattern for `globset::Glob`.
 #[must_use]
 pub fn prepare_config_pattern(pat: &str) -> Cow<'_, str> {
     if is_source_ext_root_pattern(pat) {
@@ -170,8 +168,6 @@ pub fn process_external_plugins(
                     .iter()
                     .map(|p| (PathRule::new(p.clone()), ext.name.clone())),
             );
-            // Track config patterns for introspection (not used for AST parsing —
-            // external plugins cannot do resolve_config())
             result.config_patterns.extend(ext.config_patterns.clone());
             result.always_used.extend(
                 ext.config_patterns
@@ -383,17 +379,12 @@ pub fn process_config_result(
 ) {
     let pname = plugin_name.to_string();
 
-    // Eager regex validation for user-authored patterns extracted by the
-    // plugin from the source config file. See #479.
     for rule in &mut plugin_result.entry_patterns {
         validate_path_rule_regexes(rule, plugin_name, config_path);
     }
     for rule in &mut plugin_result.used_exports {
         validate_path_rule_regexes(&mut rule.path, plugin_name, config_path);
     }
-    // When the config explicitly defines entry patterns or used-export rules,
-    // treat it as a full override of that plugin's static defaults instead of
-    // layering both sets together.
     if plugin_result.replace_entry_patterns && !plugin_result.entry_patterns.is_empty() {
         result.entry_patterns.retain(|(_, name)| name != &pname);
     }
@@ -478,7 +469,6 @@ pub fn check_plugin_detection(
     match detection {
         PluginDetection::Dependency { package } => all_deps.iter().any(|d| *d == package),
         PluginDetection::FileExists { pattern } => {
-            // Check against discovered files first (fast path)
             if let Ok(matcher) = globset::Glob::new(pattern).map(|g| g.compile_matcher()) {
                 for file in discovered_files {
                     let relative = file.strip_prefix(root).unwrap_or(file);
@@ -487,7 +477,6 @@ pub fn check_plugin_detection(
                     }
                 }
             }
-            // Fall back to glob on disk for non-source files (e.g., config files)
             let full_pattern = root.join(pattern).to_string_lossy().to_string();
             glob::glob(&full_pattern)
                 .ok()

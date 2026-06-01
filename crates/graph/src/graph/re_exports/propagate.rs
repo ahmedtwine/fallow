@@ -35,21 +35,12 @@ pub(in crate::graph) fn propagate_star_re_export(
     triggering_is_type_only: bool,
     synthetic_stubs: &mut FxHashSet<(FileId, String)>,
 ) -> bool {
-    // Entry point barrels with star re-exports: all source exports are
-    // transitively exposed to external consumers — mark them as used.
-    // Also applies to barrels that are themselves star-re-exported from an
-    // entry point (e.g., `types/index.ts` does `export * from 'Component.vue'`
-    // and the package entry does `export * from './types'`). Without this,
-    // types accessible only via multi-level star re-export chains get zero
-    // references and are falsely reported as unused.
     if modules[barrel_idx].is_entry_point()
         || entry_star_targets.contains(&modules[barrel_idx].file_id)
     {
         return propagate_entry_point_star(modules, barrel_id, source_idx);
     }
 
-    // Collect named imports that target the barrel using the pre-built reverse index.
-    // Previously this scanned ALL edges O(E) per call — now O(incoming edges to barrel).
     let barrel_file_id = modules[barrel_idx].file_id;
     let named_refs: Vec<(String, SymbolReference)> = edges_by_target
         .get(&barrel_file_id)
@@ -77,8 +68,6 @@ pub(in crate::graph) fn propagate_star_re_export(
         })
         .unwrap_or_default();
 
-    // Collect barrel exports with references: one entry per export (not per reference).
-    // Previously this was O(exports × refs) String allocations; now O(exports_with_refs).
     let barrel_refs: Vec<(String, Vec<SymbolReference>)> = modules[barrel_idx]
         .exports
         .iter()
@@ -86,16 +75,11 @@ pub(in crate::graph) fn propagate_star_re_export(
         .map(|e| (e.name.to_string(), e.references.clone()))
         .collect();
 
-    // Check if the source module itself has star re-exports (for multi-level chains).
-    // If so, we may need to create synthetic ExportSymbol entries on it so
-    // that the next iteration can propagate names further down the chain.
     let source_has_star_re_exports = modules[source_idx]
         .re_exports
         .iter()
         .any(|re| re.exported_name == "*");
 
-    // Group all references by name: combine named edge imports with barrel export refs.
-    // This looks up each export in the source at most once instead of per-reference.
     let mut refs_by_name: FxHashMap<String, Vec<SymbolReference>> = FxHashMap::default();
     for (name, ref_item) in named_refs {
         refs_by_name.entry(name).or_default().push(ref_item);
@@ -114,14 +98,6 @@ pub(in crate::graph) fn propagate_star_re_export(
             ExportName::Named(name.clone())
         };
         if let Some(export) = source.exports.iter_mut().find(|e| e.name == export_name) {
-            // Downgrade a synthetic type-only stub to value-only when a
-            // later value-bearing triggering edge reaches the same name.
-            // Real `export type Foo` declarations on the source are NOT
-            // tracked in `synthetic_stubs`, so they stay type-only.
-            // Without this, two star edges to the same source with
-            // conflicting `is_type_only` flags would freeze the stub at
-            // whatever flag the first-visited edge set, misclassifying
-            // the value-accessible variant under `find_unused_types`.
             if !triggering_is_type_only
                 && export.is_type_only
                 && synthetic_stubs.contains(&(source_id, name.clone()))
@@ -129,8 +105,6 @@ pub(in crate::graph) fn propagate_star_re_export(
                 export.is_type_only = false;
                 changed = true;
             }
-            // Use a HashSet for O(1) duplicate detection instead of O(n) linear scan.
-            // Reference lists grow across iterations, making the linear check quadratic.
             existing_files.clear();
             existing_files.extend(export.references.iter().map(|r| r.from_file));
             for ref_item in refs {
@@ -140,13 +114,6 @@ pub(in crate::graph) fn propagate_star_re_export(
                 }
             }
         } else if source_has_star_re_exports {
-            // The synthetic stub is a propagation bridge so the next
-            // iteration can carry references further down the chain.
-            // Read `is_type_only` from the triggering re-export edge so
-            // multi-hop `export type *` chains tag the stub correctly;
-            // without this, type-only star chains lose the flag at every
-            // synthesised hop, which previously misclassified some
-            // propagated entries under `find_unused_types`.
             source.exports.push(ExportSymbol {
                 name: export_name,
                 is_type_only: triggering_is_type_only,
@@ -172,7 +139,6 @@ fn propagate_entry_point_star(
     let mut changed = false;
     let source = &mut modules[source_idx];
     for export in &mut source.exports {
-        // `export *` does not re-export the default export per ES spec.
         if matches!(export.name, ExportName::Default) {
             continue;
         }
@@ -201,7 +167,6 @@ pub(in crate::graph) fn propagate_named_re_export(
     exported_name: &str,
     existing_refs: &mut FxHashSet<FileId>,
 ) -> bool {
-    // Find references to the exported name on the barrel
     let refs_on_barrel: Vec<SymbolReference> = modules[barrel_idx]
         .exports
         .iter()
@@ -210,16 +175,12 @@ pub(in crate::graph) fn propagate_named_re_export(
         .collect();
 
     if refs_on_barrel.is_empty() {
-        // Entry point barrels' re-exports are consumed externally (not
-        // tracked in the graph). Synthesize a ReExport reference so the
-        // source export is correctly marked as used.
         if modules[barrel_idx].is_entry_point() {
             return propagate_entry_point_named(modules, barrel_id, source_idx, imported_name);
         }
         return false;
     }
 
-    // Propagate to source module's export
     let mut changed = false;
     let source = &mut modules[source_idx];
     let target_exports: Vec<usize> = source

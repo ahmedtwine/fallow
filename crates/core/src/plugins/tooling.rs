@@ -115,8 +115,6 @@ pub fn is_known_tooling_dependency(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    // ── Prefix matching ──────────────────────────────────────────
-
     #[test]
     fn types_prefix_matches_scoped() {
         assert!(is_known_tooling_dependency("@types/node"));
@@ -126,14 +124,12 @@ mod tests {
 
     #[test]
     fn types_prefix_does_not_match_similar_names() {
-        // "type-fest" should NOT match "@types/" prefix
         assert!(!is_known_tooling_dependency("type-fest"));
         assert!(!is_known_tooling_dependency("typesafe-actions"));
     }
 
     #[test]
     fn storybook_not_blanket_matched() {
-        // @storybook/ and storybook prefixes removed — handled by StorybookPlugin config parsing
         assert!(!is_known_tooling_dependency("@storybook/react"));
         assert!(!is_known_tooling_dependency("@storybook/addon-essentials"));
         assert!(!is_known_tooling_dependency("storybook"));
@@ -147,7 +143,6 @@ mod tests {
 
     #[test]
     fn babel_not_blanket_matched() {
-        // @babel/ and babel- prefixes removed — handled by BabelPlugin config parsing
         assert!(!is_known_tooling_dependency("@babel/core"));
         assert!(!is_known_tooling_dependency("@babel/preset-env"));
         assert!(!is_known_tooling_dependency("babel-loader"));
@@ -162,7 +157,6 @@ mod tests {
 
     #[test]
     fn eslint_not_blanket_matched() {
-        // eslint and @typescript-eslint prefixes removed — handled by EslintPlugin config parsing
         assert!(!is_known_tooling_dependency("eslint"));
         assert!(!is_known_tooling_dependency("eslint-plugin-react"));
         assert!(!is_known_tooling_dependency("eslint-config-next"));
@@ -173,8 +167,6 @@ mod tests {
     fn biomejs_prefix_matches() {
         assert!(is_known_tooling_dependency("@biomejs/biome"));
     }
-
-    // ── Exact matching ───────────────────────────────────────────
 
     #[test]
     fn exact_typescript_matches() {
@@ -216,8 +208,6 @@ mod tests {
         assert!(is_known_tooling_dependency("turbo"));
     }
 
-    // ── Non-tooling dependencies ─────────────────────────────────
-
     #[test]
     fn common_runtime_deps_not_tooling() {
         assert!(!is_known_tooling_dependency("react"));
@@ -236,12 +226,9 @@ mod tests {
 
     #[test]
     fn near_miss_not_tooling() {
-        // These look similar to tooling but should NOT match
         assert!(!is_known_tooling_dependency("type-fest"));
         assert!(!is_known_tooling_dependency("typestyle"));
         assert!(!is_known_tooling_dependency("prettier-bytes")); // not the exact "prettier"
-        // "prettier" is an [[exact]] entry in tooling.toml, not a [[prefix]],
-        // so "prettier-bytes" does not match.
     }
 
     #[test]
@@ -252,11 +239,6 @@ mod tests {
 
     #[test]
     fn framework_plugin_packages_no_longer_exact_matched() {
-        // Issue #462: these 5 framework-plugin packages were removed from the
-        // catalogue. They are credited only when they actually appear in the
-        // parsed Vite / Prettier config (via the plugins' config parsers), so a
-        // declared-but-unused plugin now correctly surfaces as unused instead of
-        // being silently treated as used by an exact-name shadow match.
         assert!(!is_known_tooling_dependency("vite-plugin-svgr"));
         assert!(!is_known_tooling_dependency("vite-plugin-eslint"));
         assert!(!is_known_tooling_dependency("prettier-plugin-tailwindcss"));
@@ -267,8 +249,6 @@ mod tests {
             "@ianvs/prettier-plugin-sort-imports"
         ));
     }
-
-    // ── Additional prefix matching ────────────────────────────────
 
     #[test]
     fn electron_forge_prefix_matches() {
@@ -292,7 +272,6 @@ mod tests {
 
     #[test]
     fn rollup_not_blanket_matched() {
-        // @rollup/ prefix removed — handled by RollupPlugin config parsing
         assert!(!is_known_tooling_dependency("@rollup/plugin-commonjs"));
         assert!(!is_known_tooling_dependency("@rollup/plugin-node-resolve"));
         assert!(!is_known_tooling_dependency("@rollup/plugin-typescript"));
@@ -378,8 +357,6 @@ mod tests {
         assert!(is_known_tooling_dependency("@tapjs/test"));
         assert!(is_known_tooling_dependency("@tapjs/snapshot"));
     }
-
-    // ── Additional exact matching ─────────────────────────────────
 
     #[test]
     fn exact_tap_matches() {
@@ -470,11 +447,8 @@ mod tests {
         assert!(is_known_tooling_dependency("@swc/jest"));
     }
 
-    // ── Negative tests for near-misses ────────────────────────────
-
     #[test]
     fn runtime_deps_with_similar_names_not_tooling() {
-        // These are NOT tooling — they don't match any prefix or exact entry
         assert!(!is_known_tooling_dependency("react-scripts"));
         assert!(!is_known_tooling_dependency("express-validator"));
         assert!(!is_known_tooling_dependency("sass-loader")); // "sass" is exact, not prefix
@@ -482,8 +456,6 @@ mod tests {
 
     #[test]
     fn postcss_not_blanket_matched() {
-        // postcss, autoprefixer, tailwindcss, @tailwindcss prefixes removed —
-        // handled by PostCssPlugin and TailwindPlugin config parsing
         assert!(!is_known_tooling_dependency("postcss-modules"));
         assert!(!is_known_tooling_dependency("postcss-import"));
         assert!(!is_known_tooling_dependency("autoprefixer"));
@@ -493,7 +465,6 @@ mod tests {
 
     #[test]
     fn catalogue_is_deterministic() {
-        // The OnceLock-cached catalogue returns identical results across calls.
         assert_eq!(
             is_known_tooling_dependency("typescript"),
             is_known_tooling_dependency("typescript")
@@ -501,13 +472,8 @@ mod tests {
         assert!(is_known_tooling_dependency("typescript"));
     }
 
-    // ── Catalogue parse + schema guards (issue #462) ──────────────
-
     #[test]
     fn catalogue_parses() {
-        // The embedded TOML must parse and carry the canonical entries. Because
-        // the bytes are include_str!-embedded at compile time, this CI test
-        // passing == the released binary parses (no startup panic reachable).
         let cat = catalogue();
         assert!(!cat.prefixes.is_empty(), "catalogue must have prefixes");
         assert!(!cat.exact.is_empty(), "catalogue must have exact entries");
@@ -517,8 +483,6 @@ mod tests {
 
     #[test]
     fn catalogue_has_no_empty_or_whitespace_prefixes() {
-        // An empty / whitespace prefix would make `name.starts_with(p)` match
-        // EVERY package, silently disabling unused-dependency detection.
         for prefix in &catalogue().prefixes {
             assert!(
                 !prefix.trim().is_empty(),
@@ -529,8 +493,6 @@ mod tests {
 
     #[test]
     fn catalogue_has_no_duplicate_entries() {
-        // Re-parse from source so we can detect duplicates the FxHashSet would
-        // otherwise silently collapse.
         let parsed: ToolingCatalogue = toml::from_str(CATALOGUE_TOML).unwrap();
 
         let mut seen_exact = FxHashSet::default();
@@ -554,16 +516,8 @@ mod tests {
 
     #[test]
     fn catalogue_rejects_framework_plugin_exact_entries() {
-        // Framework-plugin packages (vite-plugin-*, prettier-plugin-*,
-        // eslint-plugin-*, @rollup/plugin-*) must NOT be exact catalogue
-        // entries: their config-parsing plugin credits them only when present
-        // in the config, so listing them here re-introduces the false negative
-        // issue #462 removed. Keep them out (use the plugin's config parser).
         let parsed: ToolingCatalogue = toml::from_str(CATALOGUE_TOML).unwrap();
         for entry in &parsed.exact {
-            // Bare name, plus the segment after a leading `@scope/`, so a scoped
-            // community plugin like `@ianvs/prettier-plugin-sort-imports` is
-            // caught by its `prettier-plugin-` tail.
             let tail = entry
                 .name
                 .strip_prefix('@')

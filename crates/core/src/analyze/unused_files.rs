@@ -39,19 +39,8 @@ pub fn find_unused_files(
         .filter(|m| !is_config_file(&m.path))
         .filter(|m| !is_html_file(&m.path))
         .filter(|m| !is_barrel_with_reachable_sources(m, graph))
-        // Safety net: don't report as unused if any reachable module imports this file.
-        // BFS reachability should already cover this, but this guard catches edge cases
-        // where import resolution or re-export chain propagation creates edges that BFS
-        // doesn't fully follow (e.g., path alias resolution inconsistencies).
         .filter(|m| !has_reachable_importer(m.file_id, graph))
-        // Don't report as unused if any export actually has references from reachable modules.
-        // Re-export chain propagation (Phase 4) can add references after BFS (Phase 3),
-        // so a file may have referenced exports despite being "unreachable" by BFS alone.
-        // References from other unreachable modules do not save a dead subtree.
         .filter(|m| !has_reachable_export_reference(m.file_id, graph))
-        // Guard against phantom files: don't report files that no longer exist on disk.
-        // This can happen if a file was deleted between discovery and analysis, or if
-        // a stale cache entry references a path that no longer exists.
         .filter(|m| m.path.exists())
         .filter(|m| !suppressions.is_file_suppressed(m.file_id, IssueKind::UnusedFile))
         .map(|m| UnusedFile {
@@ -150,19 +139,15 @@ mod tests {
         ModuleGraph::build(&resolved_modules, &entry_points, &files)
     }
 
-    // ---- has_reachable_importer tests ----
-
     #[test]
     fn has_reachable_importer_out_of_bounds_file_id() {
         let graph = build_graph(&[("/src/entry.ts", true)]);
-        // FileId 999 is out of bounds for reverse_deps
         assert!(!has_reachable_importer(FileId(999), &graph));
     }
 
     #[test]
     fn has_reachable_importer_empty_reverse_deps() {
         let graph = build_graph(&[("/src/entry.ts", true), ("/src/orphan.ts", false)]);
-        // orphan has no importers
         assert!(!has_reachable_importer(FileId(1), &graph));
     }
 
@@ -173,9 +158,6 @@ mod tests {
             ("/src/a.ts", false),
             ("/src/b.ts", false),
         ]);
-        // Both a and b are unreachable, so even if b imports a,
-        // b is not reachable so has_reachable_importer should be false for a
-        // In this test, there are no import edges so reverse_deps is empty for all
         assert!(!has_reachable_importer(FileId(1), &graph));
     }
 
@@ -231,8 +213,6 @@ mod tests {
         );
     }
 
-    // ---- find_unused_files tests ----
-
     #[test]
     fn find_unused_files_empty_graph() {
         let graph = build_graph(&[]);
@@ -273,7 +253,6 @@ mod tests {
 
     #[test]
     fn find_unused_files_skips_suppressed_files() {
-        // Create a temp file that exists on disk
         let dir = tempfile::tempdir().expect("create temp dir");
         let orphan_path = dir.path().join("orphan.ts");
         std::fs::write(&orphan_path, "export const unused = 1;").expect("write temp file");
@@ -316,7 +295,6 @@ mod tests {
             .collect();
         let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-        // Suppress unused-file for file 1
         let supps = vec![Suppression {
             line: 0,
             comment_line: 1,
@@ -335,7 +313,6 @@ mod tests {
     fn find_unused_files_skips_nonexistent_files() {
         let graph = build_graph(&[("/src/entry.ts", true), ("/nonexistent/phantom.ts", false)]);
         let result = find_unused_files(&graph, &SuppressionContext::empty());
-        // phantom.ts doesn't exist on disk, should not be reported
         assert!(
             !result
                 .iter()

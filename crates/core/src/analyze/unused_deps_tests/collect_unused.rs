@@ -1,7 +1,5 @@
 use super::helpers::*;
 
-// ---- collect_unused_for_category unit tests ----
-
 #[test]
 fn collect_unused_empty_deps_returns_empty() {
     let (pr, pt, su, id) = empty_shared_sets();
@@ -49,7 +47,7 @@ fn collect_unused_all_used_returns_empty() {
         deps,
         &category,
         &shared,
-        |_| true, // all used
+        |_| true,
         |_| Vec::new(),
         Path::new("/pkg.json"),
         None,
@@ -81,7 +79,7 @@ fn collect_unused_some_unused_are_flagged() {
         deps,
         &category,
         &shared,
-        |dep| dep == "react", // only react is used
+        |dep| dep == "react",
         |_| Vec::new(),
         Path::new("/project/package.json"),
         None,
@@ -105,7 +103,6 @@ fn collect_unused_implicit_filter_skips_react_dom() {
         script_used: &su,
         ignore_deps: &id,
     };
-    // With check_implicit = true, react-dom should be filtered out
     let category = DepCategoryConfig {
         location: DependencyLocation::Dependencies,
         check_implicit: true,
@@ -135,7 +132,6 @@ fn collect_unused_implicit_filter_disabled_keeps_react_dom() {
         script_used: &su,
         ignore_deps: &id,
     };
-    // With check_implicit = false (dev deps), react-dom is NOT filtered
     let category = DepCategoryConfig {
         location: DependencyLocation::DevDependencies,
         check_implicit: false,
@@ -200,7 +196,6 @@ fn collect_unused_plugin_tooling_filter() {
         script_used: &su,
         ignore_deps: &id,
     };
-    // check_plugin_tooling = true should filter "my-runtime"
     let category = DepCategoryConfig {
         location: DependencyLocation::Dependencies,
         check_implicit: false,
@@ -236,7 +231,6 @@ fn collect_unused_plugin_tooling_disabled_keeps_dep() {
         script_used: &su,
         ignore_deps: &id,
     };
-    // check_plugin_tooling = false (optional deps), "my-runtime" should NOT be filtered
     let category = DepCategoryConfig {
         location: DependencyLocation::OptionalDependencies,
         check_implicit: true,
@@ -256,8 +250,6 @@ fn collect_unused_plugin_tooling_disabled_keeps_dep() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].package_name, "my-runtime");
 }
-
-// ---- is_package_listed_for_file unit tests ----
 
 #[test]
 fn listed_in_root_deps() {
@@ -292,7 +284,6 @@ fn listed_in_workspace_deps() {
     let mut ws_deps = FxHashSet::default();
     ws_deps.insert("lodash".to_string());
     let ws_dep_map = vec![(PathBuf::from("/project/packages/app"), ws_deps)];
-    // File inside the workspace
     assert!(is_package_listed_for_file(
         Path::new("/project/packages/app/src/index.ts"),
         "lodash",
@@ -319,7 +310,6 @@ fn listed_in_different_workspace_not_matching() {
     let mut ws_deps = FxHashSet::default();
     ws_deps.insert("lodash".to_string());
     let ws_dep_map = vec![(PathBuf::from("/project/packages/lib"), ws_deps)];
-    // File in a different workspace
     assert!(!is_package_listed_for_file(
         Path::new("/project/packages/app/src/index.ts"),
         "lodash",
@@ -357,8 +347,6 @@ fn nested_workspace_uses_most_specific_manifest() {
     ));
 }
 
-// ---- find_import_location unit tests ----
-
 #[test]
 fn import_location_found() {
     let mut spans: FxHashMap<FileId, Vec<(&str, &str, u32)>> = FxHashMap::default();
@@ -367,7 +355,6 @@ fn import_location_found() {
         vec![("react", "react", 10), ("lodash", "lodash", 50)],
     );
     let line_offsets: LineOffsetsMap<'_> = FxHashMap::default();
-    // Without line offsets, falls back to (1, byte_offset) from byte_offset_to_line_col
     let (line, col) = find_import_location(&spans, &line_offsets, FileId(0), "lodash");
     assert_eq!(line, 1);
     assert_eq!(col, 50);

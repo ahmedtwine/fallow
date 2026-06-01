@@ -2,14 +2,6 @@ use super::common::{create_config, fixture_path};
 
 #[test]
 fn static_factory_method_credits_instance_members_across_files() {
-    // Issue #346: `MyClass.getInstance()` returns `new this()`, so members
-    // accessed on the call result must be credited to `MyClass`. Both the
-    // `new this()` and named-self (`return new Service()`) factory shapes
-    // are covered.
-    //
-    // Regression guard: `MyClass.unusedHelper` is never consumed; it must
-    // remain flagged. This proves the fix does not over-credit every member
-    // of a class once one factory call has been observed.
     let root = fixture_path("issue-346-static-factory-method");
     let mut config = create_config(root);
     config.rules.unused_class_members = fallow_config::Severity::Error;

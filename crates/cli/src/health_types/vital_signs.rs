@@ -201,7 +201,6 @@ mod tests {
         assert!((deserialized.avg_cyclomatic - 4.7).abs() < f64::EPSILON);
         assert_eq!(deserialized.p90_cyclomatic, 12);
         assert_eq!(deserialized.hotspot_count, Some(5));
-        // duplication_pct should be absent in JSON and None after deser
         assert!(!json.contains("duplication_pct"));
         assert!(deserialized.duplication_pct.is_none());
     }
@@ -295,7 +294,6 @@ mod tests {
         assert!(!json.contains("maintainability_avg"));
         assert!(!json.contains("unused_dep_count"));
         assert!(!json.contains("circular_dep_count"));
-        // Required fields always present
         assert!(json.contains("avg_cyclomatic"));
         assert!(json.contains("p90_cyclomatic"));
     }
@@ -307,7 +305,6 @@ mod tests {
 
     #[test]
     fn snapshot_v1_deserializes_with_default_score_and_grade() {
-        // A v1 snapshot without score/grade fields must still deserialize
         let json = r#"{
             "snapshot_schema_version": 1,
             "version": "1.5.0",

@@ -17,7 +17,6 @@ fn stale_next_line_suppression_on_used_export() {
         .filter(|s| matches!(&s.origin, SuppressionOrigin::Comment { .. }))
         .collect();
 
-    // usedHelper has `// fallow-ignore-next-line unused-export` but IS used
     assert!(
         stale_comments
             .iter()
@@ -34,8 +33,6 @@ fn active_suppression_not_reported_stale() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // unusedHelper has `// fallow-ignore-next-line unused-export` and IS unused
-    // Its suppression should NOT be stale
     let stale_for_unused_helper = results.stale_suppressions.iter().any(|s| {
         s.path.ends_with("utils.ts") && s.line == 6 // comment_line of the suppression for unusedHelper
     });
@@ -52,7 +49,6 @@ fn stale_blanket_suppression() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // anotherUsedExport has a blanket `// fallow-ignore-next-line` but no issues on next line
     let stale_blanket = results.stale_suppressions.iter().any(|s| {
         s.path.ends_with("utils.ts")
             && matches!(
@@ -76,7 +72,6 @@ fn stale_file_level_suppression() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // file-level.ts has `// fallow-ignore-file unused-file` but the file IS reachable
     let stale_file_level = results.stale_suppressions.iter().any(|s| {
         s.path.ends_with("file-level.ts")
             && matches!(
@@ -101,7 +96,6 @@ fn expected_unused_tag_stale_when_used() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // usedExport has @expected-unused but IS used by index.ts
     let stale_tag = results.stale_suppressions.iter().any(|s| {
         s.path.ends_with("expected-unused.ts")
             && matches!(
@@ -122,7 +116,6 @@ fn expected_unused_tag_not_stale_when_unused() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // genuinelyUnused has @expected-unused and IS unused (tag is working)
     let stale_for_genuinely_unused = results.stale_suppressions.iter().any(|s| {
         s.path.ends_with("expected-unused.ts")
             && matches!(
@@ -143,7 +136,6 @@ fn expected_unused_not_in_unused_exports() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Neither @expected-unused export should appear in unused_exports
     let expected_unused_in_results: Vec<_> = results
         .unused_exports
         .iter()
@@ -162,13 +154,6 @@ fn total_stale_suppressions_count() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // At least 4 specific findings MUST fire on this fixture (each also
-    // covered by a dedicated test above): next-line on usedHelper,
-    // blanket on anotherUsedExport, file-level unused-file on
-    // file-level.ts, and @expected-unused on usedExport. A `>=` allows
-    // future fixture extensions without breaking this test; the
-    // individual presence assertions above guarantee no expected
-    // finding is silently dropped.
     assert!(
         results.stale_suppressions.len() >= 4,
         "Expected at least 4 stale suppressions on this fixture; found {}: {:?}",
@@ -180,8 +165,6 @@ fn total_stale_suppressions_count() {
             .collect::<Vec<_>>()
     );
 }
-
-// ── Issue #449: partial-accept for unknown kinds ────────────────
 
 #[test]
 fn issue_449_known_kind_suppresses_alongside_unknown_token() {
@@ -225,7 +208,6 @@ fn issue_449_unknown_token_surfaces_as_stale_with_kind_known_false() {
         })
         .collect();
 
-    // Expect two unknown-kind diagnostics: `complexity-typo` and `typo-only`.
     let tokens: Vec<String> = unknown_findings
         .iter()
         .filter_map(|s| match &s.origin {
@@ -306,8 +288,6 @@ fn issue_449_close_typo_explanation_includes_levenshtein_hint() {
     );
 }
 
-// ── Issue #482: suppressions for OFF-severity rules are not stale ────────────
-
 /// utils.ts in the stale-suppressions fixture has
 /// `// fallow-ignore-next-line unused-export` on the USED export `usedHelper`.
 /// Today (rule ON) this surfaces as stale because the detector runs, the
@@ -353,9 +333,6 @@ fn blanket_marker_still_stale_when_other_kinds_off() {
     });
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // utils.ts line 11 is the blanket `// fallow-ignore-next-line` above
-    // anotherUsedExport. With unused-exports OFF AND no other rule firing
-    // on that line, the blanket marker is still stale.
     let stale_blanket = results.stale_suppressions.iter().any(|s| {
         s.path.ends_with("utils.ts")
             && matches!(
@@ -411,9 +388,6 @@ fn stale_respects_per_file_override_off() {
         results.stale_suppressions
     );
 
-    // file-level.ts is NOT covered by the override; its `unused-file`
-    // suppression keeps surfacing as stale (file IS reachable). Confirms
-    // the override is scoped, not global.
     let stale_for_file_level = results.stale_suppressions.iter().any(|s| {
         s.path.ends_with("file-level.ts")
             && matches!(

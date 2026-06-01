@@ -99,7 +99,6 @@ fn detects_boundary_violation() {
     let config = create_boundary_config(root, boundaries);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Should find exactly 1 boundary violation: ui/App.ts -> db/query.ts
     assert_eq!(
         results.boundary_violations.len(),
         1,
@@ -140,7 +139,6 @@ fn no_violations_when_boundaries_disabled() {
     let config = super::common::create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Default config has no boundaries configured, so no violations
     assert!(
         results.boundary_violations.is_empty(),
         "no boundary violations expected with default config"
@@ -227,8 +225,6 @@ fn preset_detects_boundary_violation() {
         zones: vec![],
         rules: vec![],
     };
-    // Use explicit entry point matching the preset fixture (not the shared helper
-    // which hardcodes src/ui/App.ts for the boundary-violations fixture).
     let config = FallowConfig {
         schema: None,
         extends: vec![],
@@ -270,8 +266,6 @@ fn preset_detects_boundary_violation() {
     .resolve(root, OutputFormat::Human, 4, true, true, None);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // adapters/http.ts imports domain/user.ts directly — that's a violation
-    // (adapters may only import from ports)
     assert_eq!(
         results.boundary_violations.len(),
         1,
@@ -367,9 +361,6 @@ fn root_field_classifies_per_subtree() {
     .resolve(root, OutputFormat::Human, 4, true, true, None);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Same flat pattern `src/**` is disambiguated by `root`: ui matches
-    // packages/app/src/login.tsx, domain matches packages/core/src/order.ts.
-    // The deny rule on "ui" fires on the cross-zone import.
     assert_eq!(
         results.boundary_violations.len(),
         1,
@@ -412,14 +403,8 @@ fn root_field_classifies_per_subtree() {
 
 #[test]
 fn root_field_genuinely_disambiguates_flat_patterns() {
-    // Without `root`, the flat patterns `src/**` would match BOTH files
-    // and the first zone (`ui`) would steal both. With `root` the two
-    // zones partition the subtrees correctly.
     let root = fixture_path("boundary-root");
 
-    // Without root: flat `packages/*/src/**` collapses to a single zone
-    // because "ui" matches first for both files. No violation possible
-    // since the importer and target end up in the same zone.
     let flat_boundaries = BoundaryConfig {
         preset: None,
         zones: vec![BoundaryZone {
@@ -479,7 +464,6 @@ fn root_field_genuinely_disambiguates_flat_patterns() {
         "without root, both files share the same zone so self-imports are allowed"
     );
 
-    // With root: same internal pattern `src/**` partitions cleanly.
     let scoped_boundaries = BoundaryConfig {
         preset: None,
         zones: vec![
@@ -676,8 +660,6 @@ fn bulletproof_preset_detects_violation() {
     .resolve(root, OutputFormat::Human, 4, true, true, None);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // features/auth/login.ts imports from app/page.ts — features zone cannot
-    // import from app zone (only shared and server are allowed).
     assert_eq!(
         results.boundary_violations.len(),
         1,
@@ -819,8 +801,6 @@ fn bulletproof_top_level_features_file_is_strict_without_barrel_false_positive()
     );
 }
 
-// ── allowTypeOnly escape hatch (issue #365) ─────────────────────────
-
 /// Build a ui/db/shared boundary config for the boundary-type-only
 /// fixture. `allow_type_only_db` is the list of zones the `ui` rule
 /// admits type-only imports from. Both `ui` and `db` already allow
@@ -894,13 +874,6 @@ fn allow_type_only_admits_whole_decl_inline_and_namespace_type_imports() {
 
     let from_paths = collect_violation_from_paths(&results, &root);
 
-    // value.ts: plain value import -> violation
-    // mixed.ts: mixed specifiers (at least one value) -> violation
-    // side_effect.ts: side-effect import -> violation
-    // sibling_imports.ts: type-only AND value import to the same target,
-    //   edge is mixed -> violation
-    // type_only.ts, inline_type.ts, namespace_type.ts, type_reexport.ts:
-    //   all-type-only -> allowed (re-export edges carry is_type_only too).
     let expected: std::collections::BTreeSet<String> = [
         "src/ui/value.ts",
         "src/ui/mixed.ts",
@@ -920,14 +893,6 @@ fn allow_type_only_admits_whole_decl_inline_and_namespace_type_imports() {
 
 #[test]
 fn mixed_edge_violation_anchors_on_the_value_import_line_not_the_type_only_one() {
-    // sibling_imports.ts has two import statements to ../db/runtime:
-    //   `import type { Query } from '../db/runtime';`  (type-only)
-    //   `import { runQuery } from '../db/runtime';`    (value)
-    // Fallow groups these into ONE edge with two ImportedSymbols.
-    // The boundary violation must anchor on the runtime import line so
-    // that a `// fallow-ignore-next-line` placed above the runtime import
-    // works AND the user is pointed at the line that carries the real
-    // runtime dependency, not the (erased) type-only one.
     let root = fixture_path("boundary-type-only");
     let boundaries = type_only_boundaries(vec!["db".to_string()]);
     let config = create_boundary_config_with_entry(root.clone(), boundaries, "src/ui/App.ts");
@@ -945,8 +910,6 @@ fn mixed_edge_violation_anchors_on_the_value_import_line_not_the_type_only_one()
         })
         .expect("sibling_imports.ts must produce a violation");
 
-    // Read the fixture and find the value-import line number dynamically;
-    // this is robust against future header-comment edits to the file.
     let source = std::fs::read_to_string(root.join("src/ui/sibling_imports.ts"))
         .expect("fixture must exist");
     let value_line = source
@@ -979,7 +942,6 @@ fn empty_allow_type_only_flags_every_cross_zone_import() {
 
     let from_paths = collect_violation_from_paths(&results, &root);
 
-    // With empty allowTypeOnly, every ui -> db importer fires.
     let expected: std::collections::BTreeSet<String> = [
         "src/ui/type_only.ts",
         "src/ui/inline_type.ts",
@@ -1004,14 +966,12 @@ fn empty_allow_type_only_flags_every_cross_zone_import() {
 #[test]
 fn allow_type_only_with_unlisted_zone_does_not_admit_db_imports() {
     let root = fixture_path("boundary-type-only");
-    // allowTypeOnly references some other zone, not db.
     let boundaries = type_only_boundaries(vec!["sandbox".to_string()]);
     let config = create_boundary_config_with_entry(root.clone(), boundaries, "src/ui/App.ts");
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
     let from_paths = collect_violation_from_paths(&results, &root);
 
-    // db is not in allowTypeOnly, so every ui -> db importer fires.
     let expected: std::collections::BTreeSet<String> = [
         "src/ui/type_only.ts",
         "src/ui/inline_type.ts",
@@ -1034,10 +994,6 @@ fn allow_type_only_with_unlisted_zone_does_not_admit_db_imports() {
 
 #[test]
 fn allow_type_only_admits_type_only_re_exports() {
-    // Re-exports flow through boundary edges (`build.rs` adds them as
-    // SideEffect symbols carrying the re-export's `is_type_only` flag).
-    // A type-only re-export is therefore as erased at compile time as a
-    // direct `import type`, and allowTypeOnly admits it the same way.
     let root = fixture_path("boundary-type-only");
     let boundaries = type_only_boundaries(vec!["db".to_string()]);
     let config = create_boundary_config_with_entry(root.clone(), boundaries, "src/ui/App.ts");

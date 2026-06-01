@@ -4,7 +4,6 @@ use super::*;
 fn tokenize_variable_declaration() {
     let tokens = tokenize("const x = 42;");
     assert!(!tokens.is_empty());
-    // Should have: const, x (identifier), = (assign), 42 (numeric), ;
     assert!(matches!(
         tokens[0].kind,
         TokenKind::Keyword(KeywordType::Const)
@@ -107,7 +106,6 @@ fn tokenize_ts_interface() {
         .iter()
         .any(|t| matches!(&t.kind, TokenKind::Identifier(name) if name == "string"));
     assert!(has_string, "Should contain type 'string'");
-    // Should have enough tokens for clone detection
     assert!(
         tokens.len() >= 10,
         "Interface should produce sufficient tokens, got {}",
@@ -166,8 +164,6 @@ fn tokenize_jsx_element() {
     );
 }
 
-// -- File type dispatch tests --
-
 #[test]
 fn tokenize_vue_sfc_extracts_script_block() {
     let vue_source = r#"<template><div>Hello</div></template>
@@ -224,10 +220,7 @@ fn tokenize_vue_sfc_adjusts_span_offsets() {
     let vue_source = "<template><div/></template>\n<script>\nconst x = 1;\n</script>";
     let path = PathBuf::from("Test.vue");
     let result = tokenize_file(&path, vue_source, false);
-    // The script body starts after "<template><div/></template>\n<script>\n"
     let script_body_offset = vue_source.find("const x").unwrap() as u32;
-    // All token spans should reference positions in the full SFC source,
-    // not positions within the extracted script body.
     for token in &result.tokens {
         assert!(
             token.span.start >= script_body_offset,
@@ -235,7 +228,6 @@ fn tokenize_vue_sfc_adjusts_span_offsets() {
             token.span.start,
             script_body_offset
         );
-        // Verify span text is recoverable from the full source
         let text = &vue_source[token.span.start as usize..token.span.end as usize];
         assert!(
             !text.is_empty(),
@@ -277,7 +269,6 @@ fn tokenize_astro_adjusts_span_offsets() {
     let path = PathBuf::from("page.astro");
     let result = tokenize_file(&path, astro_source, false);
     assert!(!result.tokens.is_empty());
-    // "---\n" is 4 bytes — spans should be offset from there
     for token in &result.tokens {
         assert!(
             token.span.start >= 4,
@@ -342,8 +333,6 @@ fn tokenize_scss_returns_empty() {
     );
 }
 
-// -- Line count and FileTokens metadata --
-
 #[test]
 fn file_tokens_line_count_matches_source() {
     let source = "const x = 1;\nconst y = 2;\nconst z = 3;";
@@ -359,8 +348,6 @@ fn file_tokens_line_count_minimum_is_one() {
     let result = tokenize_file(&path, "", false);
     assert_eq!(result.line_count, 1, "Empty file should have line_count 1");
 }
-
-// -- JSX fallback retry path --
 
 #[test]
 fn js_file_with_jsx_retries_as_jsx() {

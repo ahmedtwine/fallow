@@ -1,25 +1,4 @@
-//! Fallow Impact: a local, opt-in value report.
-//!
-//! Impact answers "what did fallow do for you?" rather than "what is wrong now?".
-//! v1 is deliberately thin and honest. It renders three things:
-//!
-//! 1. Surfacing: how many issues fallow is currently showing you.
-//! 2. Trend: whether the issue count is moving the right way between recorded runs.
-//! 3. Containment: how many times a pre-commit gate run blocked then cleared.
-//!
-//! Everything lives locally in a single rolling file at `.fallow/impact.json`
-//! (gitignored). Writes are best-effort and NEVER affect the exit code of any
-//! command: a corrupt or unwritable store degrades to "no history", never an
-//! error.
-//!
-//! v1.5 adds per-finding attribution on top: it credits genuinely RESOLVED
-//! findings (code removed or refactored) and never counts a `fallow-ignore`
-//! suppression as a win. It tells the two apart by capturing the present
-//! suppression state each run and diffing a per-file frontier against the files
-//! audit re-analyzed; a finding that merely moved (within a file, or to another
-//! file even across separate commits) is not counted as resolved. Attribution is
-//! a local-developer signal: it accrues where `.fallow/impact.json` persists
-//! across runs, not in ephemeral CI runners.
+//! Fallow Impact: local, opt-in value reporting.
 
 use std::path::{Path, PathBuf};
 
@@ -31,50 +10,22 @@ use crate::audit::{AuditSummary, AuditVerdict};
 use crate::report::ci::fingerprint::fingerprint_hash;
 use crate::report::format_display_path;
 
-/// On-disk schema version for the rolling impact store. Distinct from the JSON
-/// report's wire version ([`ImpactReportSchemaVersion`]): the store's persisted
-/// shape and the `--format json` report's shape evolve independently. v2 added
-/// the per-finding attribution surface (file frontier, clone frontier,
-/// resolved/suppressed counters, recent resolutions). A v1 store reads forward
-/// cleanly (new fields default empty; attribution accrues from the next run). A
-/// v2 store is also safe to READ on an older v1 binary (unknown keys ignored);
-/// the only caveat is DOWNGRADE: an older v1 binary that records a run rewrites
-/// the store with only the v1 fields, silently dropping the frontier and the
-/// lifetime counters, after which the next v2 run re-seeds from empty.
-/// Attribution restarts, it does not corrupt.
 const STORE_SCHEMA_VERSION: u32 = 2;
 
-/// Upper bound on retained per-run records. The store is a single compacted file,
-/// so this only bounds memory/disk, not file count. Oldest records are dropped first.
 const MAX_RECORDS: usize = 200;
 
-/// Upper bound on retained containment events (oldest dropped first).
 const MAX_CONTAINMENT: usize = 200;
 
-/// Tolerance (in absolute issue count) at or below which a trend is "stable"
-/// rather than improving/declining. Zero means any nonzero delta (even a single
-/// finding) registers as a direction; raise it to suppress single-finding noise.
 const TREND_TOLERANCE: i64 = 0;
 
-/// File name of the rolling impact store inside `.fallow/`.
 const STORE_FILE: &str = "impact.json";
 
-/// Upper bound on retained recent-resolution events (oldest dropped first).
-/// Bounds the one growing list the v1.5 surface adds; the lifetime totals are
-/// scalar counters and the frontier maps are pruned to on-disk files each run.
 const MAX_RECENT_RESOLVED: usize = 50;
 
-/// Field separator for composing a stable, line-independent finding identity
-/// out of `(kind, path, symbol)` parts before hashing. ASCII unit separator so
-/// it cannot collide with any path, symbol, or kind character.
 const ID_SEP: &str = "\u{1f}";
 
-/// The kebab-case kind string for duplication findings, used both as the
-/// clone-frontier finding kind and as the suppression kind that silences them.
 const CODE_DUPLICATION_KIND: &str = "code-duplication";
 
-/// Sentinel a blanket suppression (`// fallow-ignore-*` with no kind) is stored
-/// under, since it covers every kind on its target.
 const BLANKET_SUPPRESSION: &str = "*";
 
 /// Per-category issue counts captured at a recorded run.
@@ -99,9 +50,6 @@ impl ImpactCounts {
         }
     }
 
-    /// Build counts from a whole-project combined run's per-analysis totals.
-    /// Unlike [`from_summary`](Self::from_summary) (changed-file scope), these
-    /// are whole-project totals.
     pub(crate) fn from_combined(dead_code: usize, complexity: usize, duplication: usize) -> Self {
         Self {
             total_issues: dead_code + complexity + duplication,
@@ -112,22 +60,18 @@ impl ImpactCounts {
     }
 }
 
-/// One recorded audit run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImpactRecord {
     pub timestamp: String,
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_sha: Option<String>,
-    /// "pass" | "warn" | "fail".
     pub verdict: String,
-    /// Whether this run was the pre-commit gate (carried the gate marker).
     #[serde(default)]
     pub gate: bool,
     pub counts: ImpactCounts,
 }
 
-/// A pre-commit gate run that blocked (verdict fail) and is awaiting a clean run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingContainment {
     pub blocked_at: String,
@@ -136,7 +80,6 @@ pub struct PendingContainment {
     pub blocked_counts: ImpactCounts,
 }
 
-/// A blocked-then-cleared containment: fallow stopped a commit until it was fixed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ContainmentEvent {
@@ -147,12 +90,6 @@ pub struct ContainmentEvent {
     pub blocked_counts: ImpactCounts,
 }
 
-/// One recorded finding's line-independent identity inside a [`FileFrontier`].
-///
-/// The `id` is a stable hash of `(kind, path, symbol)` so a finding that moves
-/// up or down within its file keeps the same identity (line is excluded). The
-/// `kind` and `symbol` are retained so the cross-file move-key can be recomputed
-/// and a resolution event can name the finding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrontierFinding {
     pub id: String,
@@ -162,11 +99,6 @@ pub struct FrontierFinding {
 }
 
 impl FrontierFinding {
-    /// Path-independent key used to cancel within-run moves: a finding that
-    /// disappears from one file and reappears (same kind + symbol) in another
-    /// file analyzed the same run is a move, not a resolution. Symbol-less
-    /// findings (e.g. `unused-file`) fall back to the full `id`, so they never
-    /// spuriously cancel across files.
     fn move_key(&self) -> String {
         match &self.symbol {
             Some(symbol) => format!("{}{ID_SEP}{symbol}", self.kind),
@@ -175,94 +107,60 @@ impl FrontierFinding {
     }
 }
 
-/// The last-known per-finding state of one file: the findings it carried and the
-/// suppression kinds present in it, captured the last time audit re-analyzed it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileFrontier {
     #[serde(default)]
     pub findings: Vec<FrontierFinding>,
-    /// Suppression kinds present in the file (kebab-case, or `"*"` for a blanket
-    /// marker). Used to detect a `fallow-ignore` that newly appeared covering a
-    /// disappeared finding's kind.
     #[serde(default)]
     pub suppressions: Vec<String>,
 }
 
-/// A genuinely-resolved finding, recorded for the recent-resolutions display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResolutionEvent {
-    /// The resolved finding's kind, kebab-case (e.g. `"unused-export"`).
     pub kind: String,
-    /// Workspace-relative, forward-slash path of the file the finding was in.
     pub path: String,
-    /// The finding's symbol (export / member / dependency name), when it has
-    /// one. `None` for file-level and content-hash-keyed findings (duplication).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
-    /// Short git SHA of the run that recorded the resolution, when in a git repo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_sha: Option<String>,
-    /// ISO-8601 timestamp of the recording run.
     pub timestamp: String,
 }
 
-/// The rolling impact store, persisted to `.fallow/impact.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImpactStore {
     #[serde(default)]
     pub schema_version: u32,
-    /// Whether the user has opted in via `fallow impact enable`.
     #[serde(default)]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_recorded: Option<String>,
     #[serde(default)]
     pub records: Vec<ImpactRecord>,
-    /// Whole-project records appended by a true full `fallow` run (dead code,
-    /// duplication, and complexity together, with no scope narrowing). Kept
-    /// separate from `records` so the changed-file (audit) trend and the
-    /// whole-project trend never share a series. v1.6.
     #[serde(default)]
     pub project_records: Vec<ImpactRecord>,
     #[serde(default)]
     pub containment: Vec<ContainmentEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_containment: Option<PendingContainment>,
-    /// Per-file last-known finding + suppression state (dead-code and complexity
-    /// findings). Diffed each run for the files audit re-analyzed; entries for
-    /// files no longer on disk are pruned. v1.5.
     #[serde(default)]
     pub frontier: FxHashMap<String, FileFrontier>,
-    /// Clone-group state keyed by content fingerprint (`dup:<hash>`), value is
-    /// the workspace-relative instance paths. Duplication is multi-file, so it
-    /// needs a fingerprint-keyed frontier rather than the per-file one. v1.5.
     #[serde(default)]
     pub clone_frontier: FxHashMap<String, Vec<String>>,
-    /// Lifetime count of findings fallow credits as genuinely resolved. v1.5.
     #[serde(default)]
     pub resolved_total: usize,
-    /// Lifetime count of findings silenced by a newly-added `fallow-ignore`
-    /// (never counted as resolved). v1.5.
     #[serde(default)]
     pub suppressed_total: usize,
-    /// Most recent resolution events (newest last), bounded by the
-    /// `MAX_RECENT_RESOLVED` cap. v1.5.
     #[serde(default)]
     pub recent_resolved: Vec<ResolutionEvent>,
 }
 
-/// Path to the rolling store for a project root.
 fn store_path(root: &Path) -> PathBuf {
     root.join(".fallow").join(STORE_FILE)
 }
 
-/// Load the store. A missing file is the normal "not enabled yet" case and
-/// returns a default silently. A present-but-unparsable file is surfaced with
-/// a one-line warning (rather than silently disabling tracking) and then
-/// degrades to a default; the corrupt file is left on disk untouched, and
-/// because [`record_audit_run`] no-ops on a disabled store it is never
-/// overwritten, so re-running `fallow impact enable` is a deliberate reset.
+/// Load the store. Missing or unreadable files fall back to defaults; unreadable
+/// files are warned about rather than silently disabling tracking.
 pub fn load(root: &Path) -> ImpactStore {
     let path = store_path(root);
     let Ok(content) = std::fs::read_to_string(&path) else {
@@ -290,12 +188,7 @@ pub fn load(root: &Path) -> ImpactStore {
     }
 }
 
-/// Persist the store, best-effort. Uses `atomic_write` (tempfile + rename) so a
-/// crash or a concurrent writer can never leave a torn, half-written file that
-/// the next `load` would treat as corrupt and silently disable. Errors are
-/// swallowed: Impact must never affect the exit code or output of the command
-/// that triggered the write. Concurrent writers still race (last-write-wins can
-/// drop a record), but each write lands as whole, valid JSON.
+/// Persist the store best-effort using atomic replace.
 fn save(store: &ImpactStore, root: &Path) {
     let path = store_path(root);
     if let Some(parent) = path.parent()
@@ -308,13 +201,7 @@ fn save(store: &ImpactStore, root: &Path) {
     }
 }
 
-/// Enable Impact tracking. Returns whether it was newly enabled (false if already on).
-///
-/// Also ensures `.fallow/` is gitignored so the store is not accidentally
-/// committed: the store is the feature's local-only promise, and `enable` is the
-/// moment it is first created, so it is the right place to make
-/// "gitignored, never uploaded" true even when the user never ran `fallow init`.
-/// Best-effort: a gitignore write failure must never fail enabling.
+/// Enable Impact tracking and ensure `.fallow/` is gitignored.
 pub fn enable(root: &Path) -> bool {
     let mut store = load(root);
     let was_enabled = store.enabled;
@@ -327,12 +214,7 @@ pub fn enable(root: &Path) -> bool {
     !was_enabled
 }
 
-/// Best-effort: append `.fallow/` to the project's `.gitignore` if no line
-/// already ignores it. Idempotent, and a no-op when `fallow init` (which writes
-/// the same entry) already added it. Any IO error is swallowed: enabling Impact
-/// must never fail on a gitignore write. `impact` lives in the library crate
-/// while `setup_hooks::ensure_gitignore_entry` is binary-only, so this small
-/// helper is intentionally self-contained rather than shared.
+/// Append `.fallow/` to `.gitignore` if needed.
 fn ensure_fallow_gitignored(root: &Path) {
     let path = root.join(".gitignore");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
@@ -347,8 +229,6 @@ fn ensure_fallow_gitignored(root: &Path) {
         contents.push('\n');
     }
     contents.push_str(".fallow/\n");
-    // atomic_write (tempfile + rename) so a crash mid-write cannot truncate the
-    // project's .gitignore, matching save()'s store-write durability.
     let _ = fallow_config::atomic_write(&path, contents.as_bytes());
 }
 
@@ -362,16 +242,7 @@ pub fn disable(root: &Path) -> bool {
     was_enabled
 }
 
-/// Record an audit run into the rolling store. No-op when tracking is disabled
-/// or the store cannot be read. Best-effort throughout; never returns an error.
-///
-/// `gate` indicates the run carried the pre-commit gate marker. Containment
-/// events are only derived from gate runs: a `fail` gate run sets a pending
-/// containment; a later non-`fail` gate run clears it into a containment event.
-///
-/// `attribution`, when present, carries the per-finding state for this run and
-/// drives v1.5 resolved/suppressed attribution against the per-file frontier.
-/// Pass `None` to record only the v1 surfacing/trend/containment data.
+/// Record an audit run into the rolling store.
 #[expect(
     clippy::too_many_arguments,
     reason = "best-effort recorder threading the v1 record fields plus the v1.5 attribution input; a params struct would not improve the single call site"
@@ -390,7 +261,6 @@ pub fn record_audit_run(
     if !store.enabled {
         return;
     }
-    // Bump a forward-read v1 store to the current schema once we write it.
     store.schema_version = STORE_SCHEMA_VERSION;
 
     let counts = ImpactCounts::from_summary(summary);
@@ -419,15 +289,7 @@ pub fn record_audit_run(
     save(&store, root);
 }
 
-/// Record a whole-project combined run into the project track. No-op when
-/// tracking is disabled or the store cannot be read. Best-effort throughout;
-/// never returns an error and never affects the command's exit code or output.
-///
-/// Unlike [`record_audit_run`] this appends to `project_records` (not `records`)
-/// and derives no containment (the pre-commit gate is audit-only). `attribution`
-/// drives v1.5 resolved/suppressed credit with [`Scope::WholeProject`], so a
-/// duplication or whole-repo cleanup verified outside a changed-file audit is
-/// credited on the next full `fallow` run.
+/// Record a whole-project combined run into the project track.
 pub fn record_combined_run(
     root: &Path,
     counts: ImpactCounts,
@@ -484,7 +346,6 @@ fn apply_containment(
         return;
     }
     if verdict == AuditVerdict::Fail {
-        // Blocked. Record (or keep) a pending containment with the blocking counts.
         if store.pending_containment.is_none() {
             store.pending_containment = Some(PendingContainment {
                 blocked_at: timestamp.to_owned(),
@@ -493,7 +354,6 @@ fn apply_containment(
             });
         }
     } else if let Some(pending) = store.pending_containment.take() {
-        // Cleared. A previously-blocked commit now passes the gate.
         store.containment.push(ContainmentEvent {
             blocked_at: pending.blocked_at,
             cleared_at: timestamp.to_owned(),
@@ -507,7 +367,6 @@ fn apply_containment(
     }
 }
 
-/// Drop oldest records beyond the retention bound.
 fn compact(store: &mut ImpactStore) {
     if store.records.len() > MAX_RECORDS {
         let overflow = store.records.len() - MAX_RECORDS;
@@ -515,9 +374,6 @@ fn compact(store: &mut ImpactStore) {
     }
 }
 
-/// One finding's identity inputs for a run, in absolute-path form. Built by the
-/// [`collect_dead_code_findings`] / [`collect_complexity_findings`] helpers from
-/// the typed audit results, or by tests directly.
 #[derive(Debug, Clone)]
 pub struct FindingInput {
     pub path: PathBuf,
@@ -525,29 +381,14 @@ pub struct FindingInput {
     pub symbol: Option<String>,
 }
 
-/// One clone group's identity for a run: its content fingerprint plus the
-/// absolute paths of its instances. Built by [`collect_clone_findings`].
 #[derive(Debug, Clone)]
 pub struct CloneInput {
     pub fingerprint: String,
     pub instance_paths: Vec<PathBuf>,
 }
 
-/// Everything the per-finding attribution pass needs for one recorded run.
-///
-/// All paths are absolute (relativized internally against `root`). `findings`
-/// holds dead-code and complexity findings; `clones` holds duplication groups;
-/// `suppressions` is the present-suppression snapshot from
-/// [`AnalysisResults::active_suppressions`].
-/// The set of files an attribution pass may reason about when diffing a
-/// disappearance against the stored frontier. Audit passes its git-diff changed
-/// set; a whole-project `fallow` run passes [`Scope::WholeProject`], which
-/// scopes off the frontier keys themselves (every file fallow previously
-/// reported a finding for was, by definition, just re-analyzed on a full run).
 pub enum Scope<'a> {
-    /// Only the listed files were re-analyzed (audit's git-diff changed set).
     ChangedFiles(&'a [PathBuf]),
-    /// The whole project was re-analyzed (a full `fallow` run).
     WholeProject,
 }
 
@@ -559,21 +400,14 @@ pub struct AttributionInput<'a> {
     pub suppressions: &'a [ActiveSuppression],
 }
 
-/// Compute a finding's stable, line-independent identity hash from its
-/// workspace-relative path, kind, and optional symbol.
 fn finding_id(kind: &str, rel_path: &str, symbol: Option<&str>) -> String {
     fingerprint_hash(&[kind, rel_path, symbol.unwrap_or("")])
 }
 
-/// Whether a finding of `kind` is covered by a set of suppression kinds present
-/// in the file. A blanket marker (`"*"`) covers everything.
 fn covered_by(present: &FxHashSet<String>, kind: &str) -> bool {
     present.contains(BLANKET_SUPPRESSION) || present.contains(kind)
 }
 
-/// Drive v1.5 attribution: diff this run's per-file findings against the stored
-/// frontier for the files audit re-analyzed, classify each disappearance as
-/// resolved / suppressed / moved, update the frontier, and prune dead entries.
 fn apply_attribution(
     store: &mut ImpactStore,
     input: &AttributionInput<'_>,
@@ -586,7 +420,6 @@ fn apply_attribution(
         Scope::WholeProject => whole_project_scope(store, input, root),
     };
 
-    // Current findings and suppressions for the changed (re-analyzed) files only.
     let mut current_findings: FxHashMap<String, Vec<FrontierFinding>> = FxHashMap::default();
     for f in &input.findings {
         let rel = format_display_path(&f.path, root);
@@ -616,9 +449,6 @@ fn apply_attribution(
         current_supps.entry(rel).or_default().insert(key);
     }
 
-    // Move keys that newly appeared this run (present now, absent from that file's
-    // prior frontier). A disappearance whose move key is in this set is a
-    // cross-file move, not a resolution.
     let mut appeared_move_keys: FxHashSet<String> = FxHashSet::default();
     for (rel, findings) in &current_findings {
         let prior_ids: FxHashSet<&str> = store
@@ -633,14 +463,6 @@ fn apply_attribution(
         }
     }
 
-    // Cross-RUN move correction: a finding credited resolved in a PRIOR run whose
-    // move-key reappears as a new finding this run was a move across runs (e.g. a
-    // dead export relocated between barrels in separate commits), not a
-    // resolution. Un-credit it so a move never counts as a win. Safe direction:
-    // the (kind, symbol) move-key is path-independent, so a rare unrelated finding
-    // of the same kind+name under-counts here, never over-counts. Runs BEFORE this
-    // run's own classification adds events, so it only touches prior resolutions
-    // (within-run moves are handled by `appeared_move_keys`).
     uncredit_cross_run_moves(store, &appeared_move_keys);
 
     classify_file_disappearances(
@@ -658,13 +480,6 @@ fn apply_attribution(
     bound_recent_resolved(store);
 }
 
-/// Build the in-scope file set for a whole-project run: every file the frontier
-/// or clone-frontier already tracks (all re-analyzed by definition on a full
-/// run) plus every file carrying a finding or clone instance this run. This lets
-/// a resolution anywhere in the repo be credited without a git-diff changed set,
-/// while staying safe against double-credit: a finding leaves the frontier
-/// exactly once (whichever run first re-analyzes its file and sees it gone), and
-/// once gone a wider scope cannot re-find it.
 fn whole_project_scope(
     store: &ImpactStore,
     input: &AttributionInput<'_>,
@@ -687,7 +502,6 @@ fn whole_project_scope(
     set
 }
 
-/// Classify each finding that left a changed file's frontier since the last run.
 fn classify_file_disappearances(
     store: &mut ImpactStore,
     changed: &FxHashSet<String>,
@@ -708,7 +522,6 @@ fn classify_file_disappearances(
             .unwrap_or_default();
         let now_supps = current_supps.get(rel).unwrap_or(&empty_supps);
         let prior_supps: FxHashSet<&str> = prior.suppressions.iter().map(String::as_str).collect();
-        // Suppression kinds that newly appeared in this file this run.
         let new_supp_kinds: FxHashSet<String> = now_supps
             .iter()
             .filter(|k| !prior_supps.contains(k.as_str()))
@@ -744,8 +557,6 @@ fn classify_file_disappearances(
     }
 }
 
-/// Overwrite the frontier entry for each changed file with its current state,
-/// removing entries that now hold neither findings nor suppressions.
 fn update_file_frontier(
     store: &mut ImpactStore,
     changed: &FxHashSet<String>,
@@ -774,11 +585,6 @@ fn update_file_frontier(
     }
 }
 
-/// Classify duplication clone groups that left the clone frontier for a changed
-/// file. Clone fingerprints are content-derived, so a relocated identical clone
-/// keeps its fingerprint and is never counted as resolved (move handled for
-/// free). A clone is suppressed when a `code-duplication` suppression is present
-/// in any of its instance files this run.
 fn classify_clone_disappearances(
     store: &mut ImpactStore,
     input: &AttributionInput<'_>,
@@ -787,7 +593,6 @@ fn classify_clone_disappearances(
     timestamp: &str,
 ) {
     let root = input.root;
-    // Current clone fingerprints touching a changed file, with relative paths.
     let mut current: FxHashMap<String, Vec<String>> = FxHashMap::default();
     for c in &input.clones {
         let mut paths: Vec<String> = c
@@ -802,11 +607,6 @@ fn classify_clone_disappearances(
         }
     }
 
-    // A clone is suppressed when an instance file currently carries a
-    // code-duplication (or blanket) suppression. Reads the just-updated frontier;
-    // since a reported clone was not suppressed in the prior run, a suppression
-    // present now is necessarily newly-appeared, so this is the conservative
-    // (never-over-credit) read.
     let dup_suppressed = |paths: &[String]| -> bool {
         paths.iter().any(|p| {
             changed.contains(p)
@@ -818,17 +618,8 @@ fn classify_clone_disappearances(
         })
     };
 
-    // Files still participating in SOME current clone group this run. A
-    // disappeared fingerprint whose instance files are still duplicated (under a
-    // different, reshaped fingerprint) is NOT a full resolution: removing one of
-    // three identical instances changes the content fingerprint but leaves the
-    // remaining files duplicated. Crediting that as resolved would over-count, so
-    // a reshape is silently re-tracked under the new fingerprint, never credited.
-    // Conservative direction, matching v1.5 (never over-credit a win).
     let still_duplicated: FxHashSet<&String> = current.values().flatten().collect();
 
-    // Disappeared clones: in the stored frontier, intersecting a changed file,
-    // not present in the current run.
     let disappeared: Vec<(String, Vec<String>)> = store
         .clone_frontier
         .iter()
@@ -841,9 +632,6 @@ fn classify_clone_disappearances(
     for (fp, paths) in disappeared {
         store.clone_frontier.remove(&fp);
         if paths.iter().any(|p| still_duplicated.contains(p)) {
-            // Reshape, not a resolution: duplication persists at these files
-            // under a new fingerprint (re-tracked below). Neither resolved nor
-            // suppressed.
             continue;
         }
         if dup_suppressed(&paths) {
@@ -861,14 +649,11 @@ fn classify_clone_disappearances(
         }
     }
 
-    // Record the current clones for the next run.
     for (fp, paths) in current {
         store.clone_frontier.insert(fp, paths);
     }
 }
 
-/// Drop frontier and clone-frontier entries whose files no longer exist on disk,
-/// bounding both maps to the live working tree.
 fn prune_frontier(store: &mut ImpactStore, root: &Path) {
     store.frontier.retain(|rel, _| root.join(rel).exists());
     store
@@ -876,7 +661,6 @@ fn prune_frontier(store: &mut ImpactStore, root: &Path) {
         .retain(|_, paths| paths.iter().any(|p| root.join(p).exists()));
 }
 
-/// Bound the recent-resolutions list, dropping the oldest entries.
 fn bound_recent_resolved(store: &mut ImpactStore) {
     if store.recent_resolved.len() > MAX_RECENT_RESOLVED {
         let overflow = store.recent_resolved.len() - MAX_RECENT_RESOLVED;
@@ -884,21 +668,12 @@ fn bound_recent_resolved(store: &mut ImpactStore) {
     }
 }
 
-/// Path-independent move-key for a recorded resolution, for cross-run move
-/// detection. Mirrors [`FrontierFinding::move_key`]'s symbol branch. `None` for
-/// symbol-less resolutions (file-level, duplication), which are not move-tracked
-/// across runs (file moves are delete+create; clone fingerprints are content-
-/// derived and already move-stable within a run).
 fn event_move_key(ev: &ResolutionEvent) -> Option<String> {
     ev.symbol
         .as_ref()
         .map(|symbol| format!("{}{ID_SEP}{symbol}", ev.kind))
 }
 
-/// Retroactively un-credit prior-run resolutions revealed as cross-run moves:
-/// a `(kind, symbol)` that newly appeared this run and was already recorded as
-/// resolved in an earlier run was relocated, not removed. Drops the stale event
-/// and decrements the lifetime tally. Bounded by `recent_resolved`'s cap.
 fn uncredit_cross_run_moves(store: &mut ImpactStore, appeared_move_keys: &FxHashSet<String>) {
     if appeared_move_keys.is_empty() {
         return;
@@ -914,13 +689,6 @@ fn uncredit_cross_run_moves(store: &mut ImpactStore, appeared_move_keys: &FxHash
     store.resolved_total = store.resolved_total.saturating_sub(uncredited);
 }
 
-/// Collect line-independent dead-code finding identities from an analysis result.
-///
-/// Covers the single-file-anchored dead-code kinds. Multi-file kinds (circular
-/// dependencies, re-export cycles, duplicate exports, unlisted dependencies) are
-/// intentionally not attributed in v1.5: they surface and trend, but their
-/// multi-file nature does not fit the per-file frontier (duplication has its own
-/// fingerprint frontier). Boundary violations are anchored at the importing file.
 #[must_use]
 pub fn collect_dead_code_findings(results: &AnalysisResults) -> Vec<FindingInput> {
     let mut out = Vec::new();
@@ -986,8 +754,6 @@ pub fn collect_dead_code_findings(results: &AnalysisResults) -> Vec<FindingInput
         );
     }
     for f in &results.boundary_violations {
-        // Forward-slash normalize the target path so the finding identity hashes
-        // identically across platforms (the symbol feeds finding_id).
         let to_path = f.violation.to_path.to_string_lossy().replace('\\', "/");
         push(
             &f.violation.from_path,
@@ -1270,8 +1036,6 @@ pub fn build_report(store: &ImpactStore) -> ImpactReport {
         .rev()
         .cloned()
         .collect();
-    // Attribution has a baseline once any file frontier, clone frontier, or
-    // lifetime counter exists.
     let attribution_active = !store.frontier.is_empty()
         || !store.clone_frontier.is_empty()
         || store.resolved_total > 0
@@ -1380,8 +1144,6 @@ pub fn render_human(report: &ImpactReport) -> String {
         plural(report.containment_count),
     ));
 
-    // RESOLVED always renders a header so the suppression line below always has
-    // a section to belong to (the three states are exhaustive).
     if report.resolved_total > 0 {
         out.push_str(&format!(
             "\n  RESOLVED\n    {} finding{} you cleared since fallow started tracking\n",
@@ -1404,7 +1166,6 @@ pub fn render_human(report: &ImpactReport) -> String {
         out.push_str("\n  RESOLVED\n    resolution tracking starts from your next gate run\n");
     }
 
-    // Suppression is honest context, indented under RESOLVED, never a scoreboard.
     if report.suppressed_total > 0 {
         out.push_str(&format!(
             "      {} finding{} you marked intentional (fallow-ignore), not counted as resolved\n",
@@ -1514,8 +1275,6 @@ pub fn render_markdown(report: &ImpactReport) -> String {
         report.containment_count,
         plural(report.containment_count),
     ));
-    // Always emit a Resolved bullet (three exhaustive states) so the Marked-
-    // intentional bullet never appears without it.
     if report.resolved_total > 0 {
         out.push_str(&format!(
             "- **Resolved:** {} finding{} cleared since tracking started\n",
@@ -1606,8 +1365,6 @@ mod tests {
         );
     }
 
-    // ---- v1.5 per-finding attribution helpers ----
-
     /// Create a real file under `root` (attribution prunes frontier entries for
     /// files that no longer exist, so test files must exist on disk).
     fn touch(root: &Path, rel: &str) -> PathBuf {
@@ -1668,7 +1425,6 @@ mod tests {
     fn disabled_store_does_not_record() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        // Not enabled: recording is a no-op.
         record_v1(
             root,
             &summary(3, 1, 0),
@@ -1717,8 +1473,6 @@ mod tests {
             gitignore.lines().any(|l| l.trim() == ".fallow/"),
             "enable must gitignore .fallow/, got: {gitignore:?}"
         );
-        // Idempotent: a second enable does not duplicate the entry, and an
-        // existing entry (e.g. from `fallow init`) is left alone.
         enable(root);
         let gitignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
         assert_eq!(
@@ -1748,8 +1502,6 @@ mod tests {
             },
         });
         let report = build_report(&store);
-        // A single record must NOT produce a trend (which would read as a spike
-        // from zero on the first run after enabling).
         assert!(report.trend.is_none());
         assert_eq!(report.surfacing.unwrap().total_issues, 5);
     }
@@ -1774,7 +1526,6 @@ mod tests {
         let report = build_report(&store);
         let human = render_human(&report);
         assert!(human.contains("No history yet"));
-        // Never a fabricated zero presented as a value claim.
         assert!(!human.contains("0 issues"));
     }
 
@@ -1810,7 +1561,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         enable(root);
-        // Gate run fails: blocked.
         record_v1(
             root,
             &summary(2, 0, 0),
@@ -1824,7 +1574,6 @@ mod tests {
         assert!(store.pending_containment.is_some());
         assert!(store.containment.is_empty());
 
-        // Gate run passes: cleared -> one containment event.
         record_v1(
             root,
             &summary(0, 0, 0),
@@ -1846,7 +1595,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         enable(root);
-        // Fail but NOT a gate run: no pending containment.
         record_v1(
             root,
             &summary(2, 0, 0),
@@ -1867,11 +1615,9 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root.join(".fallow")).unwrap();
         std::fs::write(store_path(root), b"{ not valid json ][").unwrap();
-        // Must not panic; degrades to a default (disabled) store.
         let store = load(root);
         assert!(!store.enabled);
         assert!(store.records.is_empty());
-        // Recording against a corrupt store is a no-op (disabled), never an error.
         record_v1(
             root,
             &summary(1, 0, 0),
@@ -1901,14 +1647,11 @@ mod tests {
         }
         compact(&mut store);
         assert_eq!(store.records.len(), MAX_RECORDS);
-        // Oldest dropped: the surviving first record is t50.
         assert_eq!(store.records[0].timestamp, "t50");
     }
 
     #[test]
     fn report_always_carries_schema_version() {
-        // Disabled / empty store still emits the schema version so a machine
-        // consumer has a forward-compat signal regardless of state.
         let empty = build_report(&ImpactStore::default());
         assert_eq!(empty.schema_version, ImpactReportSchemaVersion::V1);
         let json = render_json(&empty);
@@ -1938,7 +1681,6 @@ mod tests {
     #[test]
     fn date_only_trims_iso_timestamp() {
         assert_eq!(date_only("2026-05-29T18:15:23Z"), "2026-05-29");
-        // No `T` separator: returned unchanged.
         assert_eq!(date_only("2026-05-29"), "2026-05-29");
         assert_eq!(date_only("the first run"), "the first run");
     }
@@ -1976,8 +1718,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join(".fallow")).unwrap();
-        // A store written by a hypothetical future fallow (schema_version 2)
-        // must still load (best-effort) rather than be discarded as corrupt.
         let future = format!(
             "{{\"schema_version\":{},\"enabled\":true,\"records\":[],\"containment\":[]}}",
             STORE_SCHEMA_VERSION + 1
@@ -1990,8 +1730,6 @@ mod tests {
             "future-version store must not degrade to default"
         );
     }
-
-    // ---- v1.5 per-finding attribution ----
 
     #[test]
     fn removed_finding_is_credited_as_resolved() {
@@ -2414,11 +2152,6 @@ mod tests {
         );
     }
 
-    // FIX-FIRST safety test 1: a clone credited resolved by an audit run is NOT
-    // re-credited by a later whole-project run. The frontier is shared across
-    // both tracks, and a disappearance leaves the frontier exactly once, so a
-    // wider scope cannot re-find it. Uses real temp files because
-    // `prune_frontier` drops entries whose files are gone from disk.
     #[test]
     fn whole_project_run_does_not_double_credit_after_audit() {
         let dir = tempfile::tempdir().unwrap();
@@ -2426,7 +2159,6 @@ mod tests {
         enable(root);
         let a = touch(root, "src/a.ts");
         let b = touch(root, "src/b.ts");
-        // Audit run 1: clone present, enters the clone frontier.
         run(
             root,
             &[&a, &b],
@@ -2437,12 +2169,10 @@ mod tests {
         );
         assert_eq!(load(root).clone_frontier.len(), 1);
 
-        // Audit run 2: clone gone, credited resolved once and removed.
         run(root, &[&a, &b], vec![], vec![], &[], "t2");
         assert_eq!(load(root).resolved_total, 1);
         assert!(load(root).clone_frontier.is_empty());
 
-        // Whole-project run: clone still gone. Must NOT re-credit.
         run_wp(root, vec![], vec![], &[], "t3");
         assert_eq!(
             load(root).resolved_total,
@@ -2451,17 +2181,12 @@ mod tests {
         );
     }
 
-    // FIX-FIRST safety test 2: on a whole-project run, a finding gone from an
-    // UNCHANGED file because a fresh fallow-ignore now covers it is credited
-    // suppressed, never resolved (the v1.5 false-win guard through the wider
-    // WholeProject scope rather than a git changed set).
     #[test]
     fn whole_project_run_credits_suppressed_not_resolved() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         enable(root);
         let util = touch(root, "src/util.ts");
-        // Audit run records the finding into the frontier.
         run(
             root,
             &[&util],
@@ -2472,8 +2197,6 @@ mod tests {
         );
         assert_eq!(load(root).frontier.len(), 1);
 
-        // Whole-project run: finding gone, a fresh fallow-ignore covers it. The
-        // file is in scope because it is a frontier key (no git changed set).
         run_wp(root, vec![], vec![], &[supp(&util, "unused-export")], "t2");
         let store = load(root);
         assert_eq!(
@@ -2486,10 +2209,6 @@ mod tests {
         );
     }
 
-    // FIX-FIRST safety test 3: a clone reshaped from three instances to two
-    // (still duplicated, new content fingerprint) is NOT credited as fully
-    // resolved. Duplication persists at the surviving files, so the disappeared
-    // fingerprint is re-tracked under the new one, never counted as a win.
     #[test]
     fn clone_reshape_three_to_two_not_credited_as_resolved() {
         let dir = tempfile::tempdir().unwrap();
@@ -2498,7 +2217,6 @@ mod tests {
         let a = touch(root, "src/a.ts");
         let b = touch(root, "src/b.ts");
         let c = touch(root, "src/c.ts");
-        // Run 1: a 3-instance clone.
         run(
             root,
             &[&a, &b, &c],
@@ -2509,9 +2227,6 @@ mod tests {
         );
         assert_eq!(load(root).clone_frontier.len(), 1);
 
-        // Run 2 (whole project): one instance removed, the remaining two still
-        // duplicate under a new fingerprint. The old fingerprint disappears but
-        // its files are still duplicated, so it is a reshape, not a resolution.
         run_wp(
             root,
             vec![],
@@ -2527,12 +2242,6 @@ mod tests {
         assert!(store.clone_frontier.contains_key("dup:bbb"));
         assert!(!store.clone_frontier.contains_key("dup:aaa"));
     }
-
-    // ---- v1.6 whole-project render-state tests ----
-    // Lock the exact human/markdown strings for the project-only and both-tracks
-    // states. Every other render test sets `project_surfacing: None`, so without
-    // these, a regression (section dropped, empty-state guard misfiring, or an
-    // unlabeled count) would pass CI unnoticed.
 
     fn rcounts(total: usize, dead: usize, complexity: usize, dup: usize) -> ImpactCounts {
         ImpactCounts {
@@ -2581,9 +2290,6 @@ mod tests {
         }
     }
 
-    // A project-only store (full `fallow` runs, never `audit`): record_count 0
-    // but project_surfacing present. Must render the WHOLE PROJECT section and a
-    // "Tracking since" footer, NOT "No history yet" / a changed-file caveat.
     #[test]
     fn render_human_project_only_store_shows_whole_project_not_empty_state() {
         let r = rreport(
@@ -2620,8 +2326,6 @@ mod tests {
         );
     }
 
-    // Both tracks present: the two counts must be labeled so a human knows which
-    // is actionable, and LATEST RUN must render before WHOLE PROJECT.
     #[test]
     fn render_human_both_tracks_label_actionable_vs_context() {
         let r = rreport(

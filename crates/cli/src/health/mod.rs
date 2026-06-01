@@ -3,10 +3,6 @@ mod coverage_intelligence;
 mod grouping;
 mod hotspots;
 pub mod ownership;
-// `mod health` is itself private at the lib root, so `pub mod` here is
-// effectively `pub(crate)`; clippy's `redundant_pub_crate` rejects literal
-// `pub(crate)` when the parent is non-pub. The same reasoning applies to
-// `pub fn` items inside this module.
 pub mod scoring;
 mod targets;
 
@@ -136,9 +132,6 @@ pub struct HealthOptions<'a> {
     pub report_only: bool,
     /// Paid runtime coverage sidecar input.
     pub runtime_coverage: Option<RuntimeCoverageOptions>,
-    // CLI calls source the parsed diff from the process-wide startup cache.
-    // Programmatic and NAPI calls pass `diff_index` explicitly so each request
-    // can carry its own line-level scope without touching process globals.
 }
 
 struct HealthPipelineTimings {
@@ -168,9 +161,6 @@ pub fn execute_health_with_shared_parse(
 ) -> Result<HealthResult, ExitCode> {
     scoring::validate_coverage_root_absolute(opts.coverage_root)
         .map_err(|e| emit_error(&e, 2, opts.output))?;
-    // Health re-derives its own config even when parse is reused, so measure
-    // it for real rather than reporting 0.0. Only discover + parse are
-    // genuinely reused from the upstream check pass.
     let t = Instant::now();
     let config = crate::load_config_for_analysis(
         opts.root,
@@ -219,7 +209,6 @@ pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode
     )?;
     let config_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Discover and parse files
     let t = Instant::now();
     let files = fallow_core::discover::discover_files_with_plugin_scopes(&config);
     let discover_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -280,23 +269,15 @@ fn execute_health_inner(
         pre_computed_analysis,
     } = input;
 
-    // Resolve thresholds: CLI flags override config
     let max_cyclomatic = opts.max_cyclomatic.unwrap_or(config.health.max_cyclomatic);
     let max_cognitive = opts.max_cognitive.unwrap_or(config.health.max_cognitive);
     let max_crap = opts.max_crap.unwrap_or(config.health.max_crap);
-    // CRAP findings require per-function CRAP data, which is computed as a
-    // side effect of file scoring. Enforce CRAP checks only when the
-    // configured threshold is positive; a zero or negative threshold would
-    // flag every function and is treated as "disabled".
     let enforce_crap = max_crap > 0.0;
 
     let ignore_set = build_ignore_set(&config.health.ignore);
     let changed_files = opts
         .changed_since
         .and_then(|git_ref| get_changed_files(opts.root, git_ref));
-    // Use one diff source for runtime-coverage and finding-level filters.
-    // CLI calls fall back to the startup cache; embedded callers pass an
-    // explicit per-call index.
     let diff_index = match opts.diff_index {
         Some(index) => Some(index),
         None if opts.use_shared_diff_index => crate::report::ci::diff_filter::shared_diff_index(),
@@ -309,11 +290,6 @@ fn execute_health_inner(
         opts.output,
     )?;
 
-    // Validate `--group-by` upfront so misconfigured invocations
-    // (`--group-by package` on a non-monorepo, missing CODEOWNERS) fail
-    // before any expensive pipeline stage runs and emit exactly one
-    // structured error rather than chaining a later git/hotspot error
-    // with the group-by error in the same JSON stream.
     let group_resolver = if opts.group_by.is_some() {
         crate::build_ownership_resolver(
             opts.group_by,
@@ -325,14 +301,8 @@ fn execute_health_inner(
         None
     };
 
-    // Build FileId -> path lookup for O(1) access
     let file_paths: rustc_hash::FxHashMap<_, _> = files.iter().map(|f| (f.id, &f.path)).collect();
 
-    // Collect and filter complexity findings.
-    //
-    // The workspace filter is pushed inside `collect_findings` so the
-    // `files_analyzed` and `total_functions` counters (which feed the report
-    // summary) reflect the workspace subset rather than the entire monorepo.
     let t = Instant::now();
     let (findings, files_analyzed, total_functions) = collect_findings(
         &modules,
@@ -347,21 +317,12 @@ fn execute_health_inner(
     let mut findings = findings;
     let complexity_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Coverage gaps have two separate concerns:
-    // - reporting: include the section in the rendered health output
-    // - gating: fail the command when config severity is `error`
-    //
-    // Config severity may enable reporting for top-level `health` when the user
-    // did not explicitly choose sections, but it must not override callers that
-    // intentionally set `coverage_gaps: false` (combined mode, audit, score-only).
     let config_coverage_enabled = config.rules.coverage_gaps != fallow_config::Severity::Off;
     let report_coverage_gaps =
         opts.coverage_gaps || (opts.config_activates_coverage_gaps && config_coverage_enabled);
     let enforce_coverage_gaps = opts.enforce_coverage_gap_gate
         && config.rules.coverage_gaps == fallow_config::Severity::Error;
 
-    // Load Istanbul coverage data for accurate CRAP scoring.
-    // Priority: explicit --coverage flag > auto-detected coverage-final.json.
     let istanbul_coverage = if let Some(coverage_path) = opts.coverage {
         match scoring::load_istanbul_coverage(coverage_path, opts.coverage_root, Some(&config.root))
         {
@@ -372,8 +333,6 @@ fn execute_health_inner(
             }
         }
     } else if let Some(auto_path) = scoring::auto_detect_coverage(&config.root) {
-        // Auto-detected coverage file: best-effort, don't fail if it can't be parsed.
-        // Note in CI environments so pipelines know scores may vary with coverage presence.
         if std::env::var("CI").is_ok_and(|v| !v.is_empty()) {
             eprintln!(
                 "note: using auto-detected coverage at {}; pass --coverage explicitly for deterministic CI scores",
@@ -385,10 +344,6 @@ fn execute_health_inner(
         None
     };
 
-    // Compute file-level health scores (needed by hotspots and targets too).
-    // `enforce_crap` requires per-function CRAP data emitted as a side effect
-    // of file scoring, so it forces the file-score pipeline on even for
-    // otherwise-complexity-only runs.
     let needs_file_scores = opts.file_scores
         || report_coverage_gaps
         || enforce_coverage_gaps
@@ -443,9 +398,6 @@ fn execute_health_inner(
         None
     };
 
-    // Run file scoring and churn fetch in parallel when both are needed.
-    // Churn fetch involves a `git log` shell-out that dominates health timing,
-    // so keep it tied to sections that actually consume churn data.
     let needs_churn = opts.hotspots || opts.targets;
     let (file_score_result, file_scores_ms, churn_fetch) = if needs_file_scores && needs_churn {
         std::thread::scope(|s| {
@@ -496,7 +448,6 @@ fn execute_health_inner(
         .map_or((0.0, false), |cf| (cf.git_log_ms, cf.cache_hit));
     let (score_output, files_scored, average_maintainability) = file_score_result?;
 
-    // Print churn cache note on cold miss (only when cache is enabled)
     if let Some(ref cf) = churn_fetch
         && !cf.cache_hit
         && !opts.no_cache
@@ -517,10 +468,6 @@ fn execute_health_inner(
         .as_ref()
         .map_or(&[] as &[_], |o| o.scores.as_slice());
 
-    // Merge per-function CRAP data into complexity findings. Functions that
-    // only exceed `--max-crap` (and not cyclomatic/cognitive) are added as
-    // new findings; functions already flagged for complexity get the CRAP
-    // fields populated so reports can surface the combined risk.
     if enforce_crap && let Some(ref score_out) = score_output {
         merge_crap_findings(
             &mut findings,
@@ -537,13 +484,6 @@ fn execute_health_inner(
             max_cognitive,
         );
     }
-    // Synthesise per-component rollup findings for Angular components that
-    // contribute BOTH a class function finding AND a template finding. The
-    // rollup folds `worst_class_function + template` into a single
-    // `<component>` finding so `--targets` and the headline rank surface a
-    // template-heavy component as one unit; the per-function and
-    // per-`<template>` entries stay where they are so existing suppression
-    // sites and per-finding references keep working.
     let template_owner_lookup = score_output
         .as_ref()
         .map(|o| &o.template_inherit_provenance);
@@ -554,15 +494,6 @@ fn execute_health_inner(
         max_cognitive,
     );
 
-    // Diff-line filtering (issue #424). Drop complexity findings whose
-    // function body `[line..=line + line_count - 1]` does NOT overlap any
-    // added line in the supplied diff. Runs AFTER component rollup so
-    // synthetic rollup findings on touched components survive, and BEFORE
-    // `total_above_threshold` so the report's headline number reflects
-    // the filtered set (matches the panel's "JSON total_issues must be
-    // accurate, not jq-corrected" goal). Hotspots and refactoring
-    // targets filter at file level later in this function; the line-
-    // level filter only fits findings that carry a function-body span.
     if let Some(diff_index) = diff_index {
         filter_complexity_findings_by_diff(&mut findings, diff_index, &config.root);
     }
@@ -570,7 +501,6 @@ fn execute_health_inner(
     sort_findings(&mut findings, &opts.sort);
     let total_above_threshold = findings.len();
 
-    // Count severity tiers before baseline filtering and --top truncation
     let (mut sev_critical, mut sev_high, mut sev_moderate) = (0usize, 0usize, 0usize);
     for f in &findings {
         match f.severity {
@@ -580,7 +510,6 @@ fn execute_health_inner(
         }
     }
 
-    // Load baseline for filtering (save happens after targets are computed)
     let loaded_baseline = if let Some(load_path) = opts.baseline {
         Some(load_health_baseline(
             load_path,
@@ -596,7 +525,6 @@ fn execute_health_inner(
         findings.truncate(top);
     }
 
-    // Compute hotspot analysis using pre-fetched churn data
     let t = Instant::now();
     let (mut hotspots, hotspot_summary) = if let Some(churn_data) = churn_fetch {
         compute_hotspots(
@@ -615,7 +543,6 @@ fn execute_health_inner(
     }
     let hotspots_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Compute refactoring targets
     let t = Instant::now();
     let (mut targets, target_thresholds) = compute_targets(
         opts,
@@ -661,16 +588,6 @@ fn execute_health_inner(
         &ignore_set,
     );
 
-    // Compute vital signs (always needed for report summary).
-    //
-    // When `--workspace` (or `--changed-workspaces`) restricts the run to a
-    // subset of files, every per-module aggregate, dead-code denominator,
-    // and total-file count must reflect that subset rather than the full
-    // monorepo. The same `ws_roots` slice that already filters findings,
-    // file scores, and hotspots is forwarded here so the produced
-    // `vital_signs` and downstream `health_score` are coherent with what
-    // the user asked for. Use the already-filtered candidate path set so
-    // workspace, changed-since, and health ignore filters all share one scope.
     let project_subset = if candidate_paths.len() == files.len() {
         SubsetFilter::Full
     } else {
@@ -689,7 +606,6 @@ fn execute_health_inner(
         &project_subset,
     );
 
-    // Run duplication analysis when --score is active to populate the duplication penalty.
     let t = Instant::now();
     if opts.score {
         let scoped_files = filter_files_to_paths(&files, &candidate_paths);
@@ -720,7 +636,6 @@ fn execute_health_inner(
         None
     };
 
-    // Collect large functions (>60 LOC) when the risk profile warrants it
     let mut large_functions = collect_large_functions(
         &vital_signs,
         &modules,
@@ -734,7 +649,6 @@ fn execute_health_inner(
         filter_large_functions_by_diff(&mut large_functions, diff_index, &config.root);
     }
 
-    // Determine coverage model for snapshot and report
     let active_coverage_model = if istanbul_coverage.is_some() {
         Some(crate::health_types::CoverageModel::Istanbul)
     } else {
@@ -755,7 +669,6 @@ fn execute_health_inner(
 
     let health_trend = compute_health_trend(opts, &vital_signs, &counts, health_score.as_ref());
 
-    // Assemble final report
     let coverage_gaps_has_findings = score_output
         .as_ref()
         .is_some_and(|output| !output.coverage.report.is_empty());
@@ -781,10 +694,6 @@ fn execute_health_inner(
         max_crap_threshold: max_crap,
     };
 
-    // Build per-group output when `--group-by` resolved a resolver upfront.
-    // The grouping borrows the post-baseline / post-truncation findings,
-    // hotspots, file scores, large functions, and targets so each group's
-    // data is consistent with the project-level report.
     let grouping = if let Some(ref resolver) = group_resolver {
         Some(grouping::build_health_grouping(
             resolver,
@@ -842,11 +751,6 @@ fn execute_health_inner(
     );
 
     let timings = if opts.performance {
-        // `start` begins at the top of this inner function, after config /
-        // discover / parse already ran in the caller. Fold those measured
-        // stages into TOTAL so the rendered rows sum to it (reused stages are
-        // 0.0 and stay excluded). Without this, TOTAL covered only the inner
-        // work and the table never reconciled. See issue #481.
         let inner_ms = start.elapsed().as_secs_f64() * 1000.0;
         let total_ms = config_ms + discover_ms + parse_ms + inner_ms;
         Some(HealthTimings {
@@ -998,11 +902,6 @@ fn retain_hot_paths_in_change_scope(
             && let Some(rel) = relative_to_root(&hot_path.path, ctx.root)
             && diff_index.touches_file(&rel)
         {
-            // Diff knows this file: trust its line-level verdict and
-            // do NOT fall through to changed_files. A touched-but-no-
-            // added-lines file (deletion-only hunk) returns `None`
-            // here, which we treat as "no line of this file's hot
-            // path was added" -> drop.
             let Some(added) = diff_index.added_lines_in(&rel) else {
                 return false;
             };
@@ -1029,10 +928,6 @@ fn retain_hot_paths_in_change_scope(
 
     true
 }
-
-// `health::load_diff_index` (formerly here) was retired in favour of passing
-// a single parsed diff index through `HealthOptions`: CLI calls fall back to
-// the startup cache, while embedded calls can provide a per-request index.
 
 /// Reduce `path` to a forward-slashed, project-root-relative string for
 /// matching against a unified diff's `+++ b/<path>` keys. Returns `None`
@@ -1262,9 +1157,6 @@ fn apply_duplication_metrics(
 ) {
     let pct = dupes_report.stats.duplication_percentage;
     vital_signs.duplication_pct = Some((pct * 10.0).round() / 10.0);
-    // Update duplicated_lines on both the snapshot counts and the embedded
-    // vital signs counts so JSON consumers can see the raw numerator
-    // alongside the percentage.
     counts.duplicated_lines = Some(dupes_report.stats.duplicated_lines);
     if let Some(ref mut vc) = vital_signs.counts {
         vc.duplicated_lines = Some(dupes_report.stats.duplicated_lines);
@@ -1365,7 +1257,6 @@ fn compute_filtered_file_scores(
                 ws_roots,
                 ignore_set,
             );
-            // Compute average BEFORE --top truncation so it reflects the full project
             let total_scored = output.scores.len();
             let avg = if total_scored > 0 {
                 let sum: f64 = output.scores.iter().map(|s| s.maintainability_index).sum();
@@ -1553,8 +1444,6 @@ fn compute_vital_signs_and_counts(
         } else {
             None
         },
-        // Some(&[]) when pipeline ran but returned 0 results (-> hotspot_count: 0),
-        // None when pipeline was not invoked (-> hotspot_count: null in snapshot).
         hotspots: if needs_hotspots { Some(hotspots) } else { None },
         total_files,
         analysis_counts,
@@ -1699,12 +1588,10 @@ fn assemble_health_report(
         None
     };
 
-    // Extract Istanbul match stats before score_output is consumed
     let (ist_matched, ist_total) = score_output
         .as_ref()
         .map_or((0, 0), |o| (o.istanbul_matched, o.istanbul_total));
 
-    // Extract file scores for the report (apply --top after hotspot/target computation)
     let file_scores = if opts.score_only_output {
         Vec::new()
     } else if opts.file_scores {
@@ -1717,7 +1604,6 @@ fn assemble_health_report(
         Vec::new()
     };
 
-    // If hotspots were only computed for targets, don't include them in the report
     let (report_hotspots, report_hotspot_summary) = if opts.hotspots {
         (hotspots, hotspot_summary)
     } else {
@@ -2042,20 +1928,11 @@ fn merge_crap_findings(
     max_cyclomatic: u16,
     max_cognitive: u16,
 ) {
-    // Index existing findings by (path, line, col) so we can update in place.
-    // The column is part of the key because curried arrows like
-    // `(x) => (y) => {...}` produce two `FunctionComplexity` records on the
-    // same line; keying on (path, line) alone would collide and let one
-    // function's CRAP score be attached to the other function's identity.
     let finding_index: rustc_hash::FxHashMap<(std::path::PathBuf, u32, u32), usize> = findings
         .iter()
         .enumerate()
         .map(|(idx, f)| ((f.path.clone(), f.line, f.col), idx))
         .collect();
-    // Build (path -> (line, col) -> &FunctionComplexity) for creating new
-    // findings for CRAP-only violations. Same rationale: (line, col) is the
-    // unique anchor for a function so nested arrows on the same line don't
-    // overwrite each other.
     let mut complexity_by_pos: rustc_hash::FxHashMap<
         &std::path::Path,
         rustc_hash::FxHashMap<(u32, u32), &fallow_types::extract::FunctionComplexity>,
@@ -2069,8 +1946,6 @@ fn merge_crap_findings(
             entry.insert((fc.line, fc.col), fc);
         }
     }
-    // Track suppressions per file so we can honor `// fallow-ignore-*
-    // complexity` for CRAP-only findings too.
     let suppressions_by_path: rustc_hash::FxHashMap<&std::path::Path, _> = modules
         .iter()
         .filter_map(|m| {
@@ -2082,8 +1957,6 @@ fn merge_crap_findings(
 
     let mut new_findings: Vec<ComplexityViolation> = Vec::new();
     for (path, per_fn) in per_function_crap {
-        // Apply the same filters as collect_findings so CRAP findings respect
-        // `ignore`, `--changed-since`, and `--workspace`.
         let relative = path.strip_prefix(config_root).unwrap_or(path);
         if ignore_set.is_match(relative) {
             continue;
@@ -2144,11 +2017,6 @@ fn merge_crap_findings(
                 else {
                     continue;
                 };
-                // Skip functions that already exceed cyclomatic/cognitive:
-                // `collect_findings` would have already produced a finding
-                // for them, so finding_index lookup above should have hit.
-                // A missing entry here means the function passed those
-                // thresholds but still exceeds CRAP on its own.
                 let exceeds_cyclomatic = fc.cyclomatic > max_cyclomatic;
                 let exceeds_cognitive = fc.cognitive > max_cognitive;
                 new_findings.push(ComplexityViolation {
@@ -2234,7 +2102,6 @@ fn append_component_rollup_findings(
 ) {
     use crate::health_types::{ComplexityViolation, ComponentRollup, ExceededThreshold};
 
-    // Group: owner .ts path -> (class function finding indices, template finding indices).
     let mut by_owner: rustc_hash::FxHashMap<std::path::PathBuf, (Vec<usize>, Vec<usize>)> =
         rustc_hash::FxHashMap::default();
     for (idx, f) in findings.iter().enumerate() {
@@ -2253,16 +2120,6 @@ fn append_component_rollup_findings(
                 by_owner.entry(owner).or_default().1.push(idx);
             }
         } else if f.name != "<component>" {
-            // Treat every non-template, non-component finding on a .ts /
-            // .tsx / .mts / .cts file as a candidate "class method": the
-            // complexity emitter writes bare method names (`handleClick`),
-            // not `ClassName.handleClick`, so there's no syntactic way to
-            // distinguish class methods from free functions at this layer.
-            // For the typical Angular convention (one component per .ts
-            // file, no free helpers), every candidate IS a method of the
-            // component class. Free helpers on the same file would inflate
-            // the rollup; that case is rare in Angular codebases and the
-            // first-cut behaviour is to accept it.
             let is_ts = f
                 .path
                 .extension()
@@ -2285,9 +2142,6 @@ fn append_component_rollup_findings(
             continue;
         }
         if template_idxs.len() > 1 {
-            // Defensive: multi-`@Component` `.ts` would need AST-level class
-            // attribution to map each template to its owning class. Skip
-            // rather than guess; per-finding entries still surface the work.
             continue;
         }
         let template = &findings[template_idxs[0]];
@@ -2299,14 +2153,6 @@ fn append_component_rollup_findings(
             continue;
         };
         let worst = &findings[worst_idx];
-        // Component identifier: derive from the .ts owner's file stem
-        // (e.g., `host-game.component.ts` -> `host-game.component`). fallow's
-        // complexity emitter writes bare method names, so the actual class
-        // name (`HostGameComponent`) isn't recoverable here; the file stem
-        // is the next-best stable identifier and lets agents grep the
-        // matching `path` for the @Component decorator. A follow-up that
-        // teaches `FunctionComplexity` to carry class scope can populate
-        // this with the actual class name without a schema bump.
         let component = owner.file_stem().map_or_else(
             || "<unknown-component>".to_string(),
             |stem| stem.to_string_lossy().into_owned(),
@@ -2317,10 +2163,6 @@ fn append_component_rollup_findings(
         let exceeds_cyclomatic = rollup_cyc > max_cyclomatic;
         let exceeds_cognitive = rollup_cog > max_cognitive;
         if !exceeds_cyclomatic && !exceeds_cognitive {
-            // Defensive: should not occur in production (each input was a
-            // finding already above threshold, so the sum is too), but the
-            // ExceededThreshold discriminator requires at least one bit
-            // set. Skip rather than panic.
             continue;
         }
         let severity = compute_finding_severity(
@@ -2339,11 +2181,6 @@ fn append_component_rollup_findings(
             col: worst.col,
             cyclomatic: rollup_cyc,
             cognitive: rollup_cog,
-            // Combined span proxy: the rollup isn't a contiguous span but
-            // `worst_class_method.line_count + template.line_count` is an
-            // honest aggregate that keeps `--sort lines` from pushing rollup
-            // findings to the bottom (the prior `0` caused CI table rows to
-            // render `0 lines` and made the lines-sort axis nonsensical).
             line_count: worst.line_count.saturating_add(template.line_count),
             param_count: 0,
             exceeded: ExceededThreshold::from_bools(exceeds_cyclomatic, exceeds_cognitive, false),
@@ -2474,9 +2311,6 @@ fn load_health_baseline(
 
 /// Run health analysis, print results, and return exit code.
 pub fn run_health(opts: &HealthOptions<'_>) -> ExitCode {
-    // `execute_health` validates `--group-by` early and produces per-group
-    // output on `HealthResult.grouping`, so the explicit `build_ownership_resolver`
-    // probe in this dispatcher is no longer needed.
     let result = match execute_health(opts) {
         Ok(r) => r,
         Err(code) => return code,
@@ -2494,8 +2328,6 @@ pub fn run_health(opts: &HealthOptions<'_>) -> ExitCode {
         opts.summary,
         true,
         true,
-        // Standalone `fallow health`: no upstream orientation header, render
-        // the score / trend block inline.
         false,
     )
 }
@@ -2584,19 +2416,10 @@ pub fn print_health_result(
         return report_code;
     }
 
-    // `--report-only` renders the score and findings for visibility but never
-    // fails CI on any quality gate. Genuine rendering / format errors are still
-    // surfaced via the `report_code` early return above. The flag is mutually
-    // exclusive with `--min-score` / `--min-severity` (validated in
-    // `dispatch_health`), so there is no gate flag to reconcile here.
     if report_only {
         return ExitCode::SUCCESS;
     }
 
-    // Score gate: fail when the score is below the explicit `--min-score`
-    // threshold. When `--min-score` is set it is authoritative for the
-    // complexity-findings gate (findings below are demoted to informational),
-    // which is what fixes the surprising `--min-score 0` -> exit 1.
     let mut score_gate_failed = false;
     if let Some(threshold) = min_score
         && let Some(ref hs) = result.report.health_score
@@ -2611,13 +2434,6 @@ pub fn print_health_result(
         }
     }
 
-    // Findings gate:
-    //  * `--min-severity` set: fail on findings at or above that severity
-    //    (composes with `--min-score`; both gates are OR-combined).
-    //  * neither gate flag set: any finding fails (back-compat default for
-    //    plain `fallow health`).
-    //  * `--min-score` set without `--min-severity`: findings are informational
-    //    and the score gate is authoritative.
     let findings_gate_failed = if let Some(min_sev) = min_severity {
         result.report.findings.iter().any(|f| f.severity >= min_sev)
     } else if min_score.is_none() {
@@ -2648,11 +2464,6 @@ pub fn print_health_result(
         return ExitCode::from(1);
     }
 
-    // When `--min-score` demoted complexity findings to informational but the
-    // run still printed them, the visually-dominant findings list gives no
-    // signal that they did not fail the build. Emit one dimmed stderr line so
-    // a reader is not surprised by the exit 0. Human output only, never under
-    // `--quiet`, and only on the authoritative-score path.
     if min_score.is_some()
         && min_severity.is_none()
         && !quiet
@@ -2724,8 +2535,6 @@ mod tests {
         }
     }
 
-    // ── build_ignore_set ────────────────────────────────────────
-
     #[test]
     fn build_ignore_set_empty_patterns() {
         let set = build_ignore_set(&[]);
@@ -2752,10 +2561,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "validated at config load time")]
     fn build_ignore_set_panics_on_unvalidated_invalid_pattern() {
-        // Per issue #463, user globs are validated by FallowConfig::load
-        // before reaching this function. A program that constructs a config
-        // in-code with an invalid pattern has skipped that validation and
-        // is in an unrecoverable state.
         let patterns = vec!["[invalid".to_string(), "*.js".to_string()];
         let _ = build_ignore_set(&patterns);
     }
@@ -2822,8 +2627,6 @@ mod tests {
             ]
         );
     }
-
-    // ── collect_findings ────────────────────────────────────────
 
     #[test]
     fn collect_findings_empty_modules() {
@@ -3018,16 +2821,12 @@ mod tests {
         assert_eq!(files, 1);
     }
 
-    // ── filter_*_by_diff (issue #424) ──────────────────────────────
-
     fn build_diff(text: &str) -> crate::report::ci::diff_filter::DiffIndex {
         crate::report::ci::diff_filter::DiffIndex::from_unified_diff(text)
     }
 
     #[test]
     fn filter_complexity_findings_by_diff_keeps_hotspot_overlapping_diff_line() {
-        // Function body spans [10..=119] (line=10, line_count=110). PR
-        // touches line 115 inside the body. Must overlap.
         let mut findings = vec![ComplexityViolation {
             path: PathBuf::from("/project/src/big.ts"),
             name: "wide_fn".into(),
@@ -3092,8 +2891,6 @@ mod tests {
 
     #[test]
     fn filter_complexity_findings_by_diff_handles_zero_line_count() {
-        // line_count == 0 collapses to [line..=line]; the finding must
-        // overlap only when the diff touches that exact line.
         let mut findings = vec![ComplexityViolation {
             path: PathBuf::from("/project/src/a.ts"),
             name: "zero_extent".into(),
@@ -3199,7 +2996,6 @@ mod tests {
 
     #[test]
     fn collect_findings_skips_module_without_path() {
-        // Module with FileId(99) has no entry in file_paths
         let modules = vec![make_module(FileId(99), vec![make_fc("orphan", 25, 20, 50)])];
         let file_paths = FxHashMap::default();
 
@@ -3222,7 +3018,6 @@ mod tests {
         let path = PathBuf::from("/project/src/a.ts");
         let modules = vec![make_module(
             FileId(0),
-            // Exactly at thresholds — should NOT be reported (> not >=)
             vec![make_fc("borderline", 20, 15, 20)],
         )];
         let mut file_paths = FxHashMap::default();
@@ -3281,17 +3076,9 @@ mod tests {
         assert_eq!(f.path, PathBuf::from("/project/src/a.ts"));
     }
 
-    // Regression test for issue #181: curried arrows like
-    // `(x) => (y) => {...}` produce two FunctionComplexity records on the
-    // same line. Indexing CRAP findings by (path, line) alone collided so
-    // the inner arrow's CRAP score was attached to the outer arrow's
-    // identity (CC=1, CRAP=56, mathematically impossible because CRAP at
-    // 0% coverage is CC^2 + CC).
     #[test]
     fn merge_crap_findings_disambiguates_same_line_functions() {
         let path = PathBuf::from("/project/src/curried.ts");
-        // Outer arrow: cyclomatic=1, body is just `return inner_arrow`.
-        // Inner arrow: cyclomatic=7, body has the switch cases.
         let outer = FunctionComplexity {
             name: "handler".to_string(),
             line: 1,
@@ -3312,15 +3099,10 @@ mod tests {
             param_count: 1,
             source_hash: None,
         };
-        // Inner is pushed first because pop_function() is LIFO; matches the
-        // production order out of `complexity.rs`.
         let modules = vec![make_module(FileId(0), vec![inner.clone(), outer.clone()])];
         let mut file_paths: FxHashMap<FileId, &PathBuf> = FxHashMap::default();
         file_paths.insert(FileId(0), &path);
 
-        // Neither function exceeds the cyclomatic (20) or cognitive (15)
-        // thresholds, so collect_findings would emit zero findings. The CRAP
-        // pass is what surfaces the inner arrow.
         let mut findings: Vec<ComplexityViolation> = Vec::new();
 
         let mut per_function_crap: FxHashMap<PathBuf, Vec<scoring::PerFunctionCrap>> =
@@ -3328,7 +3110,6 @@ mod tests {
         per_function_crap.insert(
             path.clone(),
             vec![
-                // Order matches `module.complexity` order (inner first).
                 scoring::PerFunctionCrap {
                     line: inner.line,
                     col: inner.col,
@@ -3363,16 +3144,12 @@ mod tests {
             15,
         );
 
-        // Only the inner arrow's CRAP exceeds the threshold (56 >= 30); the
-        // outer arrow's CRAP (2) does not. So exactly one finding emitted.
         assert_eq!(
             findings.len(),
             1,
             "expected one CRAP finding for inner arrow"
         );
         let f = &findings[0];
-        // The bug attached inner CRAP (56) to outer identity (handler/CC=1).
-        // After the fix, identity and CRAP must come from the same function.
         assert_eq!(f.name, "<arrow>", "name must come from inner arrow");
         assert_eq!(f.line, 1);
         assert_eq!(f.col, 43, "col must disambiguate same-line arrows");
@@ -3383,7 +3160,6 @@ mod tests {
             Some(56.0),
             "CRAP must match the function it's reported against"
         );
-        // Sanity check: CRAP at 0% coverage equals CC^2 + CC. CC=7 implies 56.
         let cc = f64::from(f.cyclomatic);
         #[expect(
             clippy::suboptimal_flops,
@@ -3397,10 +3173,6 @@ mod tests {
         );
     }
 
-    // Companion regression test: when the OUTER arrow is the one above the
-    // CRAP threshold (i.e. its CC is large), the OUTER's identity must be
-    // reported with the OUTER's CRAP, even though both arrows still sit on
-    // the same line.
     #[test]
     fn merge_crap_findings_picks_outer_when_outer_exceeds() {
         let path = PathBuf::from("/project/src/curried_outer.ts");
@@ -3870,10 +3642,6 @@ mod tests {
 
     #[test]
     fn runtime_coverage_diff_index_falls_back_to_single_line_when_end_line_zero() {
-        // Older 0.4-shape sidecars omit end_line; serde defaults to 0. The
-        // filter MUST treat 0 as a single-line range at `line` to avoid
-        // claiming overlap with the rest of the function body it never knew
-        // about.
         let root = Path::new("/project");
         let diff = "diff --git a/src/hot.ts b/src/hot.ts\n\
                     --- a/src/hot.ts\n\
@@ -3928,10 +3696,6 @@ mod tests {
 
     #[test]
     fn runtime_coverage_diff_index_authoritative_for_files_in_diff() {
-        // When a hot path's file IS in the diff, line-overlap is
-        // authoritative: the changed_files signal is NOT consulted. This
-        // covers the case where a baseline diff lists the file but the
-        // committed change does not actually touch the hot function body.
         let root = Path::new("/project");
         let diff = "diff --git a/src/hot.ts b/src/hot.ts\n\
                     --- a/src/hot.ts\n\
@@ -3965,12 +3729,7 @@ mod tests {
 
     #[test]
     fn runtime_coverage_per_file_fallback_to_changed_files_when_diff_omits_file() {
-        // Per-file fallback: file is in changed_files but NOT in the diff
-        // (rename-only edit that did not produce + lines under the new
-        // path, or a vendored bundle ignored by `git diff` filters). The
-        // hot path should still be retained via the file-level signal.
         let root = Path::new("/project");
-        // Diff touches a different file; src/hot.ts is absent from it.
         let diff = "diff --git a/src/other.ts b/src/other.ts\n\
                     --- a/src/other.ts\n\
                     +++ b/src/other.ts\n\
@@ -4003,11 +3762,6 @@ mod tests {
 
     #[test]
     fn runtime_coverage_pr_context_promotes_hot_path_touched_above_cold_code() {
-        // PR mode (changed_files supplied): when BOTH cold-code findings
-        // and a touched hot path coexist, the verdict surfaces
-        // hot-path-touched as the headline because reviewers care about
-        // the diff-tied signal first; cold-code is captured in `signals[]`
-        // for downstream consumers that want everything.
         let root = Path::new("/project");
         let mut changed_files = FxHashSet::default();
         changed_files.insert(PathBuf::from("/project/src/hot.ts"));
@@ -4056,11 +3810,6 @@ mod tests {
 
     #[test]
     fn runtime_coverage_standalone_keeps_cold_code_primary_above_unchanged_hot_paths() {
-        // Standalone mode (no diff_index, no changed_files): hot paths are
-        // never elevated to the verdict slot. ColdCodeDetected stays
-        // primary (slow-burn finding). This preserves pre-rename behavior
-        // for `fallow health --runtime-coverage <path>` invoked outside
-        // PR context.
         let root = Path::new("/project");
         let mut report = crate::health_types::RuntimeCoverageReport {
             schema_version: crate::health_types::RuntimeCoverageSchemaVersion::V1,
@@ -4097,7 +3846,6 @@ mod tests {
             report.signals,
             vec![crate::health_types::RuntimeCoverageSignal::ColdCodeDetected]
         );
-        // hot_paths preserved (filter is a no-op without change scope).
         assert_eq!(report.hot_paths.len(), 1);
     }
 
@@ -4140,18 +3888,8 @@ mod tests {
         );
     }
 
-    // `load_diff_index_*` tests retired: the per-path loader they exercised
-    // was removed when health switched to an already-parsed `diff_index`.
-    // CLI path/env/stdin resolution is covered end-to-end in
-    // `crates/cli/src/report/ci/diff_filter.rs` tests.
-
     #[test]
     fn retain_hot_paths_drops_when_diff_touches_file_but_no_added_lines() {
-        // Diff TOUCHES the file (it appears as `+++ b/...` header) but
-        // has no added lines in it (deletion-only or pure-rename body).
-        // Per --diff-file's precedence contract, the diff is the source
-        // of truth for line-level inclusion when the diff knows the
-        // file. The hot path must drop, NOT fall through to changed_files.
         let root = Path::new("/project");
         let diff = crate::report::ci::diff_filter::DiffIndex::from_unified_diff(
             "diff --git a/src/hot.ts b/src/hot.ts\n\
@@ -4187,10 +3925,6 @@ mod tests {
 
     #[test]
     fn runtime_coverage_changed_files_matches_relative_hot_path_against_absolute_set() {
-        // Hot paths arrive from the protocol with project-root-relative paths
-        // ('src/hot.ts'); changed_files entries are absolute
-        // ('/project/src/hot.ts') because git reports paths relative to its
-        // toplevel and the caller absolutizes. Filter must match.
         let root = Path::new("/project");
         let mut changed_files = FxHashSet::default();
         changed_files.insert(PathBuf::from("/project/src/hot.ts"));
@@ -4259,8 +3993,6 @@ mod tests {
             ExitCode::from(1),
         );
     }
-
-    // ── exit-code gating (issue #786) ───────────────────────────
 
     fn fx_health_score(score: f64, grade: &'static str) -> crate::health_types::HealthScore {
         crate::health_types::HealthScore {
@@ -4336,7 +4068,6 @@ mod tests {
 
     #[test]
     fn plain_health_with_findings_fails() {
-        // Criterion 1: back-compat. No gate flag -> any finding is fatal.
         let result = fx_gate_result(vec![moderate_finding()], Some(fx_health_score(87.5, "A")));
         assert_eq!(gate_exit(&result, None, None, false), ExitCode::from(1));
     }
@@ -4349,7 +4080,6 @@ mod tests {
 
     #[test]
     fn min_score_zero_never_fails_even_with_findings() {
-        // Criterion 2: the headline bug. --min-score 0 must exit 0.
         let result = fx_gate_result(vec![moderate_finding()], Some(fx_health_score(50.0, "D")));
         assert_eq!(
             gate_exit(&result, Some(0.0), None, false),
@@ -4359,7 +4089,6 @@ mod tests {
 
     #[test]
     fn min_score_passing_demotes_findings_to_informational() {
-        // Criterion 3: score >= threshold with non-empty findings -> exit 0.
         let result = fx_gate_result(vec![moderate_finding()], Some(fx_health_score(87.5, "A")));
         assert_eq!(
             gate_exit(&result, Some(80.0), None, false),
@@ -4369,7 +4098,6 @@ mod tests {
 
     #[test]
     fn min_score_below_threshold_fails() {
-        // Criterion 4.
         let result = fx_gate_result(vec![moderate_finding()], Some(fx_health_score(50.0, "D")));
         assert_eq!(
             gate_exit(&result, Some(80.0), None, false),
@@ -4379,8 +4107,6 @@ mod tests {
 
     #[test]
     fn min_severity_gates_on_severity_independent_of_min_score() {
-        // Criterion 5: --min-severity critical ignores moderate findings,
-        // fails on critical ones, with no --min-score present.
         let only_moderate =
             fx_gate_result(vec![moderate_finding()], Some(fx_health_score(87.5, "A")));
         assert_eq!(
@@ -4399,14 +4125,11 @@ mod tests {
 
     #[test]
     fn min_score_and_min_severity_compose_as_or() {
-        // Criterion 6: both gates active, OR-combined.
-        // score ok + only moderate -> pass
         let pass = fx_gate_result(vec![moderate_finding()], Some(fx_health_score(87.5, "A")));
         assert_eq!(
             gate_exit(&pass, Some(80.0), Some(FindingSeverity::Critical), false),
             ExitCode::SUCCESS,
         );
-        // score below threshold (severity ok) -> fail via score gate
         let low_score = fx_gate_result(vec![moderate_finding()], Some(fx_health_score(50.0, "D")));
         assert_eq!(
             gate_exit(
@@ -4417,7 +4140,6 @@ mod tests {
             ),
             ExitCode::from(1),
         );
-        // score ok but a critical finding -> fail via severity gate
         let critical = fx_gate_result(vec![critical_finding()], Some(fx_health_score(87.5, "A")));
         assert_eq!(
             gate_exit(
@@ -4432,7 +4154,6 @@ mod tests {
 
     #[test]
     fn report_only_never_fails_on_findings_or_low_score() {
-        // Criterion: --report-only always exits 0.
         let result = fx_gate_result(
             vec![moderate_finding(), critical_finding()],
             Some(fx_health_score(10.0, "F")),
@@ -4442,30 +4163,13 @@ mod tests {
 
     #[test]
     fn runtime_coverage_gate_independent_of_min_score() {
-        // Criterion 7: --min-score demotes complexity findings but NOT the
-        // explicitly-opted-in runtime-coverage gate, so a failing runtime
-        // finding still exits 1 even under --min-score 0.
         let result = fx_low_traffic_runtime_result();
         assert_eq!(
             gate_exit(&result, Some(0.0), None, false),
             ExitCode::from(1)
         );
-        // --report-only does suppress every gate, including runtime coverage.
         assert_eq!(gate_exit(&result, None, None, true), ExitCode::SUCCESS);
     }
-
-    // The suppress-line gating tests previously lived here exercising
-    // `health_action_opts`, which was retired in PR B2 of #384 once the
-    // typed [`crate::health_types::HealthFinding`] wrapper became the
-    // action-carrying envelope and `inject_health_actions` dropped its
-    // findings post-pass. The equivalent gating behaviour is now covered
-    // by `suppress_line_omitted_when_baseline_active` and
-    // `suppress_line_omitted_when_config_disabled` in
-    // `crates/cli/src/report/json.rs`, plus the
-    // [`crate::health_types::build_health_finding_actions`] discriminator
-    // tests in `crates/cli/src/health_types/finding.rs`.
-
-    // ── append_component_rollup_findings ─────────────────────────
 
     fn make_class_finding(
         path: &str,
@@ -4557,7 +4261,6 @@ mod tests {
         let component_ts = PathBuf::from("/proj/src/inline.component.ts");
         let mut findings = vec![
             make_class_finding(component_ts.to_str().unwrap(), "ngOnInit", 25, 5, 8),
-            // Inline template: <template> finding is on the .ts itself at the @Component decorator line.
             make_template_finding(component_ts.to_str().unwrap(), 10, 4, 6),
         ];
         append_component_rollup_findings(&mut findings, None, 8, 8);
@@ -4626,9 +4329,6 @@ mod tests {
 
     #[test]
     fn rollup_skipped_when_multiple_templates_on_one_owner() {
-        // Defensive: a .ts hosting TWO @Component decorators (each with an
-        // inline template) would need AST-level class attribution to map
-        // each template to its owning class. Skip rather than guess.
         let component_ts = PathBuf::from("/proj/src/twin.component.ts");
         let mut findings = vec![
             make_class_finding(component_ts.to_str().unwrap(), "TwinA.fn", 10, 5, 7),
@@ -4646,10 +4346,6 @@ mod tests {
 
     #[test]
     fn rollup_external_template_skipped_when_lookup_missing() {
-        // External .html template needs an owner entry in the provenance
-        // lookup (built only when --score / --max-crap runs). When the
-        // lookup is None or has no entry, the rollup degrades gracefully
-        // for external-template components; inline templates still work.
         let template_html = PathBuf::from("/proj/src/no-owner.component.html");
         let component_ts = "/proj/src/no-owner.component.ts";
         let mut findings = vec![

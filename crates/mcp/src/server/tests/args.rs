@@ -49,8 +49,6 @@ fn check_runtime_coverage(coverage: &str) -> CheckRuntimeCoverageParams {
     }
 }
 
-// ── Helper: minimal CheckChangedParams ────────────────────────────
-
 fn check_changed(since: &str) -> CheckChangedParams {
     CheckChangedParams {
         root: None,
@@ -80,8 +78,6 @@ fn explain_args_emit_json_quiet() {
         ["explain", "unused-export", "--format", "json", "--quiet"]
     );
 }
-
-// ── Argument building: analyze ────────────────────────────────────
 
 #[test]
 fn analyze_args_minimal_produces_base_args() {
@@ -261,8 +257,6 @@ fn analyze_args_empty_issue_types_vec_produces_no_flags() {
     );
 }
 
-// ── Argument building: check_changed ──────────────────────────────
-
 #[test]
 fn check_changed_args_includes_since_ref() {
     let args = build_check_changed_args(check_changed("main"));
@@ -339,8 +333,6 @@ fn check_changed_args_with_commit_sha() {
     let args = build_check_changed_args(check_changed("abc123def456"));
     assert!(args.contains(&"abc123def456".to_string()));
 }
-
-// ── Argument building: find_dupes ─────────────────────────────────
 
 #[test]
 fn find_dupes_args_minimal() {
@@ -502,8 +494,6 @@ fn find_dupes_args_min_occurrences_rejects_one() {
     assert!(msg.contains("(got 1)"), "{msg}");
 }
 
-// ── Argument building: fix_preview vs fix_apply ───────────────────
-
 #[test]
 fn fix_preview_args_include_dry_run() {
     let args = build_fix_preview_args(&FixParams::default());
@@ -592,9 +582,6 @@ fn fix_apply_args_with_all_options() {
 
 #[test]
 fn fix_preview_args_no_create_config_in_isolation() {
-    // Verify --no-create-config is emitted in isolation, independent of
-    // other params. Sentinel test against a future refactor accidentally
-    // gating the flag emission on workspace/production presence.
     let params = FixParams {
         no_create_config: Some(true),
         ..FixParams::default()
@@ -635,8 +622,6 @@ fn fix_apply_args_no_create_config_in_isolation() {
 
 #[test]
 fn fix_preview_args_no_create_config_false_omits_flag() {
-    // Some(false) and None must both omit the flag (default behavior is
-    // create-fallback ON).
     for value in [None, Some(false)] {
         let params = FixParams {
             no_create_config: value,
@@ -649,8 +634,6 @@ fn fix_preview_args_no_create_config_false_omits_flag() {
         );
     }
 }
-
-// ── Argument building: project_info ───────────────────────────────
 
 #[test]
 fn project_info_args_minimal() {
@@ -692,8 +675,6 @@ fn project_info_args_with_all_options() {
         ]
     );
 }
-
-// ── Argument building: trace tools ───────────────────────────────
 
 #[test]
 fn trace_export_args_minimal() {
@@ -1042,13 +1023,8 @@ fn trace_clone_args_min_occurrences_rejects_one() {
     assert!(msg.contains("min_occurrences must be at least 2"), "{msg}");
 }
 
-// ── Validation error body shape ──────────────────────────────────
-
 #[test]
 fn validation_errors_use_structured_json_body() {
-    // Every arg-builder validation failure must emit the same JSON shape that
-    // `run_fallow` uses for CLI error exits, so MCP clients can decode one shape
-    // for both error sources. `exit_code` is 0 on validation paths (no subprocess).
     let errors = [
         build_trace_clone_args(&TraceCloneParams {
             file: Some("src/original.ts".to_string()),
@@ -1117,8 +1093,6 @@ fn validation_errors_use_structured_json_body() {
         );
     }
 }
-
-// ── Argument building: health ─────────────────────────────────────
 
 #[test]
 fn health_args_minimal() {
@@ -1286,15 +1260,11 @@ fn health_args_max_crap_integer_value() {
         ..Default::default()
     };
     let args = build_health_args(&params);
-    // Integer-valued floats render without a trailing ".0", keeping CLI
-    // surface area stable for agents comparing args literally.
     assert!(
         args.windows(2).any(|w| w == ["--max-crap", "30"]),
         "expected --max-crap 30 (no trailing zero), got {args:?}"
     );
 }
-
-// ── Argument building: impact ─────────────────────────────────────
 
 #[test]
 fn impact_args_minimal() {
@@ -1322,15 +1292,11 @@ fn impact_args_with_root() {
 
 #[test]
 fn impact_args_empty_root_dropped() {
-    // MCP clients sometimes send "" for an unset path; it must not become
-    // `--root ""` (which clap rejects / treats as cwd).
     let args = build_impact_args(&ImpactParams {
         root: Some(String::new()),
     });
     assert_eq!(args, ["impact", "--format", "json", "--quiet"]);
 }
-
-// ── All tools produce --format json --quiet ───────────────────────
 
 #[test]
 fn all_arg_builders_include_format_json_and_quiet() {
@@ -1428,8 +1394,6 @@ fn all_arg_builders_include_format_json_and_quiet() {
     }
 }
 
-// ── Correct subcommand for each tool ──────────────────────────────
-
 #[test]
 fn each_tool_uses_correct_subcommand() {
     assert_eq!(
@@ -1525,8 +1489,6 @@ fn each_tool_uses_correct_subcommand() {
     );
 }
 
-// ── Argument building: check_runtime_coverage ─────────────────
-
 #[test]
 fn check_runtime_coverage_minimal_emits_coverage_flag() {
     let args = build_check_runtime_coverage_args(&check_runtime_coverage("./coverage"));
@@ -1534,7 +1496,6 @@ fn check_runtime_coverage_minimal_emits_coverage_flag() {
     assert!(args.contains(&"--runtime-coverage".to_string()));
     let idx = args.iter().position(|a| a == "--runtime-coverage").unwrap();
     assert_eq!(args[idx + 1], "./coverage");
-    // Minimal params should NOT emit the tuning flags.
     assert!(!args.contains(&"--min-invocations-hot".to_string()));
     assert!(!args.contains(&"--min-observation-volume".to_string()));
     assert!(!args.contains(&"--low-traffic-threshold".to_string()));
@@ -1607,8 +1568,6 @@ fn runtime_context_split_tools_share_runtime_coverage_pipeline() {
     assert_eq!(build_get_importance_args(&params), expected);
     assert_eq!(build_get_cleanup_candidates_args(&params), expected);
 }
-
-// ── Explain flag presence ────────────────────────────────────────
 
 #[test]
 fn tools_with_explain_include_flag() {
@@ -1733,8 +1692,6 @@ fn trace_tools_do_not_include_explain() {
     }
 }
 
-// ── Global flags: no_cache boolean false is omitted ───────────────
-
 #[test]
 fn no_cache_false_is_omitted_across_all_tools() {
     let analyze = build_analyze_args(&AnalyzeParams {
@@ -1812,8 +1769,6 @@ fn no_cache_false_is_omitted_across_all_tools() {
     });
     assert!(!feature_flags.contains(&"--no-cache".to_string()));
 }
-
-// ── Argument building: audit ─────────────────────────────────────
 
 #[test]
 fn audit_args_minimal_produces_base_args() {
@@ -2042,8 +1997,6 @@ fn audit_args_without_baselines_does_not_emit_flags() {
     assert!(!args.iter().any(|a| a == "--dupes-baseline"));
 }
 
-// ── Argument building: list_boundaries ──────────────────────────
-
 #[test]
 fn list_boundaries_args_minimal() {
     let args = build_list_boundaries_args(&ListBoundariesParams::default());
@@ -2081,8 +2034,6 @@ fn list_boundaries_args_all_options() {
     );
 }
 
-// ── Argument building: find_dupes changed_since ─────────────────
-
 #[test]
 fn find_dupes_args_changed_since() {
     let params = FindDupesParams {
@@ -2093,8 +2044,6 @@ fn find_dupes_args_changed_since() {
     assert!(args.contains(&"--changed-since".to_string()));
     assert!(args.contains(&"feature/branch".to_string()));
 }
-
-// ── Argument building: analyze boundary_violations ──────────────
 
 #[test]
 fn analyze_args_boundary_violations() {
@@ -2113,7 +2062,6 @@ fn analyze_args_boundary_violations_false_is_omitted() {
         ..Default::default()
     };
     let args = build_analyze_args(&params).unwrap();
-    // boundary_violations=false should not add the flag
     assert_eq!(
         args.iter()
             .filter(|a| *a == "--boundary-violations")
@@ -2124,8 +2072,6 @@ fn analyze_args_boundary_violations_false_is_omitted() {
 
 #[test]
 fn analyze_args_boundary_violations_deduped_with_issue_types() {
-    // When both boundary_violations=true AND issue_types includes "boundary-violations",
-    // the flag must appear exactly once — clap rejects duplicate boolean flags.
     let params = AnalyzeParams {
         boundary_violations: Some(true),
         issue_types: Some(vec!["boundary-violations".to_string()]),
@@ -2144,7 +2090,6 @@ fn analyze_args_boundary_violations_deduped_with_issue_types() {
 
 #[test]
 fn analyze_args_boundary_violations_emitted_when_not_in_issue_types() {
-    // boundary_violations=true with other issue_types (not boundary-violations) should still emit the flag
     let params = AnalyzeParams {
         boundary_violations: Some(true),
         issue_types: Some(vec!["unused-files".to_string()]),
@@ -2154,8 +2099,6 @@ fn analyze_args_boundary_violations_emitted_when_not_in_issue_types() {
     assert!(args.contains(&"--boundary-violations".to_string()));
     assert!(args.contains(&"--unused-files".to_string()));
 }
-
-// ── Argument building: project_info section flags ───────────────
 
 #[test]
 fn project_info_args_section_flags() {
@@ -2188,8 +2131,6 @@ fn project_info_args_section_flags_false_are_omitted() {
     assert!(!args.contains(&"--plugins".to_string()));
     assert!(!args.contains(&"--boundaries".to_string()));
 }
-
-// ── Argument building: feature_flags ────────────────────────────
 
 #[test]
 fn feature_flags_args_minimal_produces_base_args() {

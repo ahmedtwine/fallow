@@ -51,7 +51,6 @@ fn cache_roundtrip() {
     store.insert(std::path::Path::new("test.ts"), cached);
     assert_eq!(store.len(), 1);
 
-    // Save and reload
     store
         .save(&temp_dir, 0, fallow_extract::cache::DEFAULT_CACHE_MAX_SIZE)
         .unwrap();
@@ -59,11 +58,8 @@ fn cache_roundtrip() {
         CacheStore::load(&temp_dir, 0, fallow_extract::cache::DEFAULT_CACHE_MAX_SIZE).unwrap();
     assert_eq!(loaded.len(), 1);
 
-    // Correct hash -> hit
     assert!(loaded.get(std::path::Path::new("test.ts"), 12345).is_some());
-    // Wrong hash -> miss
     assert!(loaded.get(std::path::Path::new("test.ts"), 99999).is_none());
-    // Unknown file -> miss
     assert!(
         loaded
             .get(std::path::Path::new("other.ts"), 12345)
@@ -73,11 +69,8 @@ fn cache_roundtrip() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-// ── Incremental analysis (Phase A) tests ──────────────────────────
-
 #[test]
 fn incremental_no_cache_all_misses() {
-    // First run without any existing cache: all files should be cache misses
     let root = fixture_path("basic-project");
     let files = fallow_core::discover::discover_files(&create_config(root));
     let parse_result = fallow_core::extract::parse_all_files(&files, None, false);
@@ -89,12 +82,10 @@ fn incremental_no_cache_all_misses() {
 
 #[test]
 fn incremental_with_cache_all_hits() {
-    // Build a cache from the first parse, then parse again — should be all hits
     let root = fixture_path("basic-project");
     let config = create_config(root);
     let files = fallow_core::discover::discover_files(&config);
 
-    // First parse: build cache
     let first = fallow_core::extract::parse_all_files(&files, None, false);
     let mut cache_store = fallow_core::cache::CacheStore::new();
     for module in &first.modules {
@@ -106,7 +97,6 @@ fn incremental_with_cache_all_hits() {
         }
     }
 
-    // Second parse: should hit cache for every file
     let second = fallow_core::extract::parse_all_files(&files, Some(&cache_store), false);
     assert_eq!(second.cache_hits, first.modules.len());
     assert_eq!(second.cache_misses, 0);
@@ -115,12 +105,10 @@ fn incremental_with_cache_all_hits() {
 
 #[test]
 fn incremental_results_identical() {
-    // Results from a cached run should be identical to a fresh run
     let root = fixture_path("basic-project");
     let config = create_config(root);
     let files = fallow_core::discover::discover_files(&config);
 
-    // First parse
     let first = fallow_core::extract::parse_all_files(&files, None, false);
     let mut cache_store = fallow_core::cache::CacheStore::new();
     for module in &first.modules {
@@ -132,10 +120,8 @@ fn incremental_results_identical() {
         }
     }
 
-    // Second parse (from cache)
     let second = fallow_core::extract::parse_all_files(&files, Some(&cache_store), false);
 
-    // Verify all module data matches
     assert_eq!(first.modules.len(), second.modules.len());
     for (a, b) in first.modules.iter().zip(second.modules.iter()) {
         assert_eq!(a.file_id, b.file_id);
@@ -151,18 +137,14 @@ fn incremental_results_identical() {
 
 #[test]
 fn incremental_full_pipeline_results_match() {
-    // Full pipeline results should be identical whether using cache or not
     let root = fixture_path("basic-project");
     let tmp_cache = tempfile::tempdir().expect("create temp dir");
     let config = create_config_with_cache(root, tmp_cache.path().to_path_buf());
 
-    // First run: populates cache
     let first = fallow_core::analyze(&config).expect("first analysis should succeed");
 
-    // Second run: uses cache
     let second = fallow_core::analyze(&config).expect("second analysis should succeed");
 
-    // Results should be identical
     assert_eq!(first.unused_files.len(), second.unused_files.len());
     assert_eq!(first.unused_exports.len(), second.unused_exports.len());
     assert_eq!(first.unused_types.len(), second.unused_types.len());
@@ -174,7 +156,6 @@ fn incremental_full_pipeline_results_match() {
 
 #[test]
 fn incremental_cache_prune_stale_entries() {
-    // Cache entries for deleted files should be pruned
     let mut store = fallow_core::cache::CacheStore::new();
     let make_module = || fallow_core::cache::CachedModule {
         content_hash: 1,
@@ -211,7 +192,6 @@ fn incremental_cache_prune_stale_entries() {
     store.insert(std::path::Path::new("/project/deleted.ts"), make_module());
     assert_eq!(store.len(), 2);
 
-    // Only "existing.ts" is in the current file set
     let files = vec![fallow_core::discover::DiscoveredFile {
         id: fallow_core::discover::FileId(0),
         path: PathBuf::from("/project/existing.ts"),

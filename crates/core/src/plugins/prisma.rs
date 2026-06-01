@@ -17,15 +17,6 @@ const ENABLERS: &[&str] = &["prisma", "@prisma/client"];
 
 const ENTRY_PATTERNS: &[&str] = &["prisma/seed.{ts,js}"];
 
-// `prisma.config.{ts,mts,cts,js,mjs,cjs}` is the officially-supported config
-// file location introduced in Prisma 6.x. Prisma loads it directly, so no
-// source file imports it; without this entry it is reported as unused.
-//
-// Prisma's default schema locations are `prisma/schema.prisma` and root-level
-// `schema.prisma`. `prisma/schema/*.prisma` is the multi-file layout introduced
-// behind the `prismaSchemaFolder` preview feature. These shapes are scanned for
-// `generator { provider = "..." }` so custom-generator npm packages are
-// credited as referenced dependencies.
 const CONFIG_PATTERNS: &[&str] = &[
     "prisma.config.{ts,mts,cts,js,mjs,cjs}",
     ".config/prisma.{ts,mts,cts,js,mjs,cjs}",
@@ -126,9 +117,6 @@ fn collect_schema_folder_provider_dependencies(path: &Path, providers: &mut Vec<
     }
 }
 
-// Generator block bodies in Prisma's DSL are flat (no nested braces), so the
-// `[^}]*` body capture is safe here. If a future Prisma feature ever introduces
-// nested braces this regex must be replaced with a depth-tracked scanner.
 static GENERATOR_BLOCK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)\bgenerator\s+\w+\s*\{([^}]*)\}").expect("valid regex"));
 
@@ -160,9 +148,6 @@ fn parse_generator_providers(source: &str) -> Vec<String> {
     providers
 }
 
-// Discard Prisma schema comments before scanning so commented-out generators or
-// providers do not produce phantom credits. Preserve quoted strings so `//` or
-// `/*` inside provider values is not treated as comment syntax.
 fn strip_schema_comments(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     let mut chars = source.chars().peekable();

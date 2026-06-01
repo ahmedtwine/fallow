@@ -28,7 +28,6 @@ pub(super) fn build_lcp(text: &[i64], sa: &[usize]) -> Vec<usize> {
         }
         let j = sa[rank[i] - 1];
         while i + k < n && j + k < n {
-            // Stop at sentinels (negative values).
             if text[i + k] < 0 || text[j + k] < 0 {
                 break;
             }

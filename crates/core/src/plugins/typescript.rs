@@ -1,8 +1,7 @@
 //! TypeScript plugin.
 //!
-//! Detects TypeScript projects and marks tsconfig files as always used.
-//! Parses tsconfig.json to extract project references, extended configs,
-//! type package dependencies, language service plugins, and array extends (TS 5.0+).
+//! Detects TypeScript projects and parses `tsconfig.json` for references,
+//! extended configs, type packages, language service plugins, and array extends.
 #![expect(
     clippy::excessive_nesting,
     reason = "tsconfig AST parsing requires deep nesting"
@@ -22,7 +21,6 @@ define_plugin!(
     resolve_config(config_path, source, root) {
         let mut result = PluginResult::default();
 
-        // tsconfig.json is JSON — wrap in parens to make it a valid JS expression for Oxc
         let is_json = config_path.extension().is_some_and(|ext| ext == "json");
         let (parse_source, parse_path_buf) = if is_json {
             (format!("({source})"), config_path.with_extension("js"))
@@ -31,7 +29,6 @@ define_plugin!(
         };
         let parse_path: &Path = &parse_path_buf;
 
-        // extends → referenced dependency or base config file
         if let Some(extends) =
             config_parser::extract_config_string(&parse_source, parse_path, &["extends"])
         {
@@ -45,8 +42,6 @@ define_plugin!(
             }
         }
 
-        // extends as array (TypeScript 5.0+)
-        // e.g. "extends": ["./tsconfig.base.json", "@tsconfig/node18"]
         let extends_arr =
             config_parser::extract_config_string_array(&parse_source, parse_path, &["extends"]);
         for ext in &extends_arr {
@@ -60,7 +55,6 @@ define_plugin!(
             }
         }
 
-        // compilerOptions.types → @types/* dependencies
         let types = config_parser::extract_config_string_array(
             &parse_source,
             parse_path,
@@ -76,7 +70,6 @@ define_plugin!(
             result.referenced_dependencies.push(base);
         }
 
-        // compilerOptions.jsxImportSource → referenced dependency
         if let Some(jsx_source) = config_parser::extract_config_string(
             &parse_source,
             parse_path,
@@ -100,10 +93,8 @@ define_plugin!(
                 .push((normalized_find, normalized_replacement));
         }
 
-        // compilerOptions.plugins → referenced dependencies (TS language service plugins)
         parse_tsconfig_plugins(&parse_source, parse_path, &mut result);
 
-        // references → project reference paths
         parse_tsconfig_references(&parse_source, parse_path, root, &mut result);
 
         result
@@ -117,15 +108,6 @@ fn normalize_tsconfig_path_alias(
     root: &Path,
 ) -> Option<(String, String)> {
     let normalized_find = find.strip_suffix('*').unwrap_or(find).to_string();
-    // Wildcard-only patterns (e.g. `"*": ["./src/*"]`) collapse to an empty
-    // prefix here. `path_aliases` are consumed via `specifier.starts_with(prefix)`,
-    // and every specifier starts with `""`, so an empty prefix would over-match
-    // and route platform builtins (`node:url`, `bun:sqlite`) and unrelated bare
-    // imports through the path-alias fallback, surfacing them as
-    // `unresolved-import` instead of letting builtin / npm-package classification
-    // take over. Wildcards are still honoured by `oxc_resolver`'s native tsconfig
-    // paths handling, so dropping them from `path_aliases` does not regress
-    // legitimate `*` rewrites. See issue #327.
     if normalized_find.is_empty() {
         return None;
     }
@@ -154,7 +136,6 @@ fn parse_tsconfig_plugins(source: &str, path: &Path, result: &mut PluginResult) 
         return;
     };
 
-    // Navigate to compilerOptions
     let compiler_opts = obj.properties.iter().find_map(|prop| {
         if let ObjectPropertyKind::ObjectProperty(p) = prop {
             let is_compiler_opts = match &p.key {
@@ -172,7 +153,6 @@ fn parse_tsconfig_plugins(source: &str, path: &Path, result: &mut PluginResult) 
         return;
     };
 
-    // Find plugins array
     let plugins_arr = compiler_opts.properties.iter().find_map(|prop| {
         if let ObjectPropertyKind::ObjectProperty(p) = prop {
             let is_plugins = match &p.key {
@@ -190,7 +170,6 @@ fn parse_tsconfig_plugins(source: &str, path: &Path, result: &mut PluginResult) 
         return;
     };
 
-    // Extract "name" from each plugin object
     for el in &plugins_arr.elements {
         if let Some(Expression::ObjectExpression(plugin_obj)) = el.as_expression() {
             for prop in &plugin_obj.properties {
@@ -385,12 +364,6 @@ mod tests {
 
     #[test]
     fn resolve_config_drops_wildcard_only_path_alias() {
-        // `"*": ["./src/*"]` is honoured by oxc_resolver's native tsconfig
-        // paths handling. Storing it as an empty-prefix entry in
-        // `path_aliases` causes `starts_with("")` to match every specifier,
-        // including `node:url` and other platform builtins. Drop wildcard
-        // patterns at normalization time so the fallback path only kicks in
-        // for genuine prefix aliases (`@/`, `~/`, `#/`). See issue #327.
         let source = r#"{
             "compilerOptions": {
                 "paths": {

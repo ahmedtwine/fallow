@@ -59,12 +59,6 @@ pub fn warn_skipped_entry_summary(skipped_entries: &FxHashMap<String, usize>) {
     let Some(message) = format_skipped_entry_warning(skipped_entries) else {
         return;
     };
-    // This summary is emitted once per workspace package, and on a monorepo
-    // every package commonly skips the same out-of-root binary (e.g. a shared
-    // `bin` pointing at `../../packages/<tool>/bin/<tool>`), producing dozens of
-    // byte-identical lines. Dedupe on the rendered message so identical
-    // summaries warn once per process while genuinely distinct skip-sets each
-    // still surface (issue #637).
     if should_warn_skipped_entry(&message) {
         tracing::warn!("{message}");
     }
@@ -171,8 +165,6 @@ fn resolve_entry_path_with_tracking(
     source: EntryPointSource,
     mut skipped_entries: Option<&mut FxHashMap<String, usize>>,
 ) -> Option<EntryPoint> {
-    // Wildcard exports (e.g., `./src/themes/*.css`) can't be resolved to a single
-    // file. Return None and let the caller expand them separately.
     if entry.contains('*') {
         return None;
     }
@@ -188,21 +180,10 @@ fn resolve_entry_path_with_tracking(
 
     let resolved = base.join(entry);
 
-    // If the path is in an output directory (dist/, build/, etc.), try mapping to src/ first.
-    // This handles exports map targets like `./dist/utils.js` → `./src/utils.ts`.
-    // We check this BEFORE the exists() check because even if the dist file exists,
-    // fallow ignores dist/ by default, so we need the source file instead.
     if let Some(source_path) = try_output_to_source_path(base, entry) {
         return validated_entry_point(&source_path, canonical_root, entry, source, skipped_entries);
     }
 
-    // When the entry lives under an output directory but has no direct src/ mirror
-    // (e.g. `./dist/esm2022/index.js` where `src/esm2022/index.ts` does not exist),
-    // probe the package root for a conventional source index. TypeScript libraries
-    // commonly point `main`/`module`/`exports` at compiled output while keeping the
-    // canonical source entry at `src/index.ts`. Without this fallback, the dist file
-    // becomes the entry point, gets filtered out by the default dist ignore pattern,
-    // and leaves the entire src/ tree unreachable. See issue #102.
     if is_entry_in_output_dir(entry)
         && let Some(source_path) = try_source_index_fallback(base)
     {
@@ -224,7 +205,6 @@ fn resolve_entry_path_with_tracking(
         );
     }
 
-    // Try with source extensions
     for ext in SOURCE_EXTENSIONS {
         let with_ext = resolved.with_extension(ext);
         if with_ext.is_file() {
@@ -248,10 +228,6 @@ fn resolve_entry_path_with_tracking(
         );
     }
 
-    // Some source-first packages publish root build artifacts such as
-    // `./index.js` / `./index.cjs` but keep the real entry source in
-    // `src/index.ts`. If the root artifact is absent in a clean checkout, fall
-    // back to the conventional source index instead of dropping the entry.
     if is_package_root_index_entry(entry)
         && let Some(source_path) = try_source_index_fallback(base)
     {
@@ -360,7 +336,6 @@ fn try_output_to_source_path(base: &Path, entry: &str) -> Option<PathBuf> {
     let entry_path = Path::new(entry);
     let components: Vec<_> = entry_path.components().collect();
 
-    // Find the last output directory component in the entry path
     let output_pos = components.iter().rposition(|c| {
         if let std::path::Component::Normal(s) = c
             && let Some(name) = s.to_str()
@@ -370,16 +345,13 @@ fn try_output_to_source_path(base: &Path, entry: &str) -> Option<PathBuf> {
         false
     })?;
 
-    // Build the relative prefix before the output dir, filtering out CurDir (".")
     let prefix: PathBuf = components[..output_pos]
         .iter()
         .filter(|c| !matches!(c, std::path::Component::CurDir))
         .collect();
 
-    // Build the relative path after the output dir (e.g., "utils.js")
     let suffix: PathBuf = components[output_pos + 1..].iter().collect();
 
-    // Try base + prefix + "src" + suffix-with-source-extension
     for ext in SOURCE_EXTENSIONS {
         let source_candidate = base
             .join(&prefix)
@@ -453,7 +425,6 @@ fn apply_default_fallback(
 
     let mut entries = Vec::new();
     for file in files {
-        // Use strip_prefix instead of canonicalize for workspace filtering
         if let Some(ws_root) = ws_filter
             && file.path.strip_prefix(ws_root).is_err()
         {
@@ -484,7 +455,6 @@ fn discover_entry_points_with_warnings_impl(
     let _span = tracing::info_span!("discover_entry_points").entered();
     let mut discovery = EntryPointDiscovery::default();
 
-    // Pre-compute relative paths for all files (once, not per pattern)
     let relative_paths: Vec<String> = files
         .iter()
         .map(|f| {
@@ -496,10 +466,6 @@ fn discover_entry_points_with_warnings_impl(
         })
         .collect();
 
-    // 1. Manual entries from config — batch all patterns into a single GlobSet
-    // for O(files) matching instead of O(patterns × files). Patterns were
-    // validated at config load time (see FallowConfig::validate_user_globs);
-    // any compile failure here is a bug.
     {
         let mut builder = globset::GlobSetBuilder::new();
         for pattern in &config.entry_patterns {
@@ -522,8 +488,6 @@ fn discover_entry_points_with_warnings_impl(
         }
     }
 
-    // 2. Package.json entries
-    // Pre-compute canonical root once for all resolve_entry_path calls
     let canonical_root = dunce::canonicalize(&config.root).unwrap_or_else(|_| config.root.clone());
     if let Some(pkg) = root_pkg {
         for entry_path in pkg.entry_points() {
@@ -538,7 +502,6 @@ fn discover_entry_points_with_warnings_impl(
             }
         }
 
-        // 2b. Package.json scripts — extract file references as entry points
         if let Some(scripts) = &pkg.scripts {
             for script_value in scripts.values() {
                 for file_ref in extract_script_file_refs(script_value) {
@@ -554,13 +517,8 @@ fn discover_entry_points_with_warnings_impl(
                 }
             }
         }
-
-        // Framework rules now flow through PluginRegistry via external_plugins.
     }
 
-    // 4. Auto-discover nested package.json entry points
-    // For monorepo-like structures without explicit workspace config, scan for
-    // package.json files in subdirectories and use their main/exports as entries.
     if include_nested_package_entries {
         let exports_dirs = root_pkg
             .map(PackageJson::exports_subdirectories)
@@ -575,12 +533,10 @@ fn discover_entry_points_with_warnings_impl(
         );
     }
 
-    // 5. Default index files (if no other entries found)
     if discovery.entries.is_empty() {
         discovery.entries = apply_default_fallback(files, &config.root, None);
     }
 
-    // Deduplicate by path
     discovery.entries.sort_by(|a, b| a.path.cmp(&b.path));
     discovery.entries.dedup_by(|a, b| a.path == b.path);
 
@@ -635,7 +591,6 @@ fn discover_nested_package_entries(
 ) {
     let mut visited = rustc_hash::FxHashSet::default();
 
-    // 1. Walk common monorepo patterns
     let search_dirs = [
         "packages", "apps", "libs", "modules", "plugins", "services", "tools", "utils",
     ];
@@ -655,7 +610,6 @@ fn discover_nested_package_entries(
         }
     }
 
-    // 2. Scan directories derived from the root exports map
     for dir_name in exports_subdirectories {
         let pkg_dir = root.join(dir_name);
         if pkg_dir.is_dir() && visited.insert(pkg_dir.clone()) {
@@ -769,7 +723,6 @@ fn discover_workspace_entry_points_with_warnings_impl(
             }
         }
 
-        // Scripts field — extract file references as entry points
         if let Some(scripts) = &pkg.scripts {
             for script_value in scripts.values() {
                 for file_ref in extract_script_file_refs(script_value) {
@@ -785,11 +738,8 @@ fn discover_workspace_entry_points_with_warnings_impl(
                 }
             }
         }
-
-        // Framework rules now flow through PluginRegistry via external_plugins.
     }
 
-    // Fall back to default index files if no entry points found for this workspace
     if discovery.entries.is_empty() {
         discovery.entries = apply_default_fallback(all_files, ws_root, Some(ws_root));
     }
@@ -851,7 +801,6 @@ pub fn discover_plugin_entry_point_sets(
 ) -> CategorizedEntryPoints {
     let mut entries = CategorizedEntryPoints::default();
 
-    // Pre-compute relative paths
     let relative_paths: Vec<String> = files
         .iter()
         .map(|f| {
@@ -863,8 +812,6 @@ pub fn discover_plugin_entry_point_sets(
         })
         .collect();
 
-    // Match plugin entry patterns against files using a single GlobSet for
-    // include globs, then filter candidate matches through any exclusions.
     let mut builder = globset::GlobSetBuilder::new();
     let mut glob_meta: Vec<CompiledEntryRule<'_>> = Vec::new();
     for (rule, pname) in &plugin_result.entry_patterns {
@@ -938,7 +885,6 @@ pub fn discover_plugin_entry_point_sets(
         }
     }
 
-    // Add setup files (absolute paths from plugin config parsing)
     for (setup_file, pname) in &plugin_result.setup_files {
         let resolved = resolve_plugin_setup_file(&config.root, setup_file);
         if resolved.exists() {
@@ -949,7 +895,6 @@ pub fn discover_plugin_entry_point_sets(
                 },
             });
         } else {
-            // Try with extensions
             for ext in SOURCE_EXTENSIONS {
                 let with_ext = resolved.with_extension(ext);
                 if with_ext.exists() {
@@ -989,8 +934,6 @@ pub fn discover_dynamically_loaded_entry_points(
         return Vec::new();
     }
 
-    // Patterns were validated at config load time (see
-    // FallowConfig::validate_user_globs); any compile failure here is a bug.
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in &config.dynamically_loaded {
         builder.add(
@@ -1097,7 +1040,6 @@ mod tests {
             ext in prop::sample::select(vec!["ts", "tsx", "js", "jsx", "vue", "svelte", "astro", "mdx"]),
         ) {
             let pattern = format!("**/{prefix}*.{ext}");
-            // Should not panic — either compiles or returns Err gracefully
             let result = globset::Glob::new(&pattern);
             prop_assert!(result.is_ok(), "Glob::new should not fail for well-formed patterns");
         }
@@ -1118,12 +1060,10 @@ mod tests {
         fn compile_glob_set_no_panic(
             patterns in prop::collection::vec("[a-zA-Z0-9_*/.]{1,30}", 0..10),
         ) {
-            // Should not panic regardless of input
             let _ = compile_glob_set(&patterns);
         }
     }
 
-    // compile_glob_set unit tests
     #[test]
     fn compile_glob_set_empty_input() {
         assert!(
@@ -1396,7 +1336,6 @@ mod tests {
         assert!(!entry_paths.contains(&"app/pages/-helper.ts".to_string()));
     }
 
-    // resolve_entry_path unit tests
     mod resolve_entry_path_tests {
         use super::*;
 
@@ -1421,13 +1360,11 @@ mod tests {
         #[test]
         fn resolves_with_extension_fallback() {
             let dir = tempfile::tempdir().expect("create temp dir");
-            // Use canonical base to avoid macOS /var → /private/var symlink mismatch
             let canonical = dunce::canonicalize(dir.path()).unwrap();
             let src = canonical.join("src");
             std::fs::create_dir_all(&src).unwrap();
             std::fs::write(src.join("index.ts"), "export const a = 1;").unwrap();
 
-            // Provide path without extension — should try adding .ts, .tsx, etc.
             let result = resolve_entry_path(
                 &canonical,
                 "src/index",
@@ -1566,7 +1503,6 @@ mod tests {
             std::fs::create_dir_all(&src).unwrap();
             std::fs::write(src.join("utils.ts"), "export const u = 1;").unwrap();
 
-            // Also create the dist/ file to make sure it prefers src/
             let dist = dir.path().join("dist");
             std::fs::create_dir_all(&dist).unwrap();
             std::fs::write(dist.join("utils.js"), "// compiled").unwrap();
@@ -1592,7 +1528,6 @@ mod tests {
         #[test]
         fn maps_build_output_to_src() {
             let dir = tempfile::tempdir().expect("create temp dir");
-            // Use canonical base to avoid macOS /var → /private/var symlink mismatch
             let canonical = dunce::canonicalize(dir.path()).unwrap();
             let src = canonical.join("src");
             std::fs::create_dir_all(&src).unwrap();
@@ -1672,10 +1607,6 @@ mod tests {
 
         #[test]
         fn skipped_entry_summary_dedupes_identical_messages() {
-            // The summary is emitted once per workspace package; on a monorepo
-            // many packages skip the same out-of-root binary. A unique message
-            // suffix keeps this test independent of the process-wide set's
-            // state across sibling tests in the same binary.
             let message = format!(
                 "Skipped 1 package.json entry point outside project root: ../../pkg-{}/bin/x",
                 std::process::id()
@@ -1741,7 +1672,6 @@ mod tests {
         }
     }
 
-    // try_output_to_source_path unit tests
     mod output_to_source_tests {
         use super::*;
 
@@ -1766,7 +1696,6 @@ mod tests {
         #[test]
         fn returns_none_when_no_source_file_exists() {
             let dir = tempfile::tempdir().expect("create temp dir");
-            // No src/ directory at all
             let result = try_output_to_source_path(dir.path(), "./dist/missing.js");
             assert!(result.is_none());
         }
@@ -1778,7 +1707,6 @@ mod tests {
             std::fs::create_dir_all(&src).unwrap();
             std::fs::write(src.join("foo.ts"), "export const f = 1;").unwrap();
 
-            // "lib" is not in OUTPUT_DIRS, so no mapping should occur
             let result = try_output_to_source_path(dir.path(), "./lib/foo.js");
             assert!(result.is_none());
         }
@@ -1802,7 +1730,6 @@ mod tests {
         }
     }
 
-    // Source index fallback unit tests (issue #102)
     mod source_index_fallback_tests {
         use super::*;
 
@@ -1836,7 +1763,6 @@ mod tests {
 
         #[test]
         fn rejects_substring_match_for_output_dir() {
-            // "distro" contains "dist" as a substring but is not an output dir
             assert!(!is_entry_in_output_dir("./distro/index.js"));
             assert!(!is_entry_in_output_dir("./build-scripts/run.js"));
         }
@@ -1867,8 +1793,6 @@ mod tests {
 
         #[test]
         fn prefers_src_index_over_root_index() {
-            // Source index fallback must prefer `src/index.*` over root-level `index.*`
-            // because library conventions keep source under `src/`.
             let dir = tempfile::tempdir().expect("create temp dir");
             let src = dir.path().join("src");
             std::fs::create_dir_all(&src).unwrap();
@@ -1915,10 +1839,6 @@ mod tests {
             let dir = tempfile::tempdir().expect("create temp dir");
             let canonical = dunce::canonicalize(dir.path()).unwrap();
 
-            // dist/esm2022/index.js exists but there's no src/esm2022/ mirror —
-            // only src/index.ts. Without the fallback, resolve_entry_path would
-            // return the dist file, which then gets filtered out by the ignore
-            // pattern.
             let dist_dir = canonical.join("dist").join("esm2022");
             std::fs::create_dir_all(&dist_dir).unwrap();
             std::fs::write(dist_dir.join("index.js"), "export const x = 1;").unwrap();
@@ -1941,8 +1861,6 @@ mod tests {
 
         #[test]
         fn resolve_entry_path_uses_direct_src_mirror_when_available() {
-            // When `src/esm2022/index.ts` exists, the existing mirror logic wins
-            // and the fallback should not fire.
             let dir = tempfile::tempdir().expect("create temp dir");
             let canonical = dunce::canonicalize(dir.path()).unwrap();
 
@@ -1951,7 +1869,6 @@ mod tests {
             let mirror_index = src_mirror.join("index.ts");
             std::fs::write(&mirror_index, "export const x = 1;").unwrap();
 
-            // Also create src/index.ts to confirm the mirror wins over the fallback.
             let src_index = canonical.join("src").join("index.ts");
             std::fs::write(&src_index, "export const y = 2;").unwrap();
 
@@ -1984,7 +1901,6 @@ mod tests {
         }
     }
 
-    // apply_default_fallback unit tests
     mod default_fallback_tests {
         use super::*;
 
@@ -2067,7 +1983,6 @@ mod tests {
                 },
             ];
 
-            // Filter to workspace A only
             let ws_root = dir.path().join("packages").join("a");
             let entries = apply_default_fallback(&files, &ws_root, Some(&ws_root));
             assert_eq!(entries.len(), 1);
@@ -2075,14 +1990,11 @@ mod tests {
         }
     }
 
-    // expand_wildcard_entries unit tests
     mod wildcard_entry_tests {
         use super::*;
 
         #[test]
         fn expands_wildcard_css_entries() {
-            // Wildcard subpath exports like `"./themes/*": { "import": "./src/themes/*.css" }`
-            // should expand to actual CSS files on disk.
             let dir = tempfile::tempdir().expect("create temp dir");
             let themes = dir.path().join("src").join("themes");
             std::fs::create_dir_all(&themes).unwrap();
@@ -2110,7 +2022,6 @@ mod tests {
         #[test]
         fn wildcard_does_not_match_nonexistent_files() {
             let dir = tempfile::tempdir().expect("create temp dir");
-            // No files matching the pattern
             std::fs::create_dir_all(dir.path().join("src/themes")).unwrap();
 
             let canonical = dunce::canonicalize(dir.path()).unwrap();
@@ -2125,7 +2036,6 @@ mod tests {
 
         #[test]
         fn wildcard_only_matches_specified_extension() {
-            // Wildcard pattern `*.css` should not match `.ts` files
             let dir = tempfile::tempdir().expect("create temp dir");
             let themes = dir.path().join("src").join("themes");
             std::fs::create_dir_all(&themes).unwrap();

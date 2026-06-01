@@ -13,7 +13,7 @@ use rustc_hash::FxHashSet;
 use crate::report;
 use crate::runtime_support::load_config;
 
-/// ANSI escape: clear screen + scrollback + move cursor home (same sequence as tsc --watch).
+/// ANSI escape: clear screen + scrollback + move cursor home.
 const CLEAR_SCREEN: &str = "\x1B[2J\x1B[3J\x1B[H";
 const DEBOUNCE_WINDOW: Duration = Duration::from_millis(500);
 const ROOT_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -29,10 +29,7 @@ pub struct WatchOptions<'a> {
     pub production: bool,
     pub clear_screen: bool,
     pub explain: bool,
-    /// Mirror of the global `--include-entry-exports` flag. When true, ORs into the
-    /// loaded config's `include_entry_exports` field so the CLI flag also takes
-    /// effect under watch mode (config-file-driven `includeEntryExports: true`
-    /// already worked through plain config loading).
+    /// Mirror of the global `--include-entry-exports` flag.
     pub include_entry_exports: bool,
 }
 
@@ -365,12 +362,6 @@ fn reload_config_or_keep_previous(
 pub fn run_watch(opts: &WatchOptions<'_>) -> ExitCode {
     use std::sync::mpsc;
 
-    // Ensure the global signal handler is registered (idempotent if main
-    // already called this) and flip the handler into graceful mode so a
-    // SIGINT / SIGTERM only sets the shutdown flag; the watch loop polls
-    // the flag and returns cleanly with exit code 0. The RAII guard
-    // restores forceful-exit behavior for any subsequent CLI command run
-    // in the same process.
     let _ = crate::signal::install_handlers();
     let _graceful = crate::signal::GracefulModeGuard::new();
 
@@ -392,7 +383,6 @@ pub fn run_watch(opts: &WatchOptions<'_>) -> ExitCode {
         Err(code) => return code,
     };
 
-    // Run initial analysis
     let initial_status = analyze_and_report(&config, opts);
     if initial_status != ExitCode::SUCCESS {
         return initial_status;
@@ -444,9 +434,7 @@ pub fn run_watch(opts: &WatchOptions<'_>) -> ExitCode {
             Ok(Err(e)) => {
                 eprintln!("Watch error: {e:?}");
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Loop back to check the shutdown flag and debounce timeout.
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 eprintln!("Channel error: notify sender disconnected");
                 return ExitCode::from(2);
@@ -463,7 +451,6 @@ pub fn run_watch(opts: &WatchOptions<'_>) -> ExitCode {
                 eprint!("{CLEAR_SCREEN}");
             }
 
-            // Show which files changed
             for path in &changed {
                 eprintln!("{} {path}", "Changed:".dimmed());
             }
@@ -582,8 +569,6 @@ mod tests {
     use fallow_config::FallowConfig;
     use notify::event::EventKind;
 
-    // ── is_relevant_source ───────────────────────────────────────────
-
     #[test]
     fn relevant_source_ts_extensions() {
         assert!(is_relevant_source(Path::new("src/index.ts")));
@@ -624,8 +609,6 @@ mod tests {
         assert!(!is_relevant_source(Path::new("no_extension")));
     }
 
-    // ── is_relevant_config ───────────────────────────────────────────
-
     #[test]
     fn relevant_config_files() {
         assert!(is_relevant_config(Path::new("package.json")));
@@ -653,8 +636,6 @@ mod tests {
         assert!(!has_disallowed_hidden_dir(Path::new(".storybook/main.ts")));
         assert!(!has_disallowed_hidden_dir(Path::new("src/.generated.ts")));
     }
-
-    // ── watch filtering ──────────────────────────────────────────────
 
     fn make_event(paths: &[&Path]) -> notify::Event {
         let mut event = notify::Event::new(EventKind::Any);
@@ -996,8 +977,6 @@ mod tests {
 
     #[test]
     fn reload_config_applies_include_entry_exports_override() {
-        // Issue #249 follow-up: --include-entry-exports must take effect under
-        // watch mode after a config reload, not just on the initial load.
         let root = Path::new("/project");
         let mut config = make_config(root, OutputFormat::Human, 1, false);
         assert!(!config.include_entry_exports);

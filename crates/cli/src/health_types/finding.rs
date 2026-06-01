@@ -1,30 +1,7 @@
 //! Health-finding wrappers, action context, and typed action builders.
 //!
-//! Three typed envelope wrappers live in this module:
-//!
-//! - [`HealthFinding`] flattens [`ComplexityViolation`] for the
-//!   `findings[]` array and carries the typed `actions` list plus the
-//!   optional audit-mode `introduced` flag.
-//! - [`HotspotFinding`] flattens [`HotspotEntry`] for the
-//!   `hotspots[]` array and carries a typed [`HotspotAction`] list.
-//! - [`RefactoringTargetFinding`] flattens [`RefactoringTarget`] for the
-//!   `targets[]` array and carries a typed [`RefactoringTargetAction`]
-//!   list.
-//!
-//! Wire compatibility: `#[serde(flatten)]` on the inner type means every
-//! array item continues to expose the inner fields at the top level
-//! alongside `actions` (and `introduced` for [`HealthFinding`] only).
-//! Consumers that hand-parse the JSON see no shape change.
-//!
-//! Audit-mode asymmetry: [`HealthFinding`] carries `introduced` because
-//! `fallow audit` attributes complexity findings to the introduced /
-//! inherited diff. [`HotspotFinding`] and [`RefactoringTargetFinding`] do
-//! NOT carry `introduced` because hotspot ranking and refactoring targets
-//! are not produced by the audit base-snapshot classifier; the pre-wrapper
-//! `finding_augmentation` set `include_introduced: false` for both and the
-//! typed wrappers preserve that.
-//!
-//! [`ComplexityViolation`]: crate::health_types::scores::ComplexityViolation
+//! This module keeps the wire envelopes typed while preserving the existing
+//! flattened JSON shape.
 
 use fallow_types::output_health::{
     HealthFindingAction, HealthFindingActionType, HotspotAction, HotspotActionHeuristic,
@@ -38,92 +15,43 @@ use crate::health_types::scores::{
 };
 use crate::health_types::targets::{RecommendationCategory, RefactoringTarget};
 
-/// Cyclomatic distance from `max_cyclomatic_threshold` at which a
-/// CRAP-only finding still warrants a secondary `refactor-function` action.
-///
-/// Reasoning: a function whose cyclomatic count is within this band of the
-/// configured threshold is "almost too complex" already, so refactoring is a
-/// useful complement to the primary coverage action. Keeping the boundary
-/// expressed as a band (threshold minus N) rather than a ratio links it
-/// to the existing `health.maxCyclomatic` knob: tightening the threshold
-/// automatically widens the population that gets the secondary suggestion.
+/// Band below `max_cyclomatic_threshold` where a CRAP-only finding also gets
+/// a secondary `refactor-function` action.
 const SECONDARY_REFACTOR_BAND: u16 = 5;
 
-/// Options controlling how the action builder populates a health finding's
-/// `actions` array.
-///
-/// `omit_suppress_line` skips the `suppress-line` action across every
-/// health finding. Set when:
-/// - A baseline is active (`opts.baseline.is_some()` or
-///   `opts.save_baseline.is_some()`): the baseline file already suppresses
-///   findings, and adding `// fallow-ignore-next-line` comments on top
-///   creates dead annotations once the baseline regenerates.
-/// - The team has opted out via `health.suggestInlineSuppression: false`.
-///
-/// When omitted, a top-level `actions_meta` object on the report records
-/// the omission and the reason so consumers can audit "where did
-/// health finding suppress-line go?" without having to grep the config
-/// or CLI history. Wire shape is documented by
-/// [`crate::health_types::HealthActionsMeta`].
+/// Options controlling how the action builder populates `actions`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HealthActionOptions {
-    /// Skip emission of `suppress-line` action entries.
+    /// Skip `suppress-line` action entries.
     pub omit_suppress_line: bool,
-    /// Human-readable reason surfaced in the `actions_meta` breadcrumb when
-    /// `omit_suppress_line` is true. Stable codes:
-    /// - `"baseline-active"`: `--baseline` or `--save-baseline` was passed
-    /// - `"config-disabled"`: `health.suggestInlineSuppression: false`
+    /// Reason surfaced in `actions_meta` when `omit_suppress_line` is true.
     pub omit_reason: Option<&'static str>,
 }
 
 /// Construction-time context for [`HealthFinding::with_actions`].
-///
-/// Bundles the action-emission options and the complexity thresholds the
-/// action selector needs. Computed once per `HealthReport` build (or once
-/// per group when `--group-by` partitions the run) and reused across every
-/// finding so the action list is byte-for-byte equivalent to the prior
-/// `inject_health_actions` post-pass output.
 #[derive(Debug, Clone, Copy)]
 pub struct HealthActionContext {
-    /// Action-emission options (suppress-line gating + audit reason).
+    /// Action-emission options.
     pub opts: HealthActionOptions,
-    /// Cyclomatic-complexity ceiling beyond which a function is flagged.
-    /// Sourced from `summary.max_cyclomatic_threshold`.
+    /// Cyclomatic-complexity ceiling.
     pub max_cyclomatic_threshold: u16,
-    /// Cognitive-complexity ceiling. Sourced from
-    /// `summary.max_cognitive_threshold`.
+    /// Cognitive-complexity ceiling.
     pub max_cognitive_threshold: u16,
-    /// CRAP ceiling. Sourced from `summary.max_crap_threshold`.
+    /// CRAP ceiling.
     pub max_crap_threshold: f64,
 }
 
 /// Wire envelope for a single complexity finding.
-///
-/// Flattens [`ComplexityViolation`] for wire continuity and adds the typed
-/// `actions` list plus the audit-mode `introduced` flag. The
-/// `#[serde(flatten)]` keeps each `findings[]` item byte-identical to the
-/// pre-wrapper shape: inner fields (`path`, `name`, `line`, `cyclomatic`,
-/// ...) sit at the top level alongside `actions` and optional `introduced`.
-///
-/// Construct via [`HealthFinding::with_actions`] in the typical health
-/// pipeline (the wrapper computes its own `actions` from a
-/// [`HealthActionContext`]) or via [`HealthFinding::new`] when the caller
-/// already has the action list (e.g., tests, audit cross-attribution).
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct HealthFinding {
-    /// Inner complexity-violation payload. Flattened on the wire.
+    /// Inner complexity-violation payload.
     #[serde(flatten)]
     pub violation: ComplexityViolation,
-    /// Machine-actionable fix and suppress hints. Always populated; never
-    /// empty in the typical pipeline (the action selector emits at least
-    /// `suppress-line` or `suppress-file` unless suppressed by the
-    /// context).
+    /// Machine-actionable fix and suppress hints.
     pub actions: Vec<HealthFindingAction>,
-    /// Audit-mode flag indicating whether the finding is new versus the
-    /// audit base snapshot. `Some(true)` when introduced in the diff,
-    /// `Some(false)` when present in both snapshots, `None` outside audit
-    /// mode (the field is skipped from the wire).
+    /// Audit-mode flag indicating whether the finding is new versus the base
+    /// snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub introduced: Option<bool>,
 }
@@ -137,12 +65,7 @@ impl Deref for HealthFinding {
 }
 
 impl From<ComplexityViolation> for HealthFinding {
-    /// Convenience conversion: wrap a violation with an empty `actions`
-    /// list and no `introduced` flag. Used by tests and fixture builders
-    /// that don't exercise the action-selection path. Production code
-    /// should call [`HealthFinding::with_actions`] (or
-    /// [`HealthFinding::new`] when the action list is already computed)
-    /// so the wire shape carries the typed actions.
+    /// Wrap a violation with empty actions and no `introduced` flag.
     fn from(violation: ComplexityViolation) -> Self {
         Self {
             violation,
@@ -154,10 +77,6 @@ impl From<ComplexityViolation> for HealthFinding {
 
 impl HealthFinding {
     /// Construct a wrapper around a pre-computed action list.
-    ///
-    /// Used by audit cross-attribution paths and tests where the caller
-    /// already has the actions in hand. Prefer [`Self::with_actions`] in
-    /// the typical pipeline.
     #[must_use]
     #[allow(
         dead_code,
@@ -175,11 +94,8 @@ impl HealthFinding {
         }
     }
 
-    /// Construct a wrapper with the `actions` list computed from the
-    /// finding's measured signals plus the report-wide context.
-    ///
-    /// The `introduced` field is left at `None`; audit-mode callers set it
-    /// after construction once base-snapshot attribution runs.
+    /// Construct a wrapper with `actions` computed from the finding and
+    /// report-wide context.
     #[must_use]
     pub fn with_actions(violation: ComplexityViolation, ctx: &HealthActionContext) -> Self {
         let actions = build_health_finding_actions(&violation, ctx);
@@ -192,26 +108,6 @@ impl HealthFinding {
 }
 
 /// Compute the typed `actions` list for a complexity finding.
-///
-/// Selection rules:
-///
-/// - Exceeded cyclomatic/cognitive only (no CRAP): `refactor-function`.
-/// - Exceeded CRAP, tier `none` or absent: `add-tests` (no test path
-///   reaches this function; start from scratch).
-/// - Exceeded CRAP, tier `partial`/`high`: `increase-coverage` (file
-///   already has some test path; add targeted assertions for uncovered
-///   branches).
-/// - Exceeded CRAP, full coverage cannot clear CRAP: `refactor-function`
-///   because reducing cyclomatic complexity is the remaining lever.
-/// - Exceeded both CRAP and cyclomatic/cognitive: emit BOTH the
-///   tier-appropriate coverage action AND `refactor-function`.
-/// - CRAP-only with cyclomatic within `SECONDARY_REFACTOR_BAND` of the
-///   threshold AND cognitive past the cognitive floor: also append
-///   `refactor-function` as a secondary action; the function is
-///   "almost too complex" already.
-///
-/// A trailing `suppress-line` (or `suppress-file` for Angular `.html`
-/// templates) is appended unless `ctx.opts.omit_suppress_line` is true.
 #[must_use]
 pub fn build_health_finding_actions(
     violation: &ComplexityViolation,
@@ -228,15 +124,6 @@ pub fn build_health_finding_actions(
 
     let mut actions: Vec<HealthFindingAction> = Vec::new();
 
-    // Coverage-leaning action: only emitted when CRAP contributed. For
-    // synthetic <template> findings whose CRAP was inherited from the
-    // owning .component.ts via the inverse templateUrl edge, the action
-    // description must point AI agents at the component file rather than
-    // the .html template, otherwise agents will hallucinate Angular
-    // template test harnesses or try to scaffold a spec for the .html
-    // path directly (which is structurally impossible). The inherited_from
-    // string is the project-relative .ts path emitted alongside the
-    // coverage_source discriminator.
     let inherited_from = violation.inherited_from.as_deref();
     if includes_crap
         && let Some(action) = build_crap_coverage_action(
@@ -249,21 +136,6 @@ pub fn build_health_finding_actions(
         actions.push(action);
     }
 
-    // Refactor action conditions:
-    //   1. Exceeded cyclomatic/cognitive (with or without CRAP), or
-    //   2. CRAP-only where even full coverage cannot bring CRAP below the
-    //      configured threshold, so reducing complexity is the remaining
-    //      lever, or
-    //   3. CRAP-only with cyclomatic within SECONDARY_REFACTOR_BAND of the
-    //      threshold AND cognitive complexity past the cognitive floor (the
-    //      function is almost too complex anyway and the cognitive signal
-    //      confirms that refactoring would actually help). Without the
-    //      cognitive floor, flat type-tag dispatchers and JSX render maps
-    //      (high CC, near-zero cog) get a misleading refactor suggestion.
-    //
-    // `build_crap_coverage_action` returns `None` for case 2 instead of
-    // pushing `refactor-function` itself, so this branch unconditionally
-    // pushes the refactor entry without needing to dedupe.
     let crap_only_needs_complexity_reduction = crap_only && !full_coverage_can_clear_crap;
     let cognitive_floor = ctx.max_cognitive_threshold / 2;
     let near_cyclomatic_threshold = crap_only
@@ -277,10 +149,6 @@ pub fn build_health_finding_actions(
     let is_component = name == "<component>";
     if !crap_only || crap_only_needs_complexity_reduction || near_cyclomatic_threshold {
         let (description, note): (String, &str) = if is_component {
-            // Component rollup: name is the literal "<component>"; the
-            // breakdown lives in `component_rollup`. Direct AI agents at the
-            // component as the unit so they consider splitting the template
-            // OR refactoring the worst class method, not just one of them.
             let rollup = violation.component_rollup.as_ref();
             let class_name = rollup.map_or("the component", |r| r.component.as_str());
             let worst_method = rollup.map_or("the worst class method", |r| {
@@ -348,11 +216,6 @@ pub fn build_health_finding_actions(
                 target_path: None,
             });
         } else if is_component {
-            // Rollup anchors at the worst class function's line; the same
-            // suppression that hides the worst function also hides the
-            // rollup, but the description tells the user which line it
-            // lands on so they don't expect the comment above the
-            // @Component decorator (which would NOT match the rollup's line).
             actions.push(HealthFindingAction {
                 kind: HealthFindingActionType::SuppressLine,
                 auto_fixable: false,
@@ -380,10 +243,6 @@ pub fn build_health_finding_actions(
 }
 
 /// Build the coverage-leaning action for a CRAP-contributing finding.
-///
-/// Returns `None` when even 100% coverage could not bring the function
-/// below the configured CRAP threshold. In that case the primary action
-/// becomes `refactor-function`, which the caller emits separately.
 fn build_crap_coverage_action(
     name: &str,
     tier: Option<CoverageTier>,
@@ -394,11 +253,6 @@ fn build_crap_coverage_action(
         return None;
     }
 
-    // Inherited-coverage path: when the CRAP score on a `<template>`
-    // finding was derived from the owning Angular component .ts file, the
-    // test surface to act on is the component, not the .html. Override
-    // the description so agents do not try to scaffold tests against the
-    // template path directly.
     if let Some(owner) = inherited_from {
         let owner_str = owner.to_string_lossy().into_owned();
         return Some(HealthFindingAction {
@@ -417,10 +271,6 @@ fn build_crap_coverage_action(
     }
 
     match tier {
-        // Partial / high coverage: the file already has some test path.
-        // Pivot the action description from "add tests" to "increase
-        // coverage" so agents add targeted assertions for uncovered
-        // branches instead of scaffolding new tests from scratch.
         Some(CoverageTier::Partial | CoverageTier::High) => Some(HealthFindingAction {
             kind: HealthFindingActionType::IncreaseCoverage,
             auto_fixable: false,
@@ -434,7 +284,6 @@ fn build_crap_coverage_action(
             placement: None,
             target_path: None,
         }),
-        // None / unknown tier: keep the original "add-tests" message.
         _ => Some(HealthFindingAction {
             kind: HealthFindingActionType::AddTests,
             auto_fixable: false,
@@ -450,10 +299,6 @@ fn build_crap_coverage_action(
         }),
     }
 }
-
-// ────────────────────────────────────────────────────────────────────
-// HotspotFinding
-// ────────────────────────────────────────────────────────────────────
 
 /// Wire envelope for a single hotspot entry.
 ///
@@ -531,12 +376,6 @@ impl HotspotFinding {
 /// present and the corresponding signal fires.
 fn build_hotspot_actions(entry: &HotspotEntry, root: &Path) -> Vec<HotspotAction> {
     let relative = entry.path.strip_prefix(root).unwrap_or(&entry.path);
-    // Normalise Windows backslashes to forward slashes. The retired JSON
-    // post-pass read the path AFTER `strip_root_prefix` (which calls
-    // `normalize_uri` to flip `\\` to `/`), so action descriptions on
-    // Windows used forward slashes; the typed builder runs before
-    // serialisation and must apply the same normalisation for cross-
-    // platform wire parity.
     let path = relative.to_string_lossy().replace('\\', "/");
 
     let mut actions = vec![
@@ -570,16 +409,10 @@ fn build_hotspot_actions(entry: &HotspotEntry, root: &Path) -> Vec<HotspotAction
         return actions;
     };
 
-    // Bus factor of 1 is the canonical "single point of failure" signal.
     if ownership.bus_factor == 1 {
         let top = &ownership.top_contributor;
         let owner = top.identifier.as_str();
         let commits = top.commits;
-        // File-specific note: name the candidate reviewers from the
-        // `suggested_reviewers` array when any exist, fall back to
-        // softened framing for low-commit files, and otherwise omit
-        // the note entirely (the description already carries the
-        // actionable ask; adding generic boilerplate wastes tokens).
         let suggested: Vec<&str> = ownership
             .suggested_reviewers
             .iter()
@@ -592,7 +425,6 @@ fn build_hotspot_actions(entry: &HotspotEntry, root: &Path) -> Vec<HotspotAction
                         .to_string(),
                 )
             } else {
-                // else: omit `note` entirely. The description already carries the ask.
                 None
             }
         } else {
@@ -615,8 +447,6 @@ fn build_hotspot_actions(entry: &HotspotEntry, root: &Path) -> Vec<HotspotAction
         });
     }
 
-    // Unowned-hotspot: file matches no CODEOWNERS rule. Skip when None
-    // (no CODEOWNERS file discovered) or Some(false) (a rule matches).
     if ownership.unowned == Some(true) {
         actions.push(HotspotAction {
             kind: HotspotActionType::UnownedHotspot,
@@ -631,8 +461,6 @@ fn build_hotspot_actions(entry: &HotspotEntry, root: &Path) -> Vec<HotspotAction
         });
     }
 
-    // Drift: original author no longer maintains; add a notice action so
-    // agents can route the next change to the new top contributor.
     if ownership.ownership_state == OwnershipState::Drifting && ownership.drift {
         let reason = ownership
             .drift_reason
@@ -677,10 +505,6 @@ fn suggest_codeowners_pattern(path: &str) -> String {
     }
     format!("/{}/", components.join("/"))
 }
-
-// ────────────────────────────────────────────────────────────────────
-// RefactoringTargetFinding
-// ────────────────────────────────────────────────────────────────────
 
 /// Wire envelope for a single refactoring target.
 ///
@@ -854,13 +678,10 @@ mod hotspot_target_tests {
         let finding = HotspotFinding::with_actions(entry, Path::new("/root"));
         let json = serde_json::to_value(&finding).unwrap();
         let obj = json.as_object().unwrap();
-        // Inner fields at the top level via flatten.
         assert!(obj.contains_key("score"));
         assert!(obj.contains_key("commits"));
         assert!(obj.contains_key("weighted_commits"));
-        // Wrapper-only field.
         assert!(obj.contains_key("actions"));
-        // Optional inner fields with skip_serializing_if respect their attrs.
         assert!(!obj.contains_key("ownership"));
         assert!(!obj.contains_key("is_test_path"));
     }
@@ -988,17 +809,6 @@ mod hotspot_target_tests {
 
     #[test]
     fn hotspot_action_descriptions_normalise_windows_separators() {
-        // Cross-platform parity: the retired JSON post-pass read the path
-        // AFTER `strip_root_prefix` (which normalises backslashes via
-        // `normalize_uri`). The typed builder runs before serialisation
-        // and must apply the same normalisation, otherwise action
-        // descriptions on Windows would contain `src\api.ts` while macOS
-        // / Linux see `src/api.ts`. Simulating the Windows shape by
-        // constructing a path with embedded backslashes is cross-platform
-        // safe because `Path` on Unix treats the entire literal as one
-        // component (no `strip_prefix` match) and the builder falls
-        // back to the input path, which the `replace('\\', "/")` then
-        // normalises to forward slashes for description embedding.
         let mut entry = sample_entry("src\\api\\users.ts");
         entry.ownership = Some(OwnershipMetrics {
             bus_factor: 2,
@@ -1062,14 +872,11 @@ mod hotspot_target_tests {
         let finding = RefactoringTargetFinding::with_actions(target);
         let json = serde_json::to_value(&finding).unwrap();
         let obj = json.as_object().unwrap();
-        // Inner fields at the top level via flatten.
         assert!(obj.contains_key("priority"));
         assert!(obj.contains_key("efficiency"));
         assert!(obj.contains_key("recommendation"));
         assert!(obj.contains_key("category"));
-        // Wrapper-only field.
         assert!(obj.contains_key("actions"));
-        // Optional inner fields skipped when empty / None.
         assert!(!obj.contains_key("factors"));
         assert!(!obj.contains_key("evidence"));
     }
@@ -1119,8 +926,6 @@ mod hotspot_target_tests {
 
     #[test]
     fn codeowners_pattern_uses_deepest_directory() {
-        // Deepest dir keeps the suggestion tightly-scoped; the prior
-        // "first two levels" heuristic over-generalized in monorepos.
         assert_eq!(
             suggest_codeowners_pattern("src/api/users/handlers.ts"),
             "/src/api/users/",
@@ -1147,12 +952,6 @@ mod hotspot_target_tests {
 
     #[test]
     fn recommendation_category_snake_case_round_trips_through_serde() {
-        // Hard gate against drift between `category_snake_case` and the
-        // `#[serde(rename_all = "snake_case")]` attribute on
-        // `RecommendationCategory`. If a future contributor adds a new
-        // variant and forgets to extend the match, this test will fail
-        // because `serde_json::to_value` will emit one form and the
-        // hand-rolled mapper will emit another.
         let variants = [
             RecommendationCategory::UrgentChurnComplexity,
             RecommendationCategory::BreakCircularDependency,

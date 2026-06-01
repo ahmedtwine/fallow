@@ -240,8 +240,6 @@ fn sample_results(root: &Path) -> AnalysisResults {
     r
 }
 
-// ── JSON format ──────────────────────────────────────────────────
-
 #[test]
 fn json_output_snapshot() {
     let root = PathBuf::from("/project");
@@ -250,7 +248,6 @@ fn json_output_snapshot() {
     let value = build_json(&results, &root, elapsed).expect("JSON build should succeed");
     let json_str = serde_json::to_string_pretty(&value).expect("should serialize");
 
-    // Redact dynamic values (version changes with releases, elapsed_ms may vary)
     insta::assert_snapshot!(
         "json_output",
         json_str.replace(
@@ -277,8 +274,6 @@ fn json_empty_results_snapshot() {
     );
 }
 
-// ── SARIF format ─────────────────────────────────────────────────
-
 #[test]
 fn sarif_output_snapshot() {
     let root = PathBuf::from("/project");
@@ -301,8 +296,6 @@ fn sarif_empty_results_snapshot() {
     insta::assert_snapshot!("sarif_empty", redact_sarif_version(&json_str));
 }
 
-// ── Compact format ───────────────────────────────────────────────
-
 #[test]
 fn compact_output_snapshot() {
     let root = PathBuf::from("/project");
@@ -322,8 +315,6 @@ fn compact_empty_results_snapshot() {
 
     insta::assert_snapshot!("compact_empty", output);
 }
-
-// ── Per-issue-type compact snapshots ────────────────────────────
 
 #[test]
 fn compact_unused_files_only_snapshot() {
@@ -561,8 +552,6 @@ fn compact_duplicate_exports_only_snapshot() {
     insta::assert_snapshot!("compact_duplicate_exports_only", lines.join("\n"));
 }
 
-// ── Re-export variant snapshots ─────────────────────────────────
-
 #[test]
 fn compact_re_export_variant_snapshot() {
     let root = PathBuf::from("/project");
@@ -641,8 +630,6 @@ fn sarif_re_export_variant_snapshot() {
     insta::assert_snapshot!("sarif_re_export_variant", redact_sarif_version(&json_str));
 }
 
-// ── SARIF with mixed severity levels ────────────────────────────
-
 #[test]
 fn sarif_mixed_severity_snapshot() {
     let root = PathBuf::from("/project");
@@ -679,8 +666,6 @@ fn sarif_mixed_severity_snapshot() {
     insta::assert_snapshot!("sarif_mixed_severity", redact_sarif_version(&json_str));
 }
 
-// ── Type-only dependency snapshots ──────────────────────────────
-
 #[test]
 fn json_type_only_deps_snapshot() {
     let root = PathBuf::from("/project");
@@ -714,8 +699,6 @@ fn json_type_only_deps_snapshot() {
         )
     );
 }
-
-// ── Per-issue-type JSON snapshots ───────────────────────────────
 
 fn redact_version(json_str: &str) -> String {
     json_str.replace(
@@ -901,14 +884,8 @@ fn json_duplicate_exports_only_snapshot() {
 
 #[test]
 fn json_stale_suppression_unknown_kind_snapshot() {
-    // Issue #449: lock the wire shape for the unknown-kind case. The
-    // `kind_known: false` field MUST appear on the wire so JSON / MCP / CI
-    // consumers can distinguish "typo / obsolete name" from "stale-but-known
-    // kind". The recognized-kind case keeps the prior shape because
-    // `skip_serializing_if = "is_true"` omits the field.
     let root = PathBuf::from("/project");
     let mut results = AnalysisResults::default();
-    // Unknown kind: kind_known: false MUST be present.
     results.stale_suppressions.push(StaleSuppression {
         path: root.join("src/utils.ts"),
         line: 1,
@@ -919,7 +896,6 @@ fn json_stale_suppression_unknown_kind_snapshot() {
             kind_known: false,
         },
     });
-    // Recognized but stale: kind_known true is omitted on the wire.
     results.stale_suppressions.push(StaleSuppression {
         path: root.join("src/utils.ts"),
         line: 10,
@@ -938,11 +914,7 @@ fn json_stale_suppression_unknown_kind_snapshot() {
     );
 }
 
-// ── Per-issue-type SARIF snapshots ──────────────────────────────
-
 fn redact_sarif_version(json_str: &str) -> String {
-    // Only redact the fallow tool version inside `"driver": { "name": "fallow", "version": "..." }`,
-    // not the SARIF spec `"version": "2.1.0"` at the top level (which may collide).
     json_str.replace(
         &format!(
             "\"name\": \"fallow\",\n          \"version\": \"{}\"",
@@ -1139,8 +1111,6 @@ fn sarif_duplicate_exports_only_snapshot() {
     );
 }
 
-// ── Multiple items grouping ─────────────────────────────────────
-
 #[test]
 fn json_multiple_exports_same_file_snapshot() {
     let root = PathBuf::from("/project");
@@ -1248,8 +1218,6 @@ fn compact_multiple_exports_same_file_snapshot() {
     insta::assert_snapshot!("compact_multiple_exports_same_file", lines.join("\n"));
 }
 
-// ── Workspace package.json path variant ─────────────────────────
-
 #[test]
 fn json_workspace_dep_snapshot() {
     let root = PathBuf::from("/project");
@@ -1296,8 +1264,6 @@ fn sarif_workspace_dep_snapshot() {
     insta::assert_snapshot!("sarif_workspace_deps", redact_sarif_version(&json_str));
 }
 
-// ── CodeClimate format ──────────────────────────────────────────
-
 #[test]
 fn codeclimate_output_snapshot() {
     let root = PathBuf::from("/project");
@@ -1317,8 +1283,6 @@ fn codeclimate_empty_results_snapshot() {
     let json_str = serde_json::to_string_pretty(&cc).expect("should serialize");
     insta::assert_snapshot!("codeclimate_empty", json_str);
 }
-
-// ── Per-issue-type CodeClimate snapshots ────────────────────────
 
 #[test]
 fn codeclimate_unused_files_only_snapshot() {
@@ -1703,8 +1667,6 @@ fn codeclimate_workspace_dep_snapshot() {
     insta::assert_snapshot!("codeclimate_workspace_deps", json_str);
 }
 
-// ── PR/MR CI renderer snapshots ─────────────────────────────────
-
 #[test]
 fn pr_comment_github_snapshot() {
     let root = PathBuf::from("/project");
@@ -1754,8 +1716,6 @@ fn review_gitlab_envelope_snapshot() {
 
     insta::assert_snapshot!("review_gitlab_envelope", json_str);
 }
-
-// ── Cross-format parity: circular deps ──────────────────────────
 
 #[test]
 fn json_circular_deps_only_snapshot() {
@@ -1815,8 +1775,6 @@ fn compact_circular_deps_only_snapshot() {
     let lines = build_compact_lines(&results, &root);
     insta::assert_snapshot!("compact_circular_deps_only", lines.join("\n"));
 }
-
-// ── Cross-format parity: re-export cycles ───────────────────────
 
 fn re_export_cycles_results(root: &Path) -> AnalysisResults {
     let mut results = AnalysisResults::default();
@@ -1885,8 +1843,6 @@ fn codeclimate_re_export_cycles_only_snapshot() {
     insta::assert_snapshot!("codeclimate_re_export_cycles_only", json_str);
 }
 
-// ── Cross-format parity: type-only deps ─────────────────────────
-
 #[test]
 fn sarif_type_only_deps_snapshot() {
     let root = PathBuf::from("/project");
@@ -1921,8 +1877,6 @@ fn compact_type_only_deps_snapshot() {
     let lines = build_compact_lines(&results, &root);
     insta::assert_snapshot!("compact_type_only_deps", lines.join("\n"));
 }
-
-// ── Cross-format parity: unused dev/optional deps ───────────────
 
 #[test]
 fn json_unused_dev_deps_only_snapshot() {
@@ -2006,8 +1960,6 @@ fn sarif_unused_optional_deps_only_snapshot() {
     );
 }
 
-// ── Cross-format parity: multiple exports, workspace, mixed ─────
-
 #[test]
 fn compact_workspace_dep_snapshot() {
     let root = PathBuf::from("/project");
@@ -2030,15 +1982,10 @@ fn json_mixed_severity_snapshot() {
     let root = PathBuf::from("/project");
     let results = sample_results(&root);
     let elapsed = Duration::from_millis(42);
-    // JSON includes severity metadata via _meta when explain is true,
-    // but the raw format doesn't encode severity — this test verifies
-    // the output is stable regardless of rules config.
     let value = build_json(&results, &root, elapsed).expect("JSON build should succeed");
     let json_str = serde_json::to_string_pretty(&value).expect("should serialize");
     insta::assert_snapshot!("json_mixed_severity", redact_version(&json_str));
 }
-
-// ── Markdown format ─────────────────────────────────────────────
 
 #[test]
 fn markdown_output_snapshot() {
@@ -2305,8 +2252,6 @@ fn markdown_workspace_dep_snapshot() {
     insta::assert_snapshot!("markdown_workspace_deps", output);
 }
 
-// ── Health report snapshots ─────────────────────────────────────
-
 /// Build a minimal health report with one finding for snapshot tests.
 fn sample_health_report(root: &Path) -> HealthReport {
     let action_ctx = fallow_cli::health_types::HealthActionContext {
@@ -2415,8 +2360,6 @@ fn health_report_with_runtime_coverage(root: &Path) -> HealthReport {
             },
             RuntimeCoverageFinding {
                 id: "fallow:prod:feedface".to_string(),
-                // Left absent to exercise the "stable identity where available"
-                // path: an older sidecar / un-migrated cloud supplies no identity.
                 stable_id: None,
                 path: root.join("src/unknown.ts"),
                 function: "lateBound".to_string(),
@@ -2815,8 +2758,6 @@ fn json_health_with_coverage_gaps_snapshot() {
     insta::assert_snapshot!("json_health_with_coverage_gaps", redact_version(&json_str));
 }
 
-// ── Health score snapshots ──────────────────────────────────────
-
 /// Build a health report with score populated.
 fn health_report_with_score(root: &Path) -> HealthReport {
     let mut report = sample_health_report(root);
@@ -2887,8 +2828,6 @@ fn codeclimate_health_with_score_snapshot() {
     let json_str = serde_json::to_string_pretty(&cc).expect("should serialize");
     insta::assert_snapshot!("codeclimate_health_with_score", json_str);
 }
-
-// ── Health trend snapshots ─────────────────────────────────────
 
 /// Build a health report with trend data populated.
 fn health_report_with_trend(root: &Path) -> HealthReport {
@@ -2967,8 +2906,6 @@ fn markdown_health_with_trend_snapshot() {
     let output = build_health_markdown(&report, &root);
     insta::assert_snapshot!("markdown_health_with_trend", output);
 }
-
-// ── Duplication report snapshots ────────────────────────────────
 
 /// Build a sample duplication report for snapshot tests.
 fn sample_duplication_report(root: &Path) -> DuplicationReport {
@@ -3050,13 +2987,10 @@ fn codeclimate_duplication_empty_snapshot() {
     insta::assert_snapshot!("codeclimate_duplication_empty", json_str);
 }
 
-// ── Grouped duplication snapshots ───────────────────────────────────
-
 /// Build a multi-group duplication report exercising the largest-owner rule.
 fn sample_grouped_duplication_report(root: &Path) -> DuplicationReport {
     DuplicationReport {
         clone_groups: vec![
-            // Group 1: 2 src instances + 1 lib instance -> primary owner = src
             CloneGroup {
                 instances: vec![
                     CloneInstance {
@@ -3087,7 +3021,6 @@ fn sample_grouped_duplication_report(root: &Path) -> DuplicationReport {
                 token_count: 25,
                 line_count: 11,
             },
-            // Group 2: 2 lib instances -> primary owner = lib
             CloneGroup {
                 instances: vec![
                     CloneInstance {
@@ -3139,7 +3072,6 @@ fn grouped_duplication_json_directory_snapshot() {
         build_grouped_duplication_json(&report, &grouping, &root, Duration::from_millis(0), false)
             .expect("should serialize");
     let json_str = serde_json::to_string_pretty(&value).expect("should serialize");
-    // Redact dynamic values (version changes with releases; elapsed_ms is forced to 0 above).
     insta::assert_snapshot!(
         "grouped_duplication_json_directory",
         json_str.replace(
@@ -3154,9 +3086,6 @@ fn grouped_duplication_codeclimate_directory_snapshot() {
     let root = PathBuf::from("/project");
     let report = sample_grouped_duplication_report(&root);
     let resolver = fallow_cli::report::OwnershipResolver::Directory;
-    // Build the codeclimate output, then post-process per-issue with the
-    // group key (replicates the runtime path inside print_grouped_duplication_codeclimate
-    // for snapshot stability without going through stdout).
     let mut value = codeclimate_issues_to_value(&build_duplication_codeclimate(&report, &root));
     let mut path_to_owner = rustc_hash::FxHashMap::<String, String>::default();
     for group in &report.clone_groups {

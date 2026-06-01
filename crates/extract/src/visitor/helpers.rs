@@ -1,7 +1,3 @@
-//! Standalone helper functions for AST extraction.
-//!
-//! These functions don't require visitor state and operate purely on AST nodes.
-
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, BinaryExpression, BindingPattern, Class, ClassElement,
     Expression, MethodDefinitionKind, ObjectPropertyKind, Statement, TSAccessibility, TSSignature,
@@ -12,29 +8,15 @@ use rustc_hash::FxHashMap;
 
 use crate::{MemberInfo, MemberKind};
 
-/// Metadata extracted from an Angular `@Component` decorator.
 pub struct AngularComponentMetadata {
-    /// The `templateUrl` value (e.g., `"./app.html"`).
     pub template_url: Option<String>,
-    /// All style file URLs from `styleUrl` (singular) and `styleUrls` (array).
     pub style_urls: Vec<String>,
-    /// Inline `template:` string literal content.
     pub inline_template: Option<String>,
-    /// Source span of the matched `@Component`/`@Directive` decorator.
-    /// Used to anchor synthetic `<template>` complexity findings to a useful
-    /// line/col in the host `.ts` file, and to honour `// fallow-ignore-next-line`
-    /// comments placed above the decorator. Always populated when this struct
-    /// is returned (the loop that constructs it runs over `class.decorators`).
     pub decorator_span: Span,
-    /// Class member names referenced in `host:` binding expressions.
     pub host_member_refs: Vec<String>,
-    /// Class member names listed in `inputs:` and `outputs:` metadata arrays.
     pub input_output_members: Vec<String>,
 }
 
-/// Angular signal-based API function names that implicitly mark class properties
-/// as framework-managed (Angular 17+). Properties initialized with these calls
-/// should be treated like decorated members.
 const ANGULAR_SIGNAL_APIS: &[&str] = &[
     "input",
     "output",
@@ -46,11 +28,6 @@ const ANGULAR_SIGNAL_APIS: &[&str] = &[
     "contentChildren",
 ];
 
-/// Extract all metadata from an Angular `@Component` decorator.
-///
-/// Walks the class's decorators looking for a `@Component({...})` call expression
-/// and extracts template/style URLs, inline templates, host bindings, and
-/// inputs/outputs metadata.
 pub fn extract_angular_component_metadata(class: &Class<'_>) -> Option<AngularComponentMetadata> {
     for decorator in &class.decorators {
         let Expression::CallExpression(call) = &decorator.expression else {
@@ -92,10 +69,6 @@ pub fn extract_angular_component_metadata(class: &Class<'_>) -> Option<AngularCo
                         && tpl.expressions.is_empty()
                         && let Some(quasi) = tpl.quasis.first()
                     {
-                        // Prefer the cooked (escape-interpreted) value so newline
-                        // and other escapes feed the template-complexity scanner
-                        // correctly. Fall back to raw when the cooked value is
-                        // unavailable (parse-level escape errors).
                         let source = quasi
                             .value
                             .cooked
@@ -154,11 +127,6 @@ pub fn extract_angular_component_metadata(class: &Class<'_>) -> Option<AngularCo
     None
 }
 
-/// Extract identifier references from Angular `host:` binding expressions.
-///
-/// Host bindings use string keys like `'[class.active]': 'isActive'`,
-/// `'(click)': 'onClick($event)'`, `'[style.--color]': 'customColor()'`.
-/// The value strings contain expressions referencing class members.
 fn extract_host_member_refs(host_obj: &oxc_ast::ast::ObjectExpression<'_>, refs: &mut Vec<String>) {
     for prop in &host_obj.properties {
         let ObjectPropertyKind::ObjectProperty(p) = prop else {
@@ -170,10 +138,6 @@ fn extract_host_member_refs(host_obj: &oxc_ast::ast::ObjectExpression<'_>, refs:
     }
 }
 
-/// Extract property names from Angular `queries:` metadata object.
-///
-/// `queries: { myRef: new ViewChild('ref') }` declares class properties as
-/// view/content queries. The object keys are the class member names.
 fn extract_query_members(value: &Expression<'_>, members: &mut Vec<String>) {
     let Expression::ObjectExpression(obj) = value else {
         return;
@@ -191,10 +155,6 @@ fn extract_query_members(value: &Expression<'_>, members: &mut Vec<String>) {
     }
 }
 
-/// Extract member names from Angular `inputs`/`outputs` metadata arrays.
-///
-/// Handles `inputs: ['memberName']` and `inputs: ['memberName: alias']`
-/// (takes the part before the colon as the class member name).
 fn extract_input_output_members(value: &Expression<'_>, members: &mut Vec<String>) {
     let Expression::ArrayExpression(arr) = value else {
         return;
@@ -216,17 +176,11 @@ fn extract_input_output_members(value: &Expression<'_>, members: &mut Vec<String
     }
 }
 
-/// Extract top-level identifier names from an Angular host binding expression string.
-///
-/// These are simple expressions like `'isActive'`, `'onClick($event)'`,
-/// `'hostClass()'`, `'customColor()'`. We extract the leading identifier
-/// before any `(` or `.` character.
 fn extract_identifiers_from_host_expr(expr: &str, refs: &mut Vec<String>) {
     let expr = expr.trim();
     if expr.is_empty() {
         return;
     }
-    // Extract the leading identifier (before any call parens, member access, etc.)
     let ident: String = expr
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
@@ -237,7 +191,6 @@ fn extract_identifiers_from_host_expr(expr: &str, refs: &mut Vec<String>) {
     refs.push(ident);
 }
 
-/// Check if a string is a valid class member identifier (not a keyword or built-in).
 fn is_valid_member_identifier(ident: &str) -> bool {
     !ident.is_empty()
         && ident
@@ -269,8 +222,6 @@ fn is_valid_member_identifier(ident: &str) -> bool {
         )
 }
 
-/// Check if a class has any Angular decorator (`@Component`, `@Directive`,
-/// `@Injectable`, `@Pipe`).
 pub fn has_angular_class_decorator(class: &Class<'_>) -> bool {
     class.decorators.iter().any(|d| {
         if let Expression::CallExpression(call) = &d.expression
@@ -292,12 +243,6 @@ pub(super) enum LitCustomElementDecorator {
     Namespace { local_name: String },
 }
 
-/// Extract the local binding used by a syntactic `@customElement('tag-name')`
-/// decorator.
-///
-/// Import validation happens after the full AST walk, so this only captures the
-/// decorator callee shape. The caller later verifies that the captured binding
-/// came from Lit's decorator modules before crediting the class as used.
 pub(super) fn lit_custom_element_decorator(class: &Class<'_>) -> Option<LitCustomElementDecorator> {
     class.decorators.iter().find_map(|d| {
         let Expression::CallExpression(call) = &d.expression else {
@@ -322,13 +267,6 @@ pub(super) fn lit_custom_element_decorator(class: &Class<'_>) -> Option<LitCusto
     })
 }
 
-/// Extract the registered tag name from a `customElements.define('tag', ClassRef)`
-/// call expression at the module top level.
-///
-/// Returns `Some((tag_name, class_local_name))` when the call's callee is the
-/// static member `customElements.define` and the arguments are
-/// `(StringLiteral, Identifier)`. The class identifier names a same-file class
-/// declaration whose export should be credited as side-effect-used.
 pub fn extract_custom_elements_define(
     call: &oxc_ast::ast::CallExpression<'_>,
 ) -> Option<(String, String)> {
@@ -352,18 +290,12 @@ pub fn extract_custom_elements_define(
     Some((tag, class_name))
 }
 
-/// Check if a property initializer is an Angular signal API call.
-///
-/// Matches `input()`, `input.required()`, `output()`, `outputFromObservable()`,
-/// `model()`, `viewChild()`, `viewChildren()`, `contentChild()`, `contentChildren()`.
 fn is_angular_signal_initializer(value: &Expression<'_>) -> bool {
     let Expression::CallExpression(call) = value else {
         return false;
     };
     match &call.callee {
-        // Direct call: `input()`, `output()`, `model()`, etc.
         Expression::Identifier(id) => ANGULAR_SIGNAL_APIS.contains(&id.name.as_str()),
-        // Static member call: `input.required()`
         Expression::StaticMemberExpression(member) => {
             if let Expression::Identifier(obj) = &member.object {
                 ANGULAR_SIGNAL_APIS.contains(&obj.name.as_str())
@@ -376,22 +308,11 @@ fn is_angular_signal_initializer(value: &Expression<'_>) -> bool {
     }
 }
 
-/// Result of recognizing an Angular signal-query property initializer.
 pub(super) struct AngularSignalQuery {
-    /// The element type `T` from `viewChild<T>(...)` etc.
     pub type_arg: String,
-    /// `true` for `viewChildren`/`contentChildren` (returns a signal of an
-    /// array of children), `false` for the singular factories.
     pub plural: bool,
 }
 
-/// Recognize `viewChild<T>(...)` / `viewChildren<T>(...)` /
-/// `contentChild<T>(...)` / `contentChildren<T>(...)` initializers and return
-/// the element type `T` plus whether the factory is plural.
-///
-/// Falls back to the first call-argument identifier when no explicit type
-/// argument is supplied (e.g. `contentChild(ChildComponent)`), matching how
-/// Angular infers `T` from the locator class.
 pub(super) fn extract_angular_signal_query(value: &Expression<'_>) -> Option<AngularSignalQuery> {
     let Expression::CallExpression(call) = value else {
         return None;
@@ -425,12 +346,6 @@ pub(super) fn extract_angular_signal_query(value: &Expression<'_>) -> Option<Ang
     None
 }
 
-/// Peel `QueryList<T>` (and the nullable variants `QueryList<T> | undefined`,
-/// `QueryList<T> | null`) out of a TypeScript type annotation, returning `T`
-/// when `T` is a single class identifier.
-///
-/// Used for `@ViewChildren` / `@ContentChildren` properties where the type
-/// annotation is the only place the element type appears.
 pub(super) fn extract_query_list_element_type(annotation: &TSTypeAnnotation<'_>) -> Option<String> {
     extract_query_list_from_type(&annotation.type_annotation)
 }
@@ -472,9 +387,6 @@ fn extract_query_list_from_type(ty: &TSType<'_>) -> Option<String> {
     }
 }
 
-/// Recognize a `@ViewChildren(...)` or `@ContentChildren(...)` decorator on a
-/// class property. Used in conjunction with [`extract_query_list_element_type`]
-/// to wire up `forEach`-style iteration through the property.
 pub(super) fn has_angular_plural_query_decorator(
     decorators: &[oxc_ast::ast::Decorator<'_>],
 ) -> bool {
@@ -489,11 +401,6 @@ pub(super) fn has_angular_plural_query_decorator(
     })
 }
 
-/// Extract class members (methods and properties) from a class declaration.
-///
-/// When `is_angular_class` is true, properties initialized with Angular signal
-/// APIs (`input()`, `output()`, `outputFromObservable()`, `model()`, `viewChild()`, etc.) are treated as
-/// decorated (framework-managed) to prevent false unused-member reports.
 pub fn extract_class_members(class: &Class<'_>, is_angular_class: bool) -> Vec<MemberInfo> {
     let class_name = class.id.as_ref().map(|id| id.name.as_str());
     let mut members = Vec::new();
@@ -502,7 +409,6 @@ pub fn extract_class_members(class: &Class<'_>, is_angular_class: bool) -> Vec<M
             ClassElement::MethodDefinition(method) => {
                 if let Some(name) = method.key.static_name() {
                     let name_str = name.to_string();
-                    // Skip constructor, private, and protected methods
                     if name_str != "constructor"
                         && !matches!(
                             method.accessibility,
@@ -567,23 +473,6 @@ pub fn extract_class_members(class: &Class<'_>, is_angular_class: bool) -> Vec<M
     members
 }
 
-/// Detect whether a static method returns a fresh instance of the enclosing
-/// class. Two qualifying shapes:
-///
-/// 1. Body's LAST top-level statement is `return new this()` or
-///    `return new <class_name>()`. Earlier guard returns inside `if` blocks
-///    are not top-level, so they don't disqualify. A stray dead-code pair
-///    `return null; return new this();` is correctly rejected because the
-///    qualifying return is not the last statement.
-/// 2. Declared return type matches the enclosing class name (issue #387):
-///    `static createWithDefaults(): EventBuilder { return chain; }` where the
-///    body is a fluent chain ending in a method that returns `this`. The
-///    declared return type is a strong signal even when the body is too
-///    complex to inspect syntactically.
-///
-/// Chained `.build()` results, `Object.assign(new this(), ...)`, and
-/// ternaries are intentionally out of scope (only matter when the declared
-/// return type isn't the class). See issues #346, #387.
 fn is_instance_returning_static_method(
     method: &oxc_ast::ast::MethodDefinition<'_>,
     class_name: Option<&str>,
@@ -599,18 +488,6 @@ fn is_instance_returning_static_method(
         .is_some_and(|stmt| statement_returns_class_instance(stmt, class_name))
 }
 
-/// Detect whether an instance method's call result is the enclosing class
-/// (i.e., the method is suitable for fluent-builder chaining). Two qualifying
-/// shapes:
-///
-/// 1. Declared return type matches the enclosing class name. The canonical
-///    fluent shape: `setX(value: T): EventBuilder { ... return this; }`.
-/// 2. Body's LAST top-level statement is `return this`. The "untyped" fluent
-///    shape: `setX(value) { ...; return this; }`.
-///
-/// Used by the analyze layer to continue walking a fluent chain
-/// (`Class.factory().setX().setY()`) only while each step preserves the
-/// receiver type. See issue #387.
 fn is_self_returning_instance_method(
     method: &oxc_ast::ast::MethodDefinition<'_>,
     class_name: Option<&str>,
@@ -663,16 +540,10 @@ fn is_self_construction_expression(expr: &Expression<'_>, class_name: Option<&st
     }
 }
 
-/// Extract the parent class name from an `extends` clause, if present.
-///
-/// Returns `Some("ParentClass")` for `class Foo extends ParentClass { ... }`.
-/// Only handles simple identifier references — complex expressions like
-/// `extends mixin(Base)` return `None`.
 pub fn extract_super_class_name(class: &Class<'_>) -> Option<String> {
     extract_static_expression_name(class.super_class.as_ref()?)
 }
 
-/// Extract implemented interface names from a class declaration.
 #[must_use]
 pub fn extract_implemented_interface_names(class: &Class<'_>) -> Vec<String> {
     class
@@ -682,16 +553,11 @@ pub fn extract_implemented_interface_names(class: &Class<'_>) -> Vec<String> {
         .collect()
 }
 
-/// Extract a simple referenced type name from a type annotation.
 #[must_use]
 pub fn extract_type_annotation_name(type_annotation: &TSTypeAnnotation<'_>) -> Option<String> {
     extract_type_reference_name(&type_annotation.type_annotation)
 }
 
-/// Extract nested object-type bindings from a type annotation.
-///
-/// For `{ foo: FooClass }`, returns `("foo", "FooClass")`. For nested
-/// structural types, returns dotted paths such as `("deps.foo", "FooClass")`.
 #[must_use]
 pub fn extract_nested_type_bindings(
     type_annotation: &TSTypeAnnotation<'_>,
@@ -741,24 +607,6 @@ fn collect_nested_type_bindings(
     }
 }
 
-/// Extract typed instance bindings from a class: pairs of
-/// `(local_name, type_name)` for non-private typed constructor parameters
-/// with accessibility modifiers, non-private typed property declarations, and
-/// non-private typed getters.
-///
-/// Analysis uses these bindings to follow chains such as
-/// `factory.service.method()` from the factory class to the service class.
-/// Angular templates also reference these bindings by their local name
-/// (`dataService.getTotal()` in the template maps to
-/// `this.dataService` -> `DataService`). Private bindings are excluded.
-///
-/// Generic-constraint resolution (issue #388): when a binding's type is a
-/// generic parameter declared on the class (`class BaseService<TClient extends
-/// BaseClient>`), the parameter is substituted with its constraint type
-/// (`TClient` -> `BaseClient`). Without this, `this.client.fetchLatest()` on a
-/// `TClient`-typed field cannot resolve `fetchLatest` back to `BaseClient`.
-/// Unconstrained type parameters (`<T>`) are dropped: there is no
-/// resolvable class for the caller to bind to.
 #[must_use]
 pub fn extract_class_instance_bindings(class: &Class<'_>) -> Vec<(String, String)> {
     let type_param_constraints = collect_class_type_param_constraints(class);
@@ -841,13 +689,6 @@ pub fn extract_class_instance_bindings(class: &Class<'_>) -> Vec<(String, String
     bindings
 }
 
-/// Build a map from each class type parameter name to the type name of its
-/// constraint, if any. `class Service<TClient extends BaseClient, T>` produces
-/// `{TClient -> Some(BaseClient), T -> None}`. Used by
-/// `extract_class_instance_bindings` and the visitor's class-scoped type-
-/// param resolver to substitute generic parameter names with their resolvable
-/// class constraint, and to drop unconstrained parameters that cannot be
-/// resolved to a concrete class. See issue #388.
 #[must_use]
 pub fn collect_class_type_param_constraints(
     class: &Class<'_>,
@@ -866,20 +707,6 @@ pub fn collect_class_type_param_constraints(
     map
 }
 
-/// Extract a simple referenced type name from a TypeScript type node.
-///
-/// Beyond the bare `TSTypeReference` and parenthesized cases, the helper also
-/// peels back nullable wrappers commonly produced by repository-hydration code
-/// paths so the underlying class is still reachable for member tracking:
-///
-/// - `T | null`, `T | undefined`, `T | null | undefined` — extracts `T` when
-///   exactly one branch reduces to a class and the rest are `null`/`undefined`.
-///   Catches the dominant nullable-return pattern `let x: Aggregate | undefined`.
-///
-/// The peel stays strictly syntactic. Wider unions (e.g. `T | U` between two
-/// classes) are intentionally unsupported — there is no single class for the
-/// caller to bind to. `Array<T>`, `Set<T>`, etc. are deliberately not unwrapped:
-/// the binding refers to the collection, not its element.
 #[must_use]
 pub fn extract_type_reference_name(ty: &TSType<'_>) -> Option<String> {
     match ty {
@@ -890,9 +717,6 @@ pub fn extract_type_reference_name(ty: &TSType<'_>) -> Option<String> {
     }
 }
 
-/// Return the single non-nullish branch of a union when every other branch is
-/// `null` or `undefined`. Anything else (multi-class unions, literal unions,
-/// intersections) returns `None` — callers expect a single underlying class.
 fn extract_nullable_union_name(union: &oxc_ast::ast::TSUnionType<'_>) -> Option<String> {
     let mut found: Option<String> = None;
     for branch in &union.types {
@@ -909,19 +733,6 @@ fn extract_nullable_union_name(union: &oxc_ast::ast::TSUnionType<'_>) -> Option<
     found
 }
 
-/// Extract the dotted identifier path of a decorator expression.
-///
-/// Handles the shapes a class-member decorator can take:
-/// - `@Foo` (`Identifier`) becomes `"Foo"`.
-/// - `@Foo("arg")` (`CallExpression` wrapping `Identifier`) becomes `"Foo"`.
-/// - `@ns.Foo` (`StaticMemberExpression`) becomes `"ns.Foo"`.
-/// - `@ns.Foo("arg")` becomes `"ns.Foo"`.
-/// - `@a.b.c` becomes `"a.b.c"`.
-/// - Parenthesized variants are unwrapped recursively.
-///
-/// Returns an empty string for anything else (computed members, conditional
-/// expressions, etc.); the predicate treats empty entries as never-matching,
-/// so members carrying such decorators retain the conservative skip behavior.
 pub(super) fn decorator_path(expr: &Expression<'_>) -> String {
     match expr {
         Expression::Identifier(id) => id.name.to_string(),
@@ -963,7 +774,6 @@ fn extract_type_name(name: &TSTypeName<'_>) -> Option<String> {
     }
 }
 
-/// Check if an argument expression is `import.meta.url`.
 pub(super) fn is_meta_url_arg(arg: &Argument<'_>) -> bool {
     if let Argument::StaticMemberExpression(member) = arg
         && member.property.name == "url"
@@ -974,11 +784,6 @@ pub(super) fn is_meta_url_arg(arg: &Argument<'_>) -> bool {
     false
 }
 
-/// Walk a `TSImportType` qualifier chain to its leftmost identifier name.
-///
-/// `typeof import('./x').A.B.C` produces a nested
-/// `QualifiedName { left: QualifiedName { left: Identifier("A"), right: "B" }, right: "C" }`.
-/// Returns `"A"` for that shape, `"foo"` for a flat `Identifier("foo")` qualifier.
 pub(super) fn ts_import_type_qualifier_root<'a>(
     qualifier: &'a oxc_ast::ast::TSImportTypeQualifier<'a>,
 ) -> &'a str {
@@ -991,7 +796,6 @@ pub(super) fn ts_import_type_qualifier_root<'a>(
     }
 }
 
-/// Extract static prefix and optional suffix from a binary addition chain.
 pub(super) fn extract_concat_parts(
     expr: &BinaryExpression<'_>,
 ) -> Option<(String, Option<String>)> {
@@ -1022,33 +826,18 @@ fn extract_trailing_string(expr: &Expression<'_>) -> Option<String> {
     }
 }
 
-/// Convert a simple regex extension filter pattern to a glob suffix.
-///
-/// Handles common `require.context()` patterns like:
-/// - `\.vue$` → `".vue"`
-/// - `\.tsx?$` → uses `".ts"` / `".tsx"` via glob `".{ts,tsx}"`
-/// - `\.(js|ts)$` → `".{js,ts}"`
-/// - `\.(js|jsx|ts|tsx)$` → `".{js,jsx,ts,tsx}"`
-///
-/// Returns `None` for patterns that are too complex to convert.
 pub(super) fn regex_pattern_to_suffix(pattern: &str) -> Option<String> {
-    // Strip leading `^` or `.*` anchors (they don't affect extension matching)
     let p = pattern.strip_prefix('^').unwrap_or(pattern);
     let p = p.strip_prefix(".*").unwrap_or(p);
 
-    // Must start with `\.` (escaped dot for extension)
     let p = p.strip_prefix("\\.")?;
 
-    // Must end with `$`
     let p = p.strip_suffix('$')?;
 
-    // Pattern: `ext?` — e.g., `tsx?` → {ts,tsx}
     if let Some(base) = p.strip_suffix('?') {
-        // base must be simple alphanumeric (e.g., "tsx" from "tsx?")
         if base.chars().all(|c| c.is_ascii_alphanumeric()) && !base.is_empty() {
             let without_last = &base[..base.len() - 1];
             if without_last.is_empty() {
-                // Single char like `x?` → matches "" or "x", too ambiguous
                 return None;
             }
             return Some(format!(".{{{without_last},{base}}}"));
@@ -1056,7 +845,6 @@ pub(super) fn regex_pattern_to_suffix(pattern: &str) -> Option<String> {
         return None;
     }
 
-    // Pattern: `(ext1|ext2|...)` — e.g., `(js|ts)` → {js,ts}
     if let Some(inner) = p.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
         let exts: Vec<&str> = inner.split('|').collect();
         if exts
@@ -1068,7 +856,6 @@ pub(super) fn regex_pattern_to_suffix(pattern: &str) -> Option<String> {
         return None;
     }
 
-    // Pattern: simple extension like `vue`, `json`, `css`
     if p.chars().all(|c| c.is_ascii_alphanumeric()) && !p.is_empty() {
         return Some(format!(".{p}"));
     }
@@ -1076,30 +863,17 @@ pub(super) fn regex_pattern_to_suffix(pattern: &str) -> Option<String> {
     None
 }
 
-/// Try to extract a class name from a factory function argument.
-///
-/// Matches patterns where a call argument is an arrow function or function
-/// expression whose body returns a `new ClassName(...)` expression:
-///
-/// - `() => new Foo()`  (arrow expression body)
-/// - `() => { return new Foo(); }` (arrow block body)
-/// - `function() { return new Foo(); }` (function expression)
-///
-/// Returns the class name if found and it's not a built-in constructor.
 pub(super) fn try_extract_factory_new_class(arguments: &[Argument<'_>]) -> Option<String> {
     for arg in arguments {
         let class_name = match arg {
             Argument::ArrowFunctionExpression(arrow) => {
                 if arrow.expression {
-                    // Expression body: `() => new Foo()`
                     extract_new_class_from_statement(arrow.body.statements.first()?)
                 } else {
-                    // Block body: `() => { return new Foo(); }`
                     extract_new_class_from_return_body(&arrow.body.statements)
                 }
             }
             Argument::FunctionExpression(func) => {
-                // `function() { return new Foo(); }`
                 extract_new_class_from_return_body(&func.body.as_ref()?.statements)
             }
             _ => None,
@@ -1113,7 +887,6 @@ pub(super) fn try_extract_factory_new_class(arguments: &[Argument<'_>]) -> Optio
     None
 }
 
-/// Extract a class name from a `new ClassName(...)` in an expression statement.
 fn extract_new_class_from_statement(stmt: &Statement<'_>) -> Option<String> {
     if let Statement::ExpressionStatement(expr_stmt) = stmt
         && let Expression::NewExpression(new_expr) = &expr_stmt.expression
@@ -1124,7 +897,6 @@ fn extract_new_class_from_statement(stmt: &Statement<'_>) -> Option<String> {
     None
 }
 
-/// Extract a class name from the last `return new ClassName(...)` in a function body.
 fn extract_new_class_from_return_body(stmts: &[Statement<'_>]) -> Option<String> {
     for stmt in stmts.iter().rev() {
         if let Statement::ReturnStatement(ret) = stmt
@@ -1137,11 +909,6 @@ fn extract_new_class_from_return_body(stmts: &[Statement<'_>]) -> Option<String>
     None
 }
 
-/// Check if a name is a well-known JavaScript/DOM built-in constructor.
-///
-/// Used to avoid creating spurious instance bindings for `new URL()`, `new Map()`,
-/// etc. These are never user-exported classes and would only create noise in the
-/// member access tracking pipeline.
 pub(super) fn is_builtin_constructor(name: &str) -> bool {
     matches!(
         name,
@@ -1210,11 +977,8 @@ pub(super) fn is_builtin_constructor(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    // ── regex_pattern_to_suffix ──────────────────────────────
-
     #[test]
     fn regex_suffix_with_caret_anchor() {
-        // Leading `^` should be stripped — result matches bare pattern
         assert_eq!(
             regex_pattern_to_suffix(r"^\.vue$"),
             Some(".vue".to_string())
@@ -1227,7 +991,6 @@ mod tests {
 
     #[test]
     fn regex_suffix_with_dotstar_anchor() {
-        // Leading `.*` should be stripped
         assert_eq!(
             regex_pattern_to_suffix(r".*\.css$"),
             Some(".css".to_string())
@@ -1236,7 +999,6 @@ mod tests {
 
     #[test]
     fn regex_suffix_with_both_anchors() {
-        // Both `^` and `.*` as prefix
         assert_eq!(
             regex_pattern_to_suffix(r"^.*\.ts$"),
             Some(".ts".to_string())
@@ -1245,13 +1007,11 @@ mod tests {
 
     #[test]
     fn regex_suffix_single_char_optional_returns_none() {
-        // `\.x?$` — single char base "x" minus last char = "" which is too ambiguous
         assert_eq!(regex_pattern_to_suffix(r"\.x?$"), None);
     }
 
     #[test]
     fn regex_suffix_two_char_optional() {
-        // `\.ts?$` — base "ts" minus last = "t", result: .{t,ts}
         assert_eq!(
             regex_pattern_to_suffix(r"\.ts?$"),
             Some(".{t,ts}".to_string())
@@ -1260,25 +1020,21 @@ mod tests {
 
     #[test]
     fn regex_suffix_no_dollar_sign_returns_none() {
-        // Missing trailing `$` should return None
         assert_eq!(regex_pattern_to_suffix(r"\.vue"), None);
     }
 
     #[test]
     fn regex_suffix_no_escaped_dot_returns_none() {
-        // Missing `\.` prefix should return None
         assert_eq!(regex_pattern_to_suffix(r"vue$"), None);
     }
 
     #[test]
     fn regex_suffix_empty_alternation_returns_none() {
-        // Empty group `()` should return None (no extensions)
         assert_eq!(regex_pattern_to_suffix(r"\.()$"), None);
     }
 
     #[test]
     fn regex_suffix_alternation_with_special_chars_returns_none() {
-        // Special characters in alternation group
         assert_eq!(regex_pattern_to_suffix(r"\.(j.s|ts)$"), None);
     }
 
@@ -1287,8 +1043,6 @@ mod tests {
         assert_eq!(regex_pattern_to_suffix(r"\..+$"), None);
         assert_eq!(regex_pattern_to_suffix(r"\.[a-z]+$"), None);
     }
-
-    // ── is_builtin_constructor ───────────────────────────────
 
     #[test]
     fn builtin_constructors_recognized() {

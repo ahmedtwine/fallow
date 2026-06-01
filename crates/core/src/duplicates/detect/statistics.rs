@@ -14,7 +14,6 @@ pub(super) fn compute_stats(
     total_tokens: usize,
 ) -> DuplicationStats {
     let mut files_with_clones: FxHashSet<&Path> = FxHashSet::default();
-    // Group duplicated lines by file to avoid cloning PathBuf per line.
     let mut file_dup_lines: FxHashMap<&Path, FxHashSet<usize>> = FxHashMap::default();
     let mut duplicated_tokens = 0usize;
     let mut clone_instances = 0usize;
@@ -28,8 +27,6 @@ pub(super) fn compute_stats(
                 lines.insert(line);
             }
         }
-        // Each instance contributes token_count duplicated tokens,
-        // but only count duplicates (all instances beyond the first).
         if group.instances.len() > 1 {
             duplicated_tokens += group.token_count * (group.instances.len() - 1);
         }
@@ -42,8 +39,6 @@ pub(super) fn compute_stats(
         0.0
     };
 
-    // Cap duplicated_tokens to total_tokens to avoid impossible values
-    // when overlapping clone groups double-count the same token positions.
     let duplicated_tokens = duplicated_tokens.min(total_tokens);
 
     DuplicationStats {

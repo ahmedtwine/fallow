@@ -1,8 +1,6 @@
 use super::common::{create_config, fixture_path};
 use fallow_config::{FallowConfig, OutputFormat, RulesConfig};
 
-// ── Rules "off" disables detection ─────────────────────────────
-
 #[test]
 fn rules_off_disables_unused_files() {
     let root = fixture_path("detect-config");
@@ -67,8 +65,6 @@ fn rules_off_disables_duplicate_exports() {
         "duplicate exports should be empty when rule is off"
     );
 }
-
-// ── Ignore exports ─────────────────────────────────────────────
 
 #[test]
 fn ignore_exports_wildcard() {
@@ -282,10 +278,6 @@ fn ignore_exports_used_in_file_kind_form_can_target_types_only() {
 
 #[test]
 fn ignore_exports_used_in_file_does_not_suppress_export_specifier_self_references() {
-    // Regression: `function foo() {}; export { foo };` and
-    // `export default foo;` reference the binding only at the export site.
-    // The export specifier identifier is not a same-file *use*, so these
-    // exports must still be reported when ignoreExportsUsedInFile is on.
     let root = fixture_path("ignore-exports-used-in-file");
     let mut config = create_config(root);
     config.ignore_exports_used_in_file = true.into();
@@ -313,8 +305,6 @@ fn ignore_exports_used_in_file_does_not_suppress_export_specifier_self_reference
          same-file use exists, found: {unused_export_names:?}"
     );
 }
-
-// ── Ignore dependencies ────────────────────────────────────────
 
 #[test]
 fn ignore_dependencies_config() {
@@ -367,8 +357,6 @@ fn ignore_dependencies_config() {
     );
 }
 
-// ── JSON serialization ─────────────────────────────────────────
-
 #[test]
 fn results_serializable_to_json() {
     let root = fixture_path("basic-project");
@@ -376,6 +364,5 @@ fn results_serializable_to_json() {
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
     let json = serde_json::to_string(&results).unwrap();
     assert!(!json.is_empty());
-    // Verify it round-trips
     let _: serde_json::Value = serde_json::from_str(&json).unwrap();
 }

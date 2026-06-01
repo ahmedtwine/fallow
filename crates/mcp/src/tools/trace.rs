@@ -80,8 +80,6 @@ pub fn build_trace_dependency_args(params: &TraceDependencyParams) -> Result<Vec
 
 /// Build CLI arguments for the `trace_clone` tool.
 pub fn build_trace_clone_args(params: &TraceCloneParams) -> Result<Vec<String>, String> {
-    // Exactly one addressing form: file+line (a location) OR fingerprint (a
-    // dup:<id> from a prior find_dupes result).
     let has_location = params.file.is_some() || params.line.is_some();
     let has_fingerprint = params
         .fingerprint

@@ -52,13 +52,11 @@ fn type_only_import_detected_in_production_mode() {
         .map(|d| d.dep.package_name.as_str())
         .collect();
 
-    // zod is only imported via `import type`, so it should be type-only
     assert!(
         type_only_names.contains(&"zod"),
         "zod should be detected as type-only dependency, found: {type_only_names:?}"
     );
 
-    // express has a runtime import, should NOT be type-only
     assert!(
         !type_only_names.contains(&"express"),
         "express should NOT be type-only (has runtime import), found: {type_only_names:?}"
@@ -71,7 +69,6 @@ fn type_only_deps_not_reported_outside_production_mode() {
     let config = super::common::create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // type_only_dependencies is only populated in production mode
     assert!(
         results.type_only_dependencies.is_empty(),
         "type_only_dependencies should be empty outside production mode, found: {:?}",

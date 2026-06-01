@@ -1,6 +1,4 @@
 //! `Visit` trait implementation for `ModuleInfoExtractor`.
-//!
-//! Handles all AST node types: imports, exports, expressions, statements.
 
 #[allow(clippy::wildcard_imports, reason = "many AST types used")]
 use oxc_ast::ast::*;
@@ -115,22 +113,7 @@ fn vitest_auto_mock_source(source: &str) -> Option<String> {
     Some(format!("{dir}/__mocks__/{file_name}"))
 }
 
-/// Detect whether a `vi.mock(specifier, factory, ...)` call provides a factory
-/// function as the second argument.
-///
-/// Vitest only consults the `__mocks__/<file>` sibling convention when the
-/// caller does NOT pass a factory; with a factory, vitest uses the factory
-/// directly and the `__mocks__/<file>` sibling is irrelevant. Synthesizing
-/// the auto-mock import in the factory case produces a spurious
-/// `unresolved-import` finding when no `__mocks__/<file>` exists. See issue
-/// #311. The factory is detected as either an arrow function or a function
-/// expression in the second-argument position; an object literal in that
-/// position is treated as `vi.mock(spec, options)` (rare auto-mock options
-/// form), where vitest still consults `__mocks__/<file>`. Oxc parses with
-/// `preserve_parens: true` by default, so parenthesized factories
-/// (`vi.mock('x', (((() => ({})))))`) arrive wrapped in one or more
-/// `ParenthesizedExpression` nodes; unwrap through those so the callable is
-/// recognised.
+/// Detect whether `vi.mock(specifier, factory, ...)` passes a factory.
 fn vi_mock_has_factory(call: &CallExpression<'_>) -> bool {
     fn is_factory_expression(expr: &Expression<'_>) -> bool {
         match expr {
@@ -151,12 +134,7 @@ fn vi_mock_has_factory(call: &CallExpression<'_>) -> bool {
     call.arguments.get(1).is_some_and(is_factory_arg)
 }
 
-/// Specifier source string from the first argument of a `register(...)` call.
-///
-/// `node:module`'s `register` hook (issue #293) loads a loader module by
-/// specifier (a bare package, package subpath, or relative URL). Returns the
-/// raw string when the first argument is a string or no-substitution template
-/// literal so the caller can credit it as a dynamic import.
+/// Specifier source string from the first argument of `register(...)`.
 fn node_module_register_specifier(call: &CallExpression<'_>) -> Option<String> {
     match call.arguments.first()? {
         Argument::StringLiteral(value) => Some(value.value.to_string()),
@@ -168,13 +146,7 @@ fn node_module_register_specifier(call: &CallExpression<'_>) -> Option<String> {
     }
 }
 
-/// Node `module.register()` invokes loader-hook exports reflectively. The
-/// allowlist covers the current Node 22+ hook set (`initialize`, `resolve`,
-/// `load`, `globalPreload`) plus the legacy hooks (`getFormat`, `getSource`,
-/// `transformSource`) that older Node versions still in the wild (16.x with
-/// `--experimental-loader`, downstream forks) invoke. Extra entries are
-/// inert: if the loader file does not export them, no symbol reference is
-/// recorded. See issue #589.
+/// Allowlisted loader-hook exports for `module.register()`.
 const NODE_MODULE_REGISTER_HOOK_EXPORTS: &[&str] = &[
     "initialize",
     "resolve",
@@ -295,9 +267,6 @@ impl<'a> Visit<'a> for PlaywrightFixtureMemberCollector {
                 object: fixture_path,
                 member: expr.property.name.to_string(),
             });
-            // The chain has been fully attributed; descending further would re-visit
-            // intermediate `pages.adminPage` member exprs and emit spurious
-            // `(pages, adminPage)` accesses. Walk into the property node only.
             return;
         }
         walk::walk_static_member_expression(self, expr);
@@ -312,15 +281,7 @@ fn extract_binding_local_name<'a>(pattern: &'a BindingPattern<'a>) -> Option<&'a
     }
 }
 
-/// Collect `{ property -> simple class type name }` from an object-type member
-/// list (an `interface` body or a `type X = { ... }` literal).
-///
-/// Only bare `TSTypeReference`-to-single-name property types are recorded (via
-/// `extract_type_annotation_name`); union / array / generic-wrapped property
-/// types are skipped because they do not name a single resolvable class. Used
-/// so a destructured binding typed by such an interface
-/// (`let { resultState }: Props = $props()`) can resolve its members onto the
-/// referenced class. See issue #752.
+/// Collect `property -> class type` mappings from an object-type member list.
 fn collect_object_type_property_types(members: &[TSSignature<'_>]) -> FxHashMap<String, String> {
     let mut properties = FxHashMap::default();
     for member in members {
@@ -392,26 +353,12 @@ fn playwright_test_callee_name(expr: &Expression<'_>) -> Option<String> {
     match expr {
         Expression::Identifier(ident) => Some(ident.name.to_string()),
         Expression::StaticMemberExpression(member) => playwright_test_callee_name(&member.object),
-        // Curried form `appTest()(...)` where the test value is produced by
-        // a helper function call. Recurse into the inner call's callee so
-        // the def sentinel keyed by the helper name (recorded via
-        // `resolve_playwright_factory_call_definitions`) correlates with
-        // the use sentinel emitted here. Safe because def sentinels gate
-        // the analyzer; use sentinels for unmatched names produce no credit.
-        // See issue #491.
         Expression::CallExpression(call) => playwright_test_callee_name(&call.callee),
         _ => None,
     }
 }
 
-/// Find the call expression from a function body's final `return <call>`
-/// statement, or `None` if the body is empty or returns anything other than a
-/// call expression.
-///
-/// Used to detect helper-function Playwright fixtures such as
-/// `function appTest() { return base.extend<T>(...); }`, helpers with local
-/// setup before the return, and chained helpers
-/// `function appTest() { return setupTestFixture(); }`. See issues #491/#586.
+/// Find the call expression returned by a function body.
 fn extract_function_body_final_return_call<'a, 'b>(
     body: &'b oxc_ast::ast::FunctionBody<'a>,
 ) -> Option<&'b CallExpression<'a>> {
@@ -424,15 +371,11 @@ fn extract_function_body_final_return_call<'a, 'b>(
     Some(call.as_ref())
 }
 
-/// Find the call expression that is the body of an arrow function, supporting
-/// both expression-body (`() => base.extend<T>(...)`) and block-body
-/// (`() => { return base.extend<T>(...); }`) shapes. See issues #491/#586.
+/// Find the call expression used as an arrow function body.
 fn extract_arrow_return_call<'a, 'b>(
     arrow: &'b oxc_ast::ast::ArrowFunctionExpression<'a>,
 ) -> Option<&'b CallExpression<'a>> {
     if arrow.expression {
-        // Expression-body arrows: oxc wraps the body expression as the sole
-        // ExpressionStatement of `arrow.body.statements`.
         if arrow.body.statements.len() != 1 {
             return None;
         }
@@ -873,25 +816,12 @@ impl ModuleInfoExtractor {
         }
     }
 
-    /// Record `binding_target_names` entries for a destructured binding that
-    /// carries a type annotation, e.g. `let { resultState }: Props = $props()`
-    /// or `function f({ resultState }: Props)`.
-    ///
-    /// An inline type literal (`{ resultState: ResultState }`) resolves in place
-    /// against its own members. A named reference (`Props`) is deferred to
-    /// `resolve_typed_destructure_bindings` because the interface may be
-    /// declared after the binding (interfaces hoist). Rename forms
-    /// (`{ resultState: rs }`) bind the local (`rs`) to the property key's type.
-    /// See issue #752.
+    /// Record destructured bindings with type annotations.
     fn record_typed_destructure_binding(
         &mut self,
         pattern: &ObjectPattern<'_>,
         type_annotation: &TSTypeAnnotation<'_>,
     ) {
-        // `extract_object_pattern_bindings` maps `local -> property_key` (the
-        // key path). Top-level destructures yield single-segment keys; nested
-        // destructures yield dotted keys that match no top-level property and
-        // simply do not resolve (conservative).
         let bindings = extract_object_pattern_bindings(pattern);
         if bindings.is_empty() {
             return;
@@ -943,11 +873,7 @@ impl ModuleInfoExtractor {
         }
     }
 
-    /// Substitute a class type-parameter with its constraint when the visitor
-    /// is currently inside a class that declares `<T extends Foo>`.
-    /// Returns `Some(constraint)` for a constrained parameter, `None` for an
-    /// unconstrained parameter (drop the binding: there is no concrete class),
-    /// or `Some(original)` for a non-parameter type name. See issue #388.
+    /// Substitute a class type-parameter with its constraint when available.
     fn resolve_class_type_param(&self, type_name: &str) -> Option<String> {
         let Some(frame) = self.class_type_param_constraints.last() else {
             return Some(type_name.to_string());
@@ -959,22 +885,11 @@ impl ModuleInfoExtractor {
         }
     }
 
-    /// Emit a fluent-chain sentinel `MemberAccess` when this call is chained
-    /// off a previous call, walking back to the root `ID.root_method()`.
-    /// Encoded as `MemberAccess { object:
-    /// "{FLUENT_CHAIN_SENTINEL}{root_id}:{root_method}:{chain_prefix}",
-    /// member: this_method }`, where `chain_prefix` is a comma-separated list
-    /// of intermediate chained method names (empty when this call is the
-    /// first after the root). The analyze layer decodes the sentinel and
-    /// validates each step against `is_instance_returning_static` (root) and
-    /// `is_self_returning` (chain segments) before crediting. See issue #387.
+    /// Emit a fluent-chain sentinel `MemberAccess` for chained calls.
     fn try_record_fluent_chain_access(&mut self, expr: &CallExpression<'_>) {
         let Expression::StaticMemberExpression(member) = &expr.callee else {
             return;
         };
-        // Receiver must itself be a call expression for this to be a chain.
-        // Direct `ID.method()` calls are handled by the existing
-        // `static_member_object_name`-based flow.
         let Expression::CallExpression(_) = &member.object else {
             return;
         };
@@ -1003,12 +918,6 @@ impl ModuleInfoExtractor {
                 });
                 return;
             }
-            // Constructor root: `new Class(...).first().<...>.this_method()`.
-            // The constructor always returns a `Class` instance, so there is no
-            // root method to validate. The first instance method off the
-            // constructor (`inner_member.property.name`) is itself a chain step
-            // that must be `is_self_returning` to reach `this_method`, so it is
-            // pushed into the chain prefix before encoding. See issue #605.
             if let Expression::NewExpression(new_expr) = &inner_member.object
                 && let Expression::Identifier(class_id) = &new_expr.callee
             {
@@ -1031,12 +940,7 @@ impl ModuleInfoExtractor {
         }
     }
 
-    /// Recognize `<receiver>.forEach(c => ...)` (and the optional-chained
-    /// `<receiver>?.forEach(c => ...)`) where `<receiver>` was previously
-    /// registered as an iterable with a known element type, and bind the
-    /// arrow callback's first parameter to that element type. The binding is
-    /// stored in `binding_target_names` so subsequent `c.method()` accesses
-    /// flow through the existing bound-member-access resolution at end-of-visit.
+    /// Recognize `.forEach(...)` on iterables and bind the callback element.
     fn bind_iterable_callback_parameter(&mut self, expr: &CallExpression<'_>) {
         let (receiver_expr, method_name) = match &expr.callee {
             Expression::StaticMemberExpression(member) => (&member.object, &member.property.name),
@@ -1089,10 +993,6 @@ impl ModuleInfoExtractor {
     }
 
     /// Record `register('loader', ...)` from `node:module` as a dynamic import.
-    /// The loader package is loaded by specifier rather than imported, so without
-    /// this hook it would be reported as an unused dev dependency (issue #293).
-    /// Recognizes both `import { register }` and `import * as Module from
-    /// 'node:module'` forms.
     fn try_record_node_module_register(&mut self, expr: &CallExpression<'_>) {
         let register_match = match &expr.callee {
             Expression::Identifier(ident) => {
@@ -1516,21 +1416,7 @@ impl ModuleInfoExtractor {
             );
     }
 
-    /// Capture a helper-function Playwright fixture or alias from the call
-    /// returned by the helper's final statement.
-    ///
-    /// Distinguishes two shapes:
-    /// 1. `return base.extend<T>(...)`: collect type bindings now (mirrors
-    ///    `record_playwright_fixture_definitions` but defers the import gate
-    ///    to finalize so source order is irrelevant).
-    /// 2. `return otherHelper()`: record a `(test_name, otherHelper)` alias
-    ///    that finalize's fixed-point pass resolves into bindings when
-    ///    `otherHelper` itself is, transitively, a Playwright fixture
-    ///    factory in the same file.
-    ///
-    /// Non-matching shapes (member-call return, no callee identifier) are
-    /// dropped silently: false matches would just produce inert def
-    /// sentinels with no use-side correlate. See issues #491 and #586.
+    /// Capture helper-function Playwright fixtures or aliases from returns.
     pub(super) fn try_capture_playwright_factory_helper(
         &mut self,
         test_name: &str,
@@ -1573,7 +1459,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             }
         }
 
-        // `function f({ resultState }: Props)`: typed destructured parameter.
         if let BindingPattern::ObjectPattern(obj_pat) = &param.pattern
             && let Some(type_annotation) = param.type_annotation.as_deref()
         {
@@ -1588,9 +1473,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             if let Some(type_annotation) = prop.type_annotation.as_deref() {
                 self.record_typed_binding(format!("this.{name}").as_str(), type_annotation);
 
-                // `@ViewChildren ... readonly dvcs?: QueryList<ChildComponent>`:
-                // peel the element type out of the `QueryList<T>` annotation so
-                // `this.dvcs?.forEach(c => c.method())` can resolve `c` to `T`.
                 if has_angular_plural_query_decorator(&prop.decorators)
                     && let Some(element_type) = extract_query_list_element_type(type_annotation)
                 {
@@ -1614,12 +1496,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     .insert(format!("this.{name}"), type_name);
             }
 
-            // Angular signal queries: `readonly vc = viewChild<T>(...)` etc.
-            // Singular factories produce `Signal<T>`, called as `this.vc()`,
-            // so the synthetic key `this.<name>()` is bound to `T`. Plural
-            // factories produce `Signal<readonly T[]>`, iterated via
-            // `this.vcs().forEach(c => c.method())`, so the same call-form
-            // key is recorded as an iterable whose element type is `T`.
             if let Some(value) = prop.value.as_ref()
                 && let Some(query) = extract_angular_signal_query(value)
             {
@@ -1681,10 +1557,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                         let refs = Self::collect_function_signature_refs(function);
                         self.record_local_signature_refs(&id.name, refs);
 
-                        // `function appTest() { const state = ...; return base.extend<T>(...); }`
-                        // or `function appTest() { return setupTestFixture(); }`
-                        // is a helper-function Playwright fixture consumed via
-                        // the curried `appTest()(...)` form. See issues #491/#586.
                         if let Some(body) = function.body.as_deref()
                             && let Some(call) = extract_function_body_final_return_call(body)
                         {
@@ -1698,9 +1570,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     self.record_playwright_fixture_type_alias(alias);
                     let refs = Self::collect_type_alias_signature_refs(alias);
                     self.record_local_signature_refs(&alias.id.name, refs);
-                    // `type Props = { resultState: ResultState }`: record the
-                    // property types so a destructured binding typed by `Props`
-                    // resolves its members onto the class. See issue #752.
                     if let TSType::TSTypeLiteral(type_lit) = &alias.type_annotation {
                         let properties = collect_object_type_property_types(&type_lit.members);
                         if !properties.is_empty() {
@@ -1714,7 +1583,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     self.record_local_type_declaration(&iface.id.name, iface.id.span);
                     let refs = Self::collect_interface_signature_refs(iface);
                     self.record_local_signature_refs(&iface.id.name, refs);
-                    // `interface Props { resultState: ResultState }`: see #752.
                     let properties = collect_object_type_property_types(&iface.body.body);
                     if !properties.is_empty() {
                         self.interface_property_types
@@ -1850,7 +1718,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 }
             }
         } else {
-            // Side-effect import: import './styles.css'
             self.imports.push(ImportInfo {
                 source,
                 imported_name: ImportedName::SideEffect,
@@ -1866,7 +1733,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     fn visit_export_named_declaration(&mut self, decl: &ExportNamedDeclaration<'a>) {
         let is_namespace = matches!(&decl.declaration, Some(Declaration::TSModuleDeclaration(_)));
 
-        // Inside a namespace body: collect as member, not top-level export
         if self.namespace_depth > 0 {
             if let Some(declaration) = &decl.declaration {
                 self.extract_namespace_members(declaration);
@@ -1884,7 +1750,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
         let is_type_only = decl.export_kind.is_type();
 
         if let Some(source) = &decl.source {
-            // Re-export: export { foo } from './bar'
             for spec in &decl.specifiers {
                 self.re_exports.push(ReExportInfo {
                     source: source.value.to_string(),
@@ -1895,7 +1760,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 });
             }
         } else {
-            // Local export
             if let Some(declaration) = &decl.declaration {
                 self.extract_declaration_exports(declaration, is_type_only);
             }
@@ -1913,8 +1777,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             }
         }
 
-        // For namespace declarations: walk the body while tracking depth,
-        // then attach collected members to the namespace export.
         if is_namespace {
             self.namespace_depth += 1;
             self.pending_namespace_members.clear();
@@ -1929,7 +1791,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_export_default_declaration(&mut self, decl: &ExportDefaultDeclaration<'a>) {
-        // Extract members and super_class for default-exported classes
         let (members, super_class, implemented_interfaces, instance_bindings) =
             if let ExportDefaultDeclarationKind::ClassDeclaration(class) = &decl.declaration {
                 let is_angular = has_angular_class_decorator(class);
@@ -2023,7 +1884,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_import_expression(&mut self, expr: &ImportExpression<'a>) {
-        // Skip imports already handled via visit_variable_declaration (with local_name capture)
         if self.handled_import_spans.contains(&expr.span) {
             walk::walk_import_expression(self, expr);
             return;
@@ -2042,13 +1902,9 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             Expression::TemplateLiteral(tpl)
                 if !tpl.quasis.is_empty() && !tpl.expressions.is_empty() =>
             {
-                // Template literal with expressions: extract prefix/suffix.
-                // For multi-expression templates like `./a/${x}/${y}.js` (3 quasis),
-                // use `**/` in the prefix so the glob can match nested directories.
                 let first_quasi = tpl.quasis[0].value.raw.to_string();
                 if first_quasi.starts_with("./") || first_quasi.starts_with("../") {
                     let prefix = if tpl.expressions.len() > 1 {
-                        // Multiple dynamic segments: use ** to match any nesting depth
                         format!("{first_quasi}**/")
                     } else {
                         first_quasi
@@ -2070,7 +1926,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             Expression::TemplateLiteral(tpl)
                 if !tpl.quasis.is_empty() && tpl.expressions.is_empty() =>
             {
-                // No-substitution template literal: treat as exact string
                 let value = tpl.quasis[0].value.raw.to_string();
                 if !value.is_empty() {
                     self.dynamic_imports.push(DynamicImportInfo {
@@ -2116,7 +1971,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 self.record_typed_binding(id.name.as_str(), type_annotation);
             }
 
-            // `let { resultState }: Props = $props()`: typed destructured binding.
             if let BindingPattern::ObjectPattern(obj_pat) = &declarator.id
                 && let Some(type_annotation) = declarator.type_annotation.as_deref()
             {
@@ -2142,11 +1996,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 self.record_playwright_fixture_definitions(id.name.as_str(), call);
             }
 
-            // `const appTest = () => base.extend<T>(...)` or
-            // `const appTest = () => { const state = ...; return base.extend<T>(...); }` or
-            // `const appTest = function () { return base.extend<T>(...); }`
-            // are helper-function Playwright fixtures consumed via the curried
-            // `appTest()(...)` form. See issues #491/#586.
             if let BindingPattern::BindingIdentifier(id) = &declarator.id {
                 let helper_call = match init {
                     Expression::ArrowFunctionExpression(arrow) => extract_arrow_return_call(arrow),
@@ -2167,16 +2016,12 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 self.record_object_binding_targets(id.name.as_str(), obj);
             }
 
-            // `const x = require('./y')` — static require
             if let Some((call, source)) = try_extract_require(init) {
                 self.record_child_process_require_binding(declarator, source);
                 self.handle_require_declaration(declarator, call, source);
                 continue;
             }
 
-            // `const x = new ClassName(...)` — instance creation for member tracking.
-            // Scope-unaware: shadowing causes false negatives, not false positives.
-            // Built-in constructors are skipped to avoid spurious mappings.
             if let Expression::NewExpression(new_expr) = init
                 && let Expression::Identifier(callee) = &new_expr.callee
                 && let BindingPattern::BindingIdentifier(id) = &declarator.id
@@ -2184,13 +2029,8 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             {
                 self.binding_target_names
                     .insert(id.name.to_string(), callee.name.to_string());
-                // No `continue` — falls through to dynamic import detection (which
-                // won't match NewExpression) and then the loop continues.
             }
 
-            // Svelte 5 `$derived(new ClassName(...))` / `$derived.by(() => new ClassName(...))`
-            // creates a reactive binding whose template member accesses should
-            // still credit the underlying class members.
             if let BindingPattern::BindingIdentifier(id) = &declarator.id
                 && let Some(class_name) = Self::svelte_derived_new_class(init)
             {
@@ -2198,10 +2038,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     .insert(id.name.to_string(), class_name);
             }
 
-            // `const [x] = wrapper(() => new ClassName(...))` — instance creation
-            // through a wrapper function with a factory initializer (e.g., React's
-            // `useState`, `useMemo`). The first array-destructured element is bound
-            // to the class returned by the factory.
             if let Expression::CallExpression(call) = init
                 && let BindingPattern::ArrayPattern(arr_pat) = &declarator.id
                 && let Some(Some(BindingPattern::BindingIdentifier(id))) = arr_pat.elements.first()
@@ -2212,16 +2048,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     .insert(id.name.to_string(), class_name);
             }
 
-            // `const x = ID.METHOD(...)`: static-factory call candidate.
-            // We cannot decide here whether `ID` resolves to a class whose
-            // `METHOD` is an instance-returning static factory because the
-            // class declaration may appear later in the file and the import
-            // statements may also be unresolved. Record a candidate; the
-            // finalize step (`resolve_factory_call_candidates`) checks each
-            // candidate against local classes and imports and inserts the
-            // appropriate `binding_target_names` entry (direct class name
-            // for same-file matches, sentinel-encoded for cross-file). See
-            // issue #346.
             if let Expression::CallExpression(call) = init
                 && let BindingPattern::BindingIdentifier(id) = &declarator.id
                 && let Expression::StaticMemberExpression(member) = &call.callee
@@ -2235,8 +2061,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     });
             }
 
-            // `const { a, b } = ns` — namespace destructuring for member narrowing.
-            // Scope-unaware: consistent with flat member_accesses approach.
             if let Expression::Identifier(ident) = init
                 && self
                     .namespace_binding_names
@@ -2247,7 +2071,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 continue;
             }
 
-            // `const x = await import('./y')` or `const x = import('./y')`
             let Some((import_expr, source)) = try_extract_dynamic_import(init) else {
                 continue;
             };
@@ -2280,29 +2103,13 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 ));
         }
 
-        // Detect `customElements.define('tag', ClassRef)` Web Component
-        // registration. The class identifier IS referenced syntactically (so
-        // oxc_semantic counts the in-file ref) but no other file imports the
-        // class by name, so the cross-file references list stays empty. Mark
-        // the class export as side-effect-used so unused-export ignores it.
         if let Some((_tag, class_name)) = extract_custom_elements_define(expr) {
             self.side_effect_registered_class_names.insert(class_name);
         }
 
-        // Angular plural-query iteration: `this.vcs().forEach(c => c.m())`,
-        // `this.dvcs?.forEach(c => c.m())`. When the receiver was registered
-        // as an iterable with a known element type, bind the arrow callback's
-        // first parameter to that type so the inner `c.m()` member access
-        // resolves through `binding_target_names`.
         self.bind_iterable_callback_parameter(expr);
 
         if let Some(target_source) = vitest_mock_source(expr) {
-            // Always credit the vi.mock target itself as a referenced module.
-            // Whether vitest auto-mocks (no factory) or runs a factory in place
-            // of the original module, the target's path must resolve at test
-            // time, so the file is conceptually used. Without this, the target
-            // surfaces as `unused-file` whenever the factory replaces every
-            // export and no other test file imports it directly. See issue #311.
             self.dynamic_imports.push(DynamicImportInfo {
                 source: target_source.clone(),
                 span: expr.span,
@@ -2311,22 +2118,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 is_speculative: false,
             });
 
-            // Synthesize the `__mocks__/<file>` sibling only when vitest will
-            // actually consult it: vi.mock without a factory falls through to
-            // the auto-mock convention; vi.mock WITH a factory uses the
-            // factory directly and the `__mocks__/<file>` sibling is ignored.
-            // Synthesizing in the factory case produces a spurious
-            // `unresolved-import` finding when no `__mocks__/<file>` exists.
-            // See issue #311.
-            //
-            // Marked `is_speculative: true` so the resolver silently drops the
-            // entry when no `__mocks__/<file>` exists on disk. Vitest's
-            // auto-mock system works in-memory and does not require a
-            // `__mocks__/` directory the way Jest does, so the synthesised
-            // path is a credit hint, not a contract the user must satisfy.
-            // Without the speculative drop, projects that rely on Vitest's
-            // in-memory auto-mocking surface a spurious `unresolved-import`
-            // finding pointing at a path they never wrote. See issue #378.
             if !vi_mock_has_factory(expr)
                 && let Some(mock_source) = vitest_auto_mock_source(&target_source)
             {
@@ -2343,7 +2134,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
         self.try_record_node_module_register(expr);
         self.try_record_child_process_fork(expr);
 
-        // Detect require()
         if let Expression::Identifier(ident) = &expr.callee
             && ident.name == "require"
             && let Some(Argument::StringLiteral(lit)) = expr.arguments.first()
@@ -2357,7 +2147,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             });
         }
 
-        // Detect Object.values(X), Object.keys(X), Object.entries(X) — whole-object use
         if let Expression::StaticMemberExpression(member) = &expr.callee
             && let Expression::Identifier(obj) = &member.object
             && obj.name == "Object"
@@ -2370,7 +2159,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             self.whole_object_uses.push(arg_name);
         }
 
-        // Detect import.meta.glob() — Vite pattern
         if let Expression::StaticMemberExpression(member) = &expr.callee
             && member.property.name == "glob"
             && matches!(member.object, Expression::MetaProperty(_))
@@ -2405,7 +2193,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             }
         }
 
-        // Detect require.context() — Webpack pattern
         if let Expression::StaticMemberExpression(member) = &expr.callee
             && member.property.name == "context"
             && let Expression::Identifier(obj) = &member.object
@@ -2423,8 +2210,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 } else {
                     format!("{dir}/")
                 };
-                // Parse the optional third argument (regex filter) and convert
-                // simple extension patterns (e.g., /\.vue$/) to a glob suffix.
                 let suffix = expr.arguments.get(2).and_then(|arg| match arg {
                     Argument::RegExpLiteral(re) => regex_pattern_to_suffix(&re.regex.pattern.text),
                     _ => None,
@@ -2437,9 +2222,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             }
         }
 
-        // Detect `import('./lib').then(m => m.foo)` — dynamic import with `.then()` callback.
-        // The callback parameter binds to the module namespace, and member accesses or
-        // destructured parameters indicate which exports are consumed.
         if let Some(then_cb) = try_extract_import_then_callback(expr) {
             if let Some(local) = &then_cb.local_name {
                 self.namespace_binding_names.push(local.clone());
@@ -2454,9 +2236,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             });
         }
 
-        // Detect arrow-wrapped dynamic imports in call arguments:
-        // `React.lazy(() => import('./Foo'))`, `loadable(() => import('./X'))`, etc.
-        // Lazy loading wrappers always consume the default export.
         if let Some((import_expr, source)) = try_extract_arrow_wrapped_import(&expr.arguments) {
             self.dynamic_imports.push(DynamicImportInfo {
                 source: source.to_string(),
@@ -2468,29 +2247,12 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             self.handled_import_spans.insert(import_expr.span);
         }
 
-        // Fluent-builder chain credit (issue #387).
-        //
-        // When `expr.callee` is `<some chain of calls>.this_method`, walk back
-        // through the chain to a root `ID.root_method()`. Record one synthetic
-        // `MemberAccess` keyed on the fluent-chain sentinel; the analyze layer
-        // validates root_method is `is_instance_returning_static` and each
-        // intermediate chain method is `is_self_returning` on the class before
-        // crediting `this_method`. Without this, calls like
-        // `EventBuilder.create().setX().setY()` flag every `setX` as unused.
         self.try_record_fluent_chain_access(expr);
 
         walk::walk_call_expression(self, expr);
     }
 
     fn visit_new_expression(&mut self, expr: &oxc_ast::ast::NewExpression<'a>) {
-        // Detect `new URL('./path', import.meta.url)` pattern.
-        // This is the standard Vite/bundler pattern for referencing worker files and assets.
-        // Treat the path as a dynamic import so the target file is considered reachable.
-        //
-        // Directory-only specifiers (`./`, `../`, `./foo/`) construct a directory URL,
-        // not a file URL; the canonical __dirname idiom
-        // `fileURLToPath(new URL('./', import.meta.url))` must not surface as an import.
-        // See issue #399.
         if let Some(source) = new_url_import_source(expr) {
             self.dynamic_imports.push(DynamicImportInfo {
                 source,
@@ -2539,12 +2301,10 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
         reason = "CJS export pattern matching requires deep nesting"
     )]
     fn visit_assignment_expression(&mut self, expr: &AssignmentExpression<'a>) {
-        // Detect module.exports = ... and exports.foo = ...
         if let AssignmentTarget::StaticMemberExpression(member) = &expr.left {
             if let Expression::Identifier(obj) = &member.object {
                 if obj.name == "module" && member.property.name == "exports" {
                     self.has_cjs_exports = true;
-                    // Extract exports from `module.exports = { foo, bar }`
                     if let Expression::ObjectExpression(obj_expr) = &expr.right {
                         for prop in &obj_expr.properties {
                             if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop
@@ -2582,7 +2342,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 && obj.name == "module"
                 && inner.property.name == "exports"
             {
-                // Extract `module.exports.foo = value` as named export
                 self.has_cjs_exports = true;
                 self.exports.push(ExportInfo {
                     name: ExportName::Named(member.property.name.to_string()),
@@ -2595,17 +2354,11 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     super_class: None,
                 });
             }
-            // Capture `this.member = ...` assignment patterns within class bodies.
-            // This indicates the class uses the member internally.
             if matches!(member.object, Expression::ThisExpression(_)) {
                 self.member_accesses.push(MemberAccess {
                     object: "this".to_string(),
                     member: member.property.name.to_string(),
                 });
-                // Track `this.field = new ClassName(...)` and `this.field = local`
-                // for chained member access resolution. This lets
-                // `this.field.method()` count as usage of the resolved target
-                // symbol via the synthetic `"this.field"` binding key.
                 if let Expression::NewExpression(new_expr) = &expr.right
                     && let Expression::Identifier(callee) = &new_expr.callee
                     && !super::helpers::is_builtin_constructor(callee.name.as_str())
@@ -2633,19 +2386,12 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_static_member_expression(&mut self, expr: &StaticMemberExpression<'a>) {
-        // Capture static member chains. `this.field.method()` is recorded as
-        // object `this.field`; deeper chains like `this.deps.foo.method()` are
-        // recorded as `this.deps.foo` and resolved through typed object bindings.
         if let Some(object_name) = static_member_object_name(&expr.object) {
             self.member_accesses.push(MemberAccess {
                 object: object_name,
                 member: expr.property.name.to_string(),
             });
         }
-        // Capture `super.member` patterns inside a subclass body. `super.x()` in
-        // `class Dog extends Animal` is semantically a use of `Animal.x`, so we emit
-        // the access against the super class's local identifier. `local_to_imported`
-        // in `find_unused_members` maps it back to the parent's export name.
         if matches!(expr.object, Expression::Super(_))
             && let Some(Some(super_local)) = self.class_super_stack.last()
         {
@@ -2660,13 +2406,11 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     fn visit_computed_member_expression(&mut self, expr: &ComputedMemberExpression<'a>) {
         if let Expression::Identifier(obj) = &expr.object {
             if let Expression::StringLiteral(lit) = &expr.expression {
-                // Computed access with string literal resolves to a specific member
                 self.member_accesses.push(MemberAccess {
                     object: obj.name.to_string(),
                     member: lit.value.to_string(),
                 });
             } else {
-                // Dynamic computed access — mark all members as used
                 self.whole_object_uses.push(obj.name.to_string());
             }
         }
@@ -2674,7 +2418,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_ts_qualified_name(&mut self, it: &TSQualifiedName<'a>) {
-        // Capture `Enum.Member` in type positions (e.g., `type X = Status.Active`)
         if let TSTypeName::IdentifierReference(obj) = &it.left {
             self.member_accesses.push(MemberAccess {
                 object: obj.name.to_string(),
@@ -2685,13 +2428,11 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_ts_mapped_type(&mut self, it: &TSMappedType<'a>) {
-        // `{ [K in SomeEnum]: ... }` — all members of the constraint type are implicitly used
         if let TSType::TSTypeReference(type_ref) = &it.constraint
             && let TSTypeName::IdentifierReference(ident) = &type_ref.type_name
         {
             self.whole_object_uses.push(ident.name.to_string());
         }
-        // `{ [K in keyof typeof SomeEnum]: ... }` — whole-object use via keyof typeof
         if let TSType::TSTypeOperatorType(op) = &it.constraint
             && op.operator == TSTypeOperatorOperator::Keyof
             && let TSType::TSTypeQuery(query) = &op.type_annotation
@@ -2703,9 +2444,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_ts_type_reference(&mut self, it: &TSTypeReference<'a>) {
-        // `Record<SomeEnum, T>` — the first type arg is iterated as mapped keys.
-        // Syntactically approximate: also fires for non-enum identifiers (interfaces,
-        // classes), consistent with the conservative approach in other whole-object heuristics.
         if let TSTypeName::IdentifierReference(name) = &it.type_name
             && name.name == "Record"
             && let Some(type_args) = &it.type_arguments
@@ -2733,9 +2471,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
     }
 
     fn visit_class(&mut self, class: &Class<'a>) {
-        // Detect Lit `@customElement('tag')` decorator. The class is registered
-        // as a Web Component at module load time without anyone importing the
-        // class identifier, so its export must be flagged as side-effect-used.
         if let Some(decorator) = lit_custom_element_decorator(class) {
             if let Some(id) = class.id.as_ref() {
                 self.record_lit_custom_element_candidate(
@@ -2746,10 +2481,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 && matches!(export.name, crate::ExportName::Default)
                 && export.local_name.is_none()
             {
-                // Anonymous `export default @customElement(...) class extends LitElement {}`
-                // has no class identifier to key off and an unset local_name on the
-                // Default export. Remember the export slot and validate the decorator
-                // import after the full walk.
                 let export_index = self.exports.len() - 1;
                 self.record_lit_custom_element_candidate(
                     decorator,
@@ -2758,14 +2489,7 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
             }
         }
 
-        // Detect Angular @Component decorator and extract all metadata:
-        // templateUrl/styleUrl imports, inline template refs, host binding refs,
-        // and inputs/outputs member names.
         if let Some(meta) = extract_angular_component_metadata(class) {
-            // Emit SideEffect imports for templateUrl and styleUrl/styleUrls.
-            // Angular resolves both `'app.html'` and `'./app.html'` relative to
-            // the component file; normalize bare filenames so downstream
-            // resolution doesn't misclassify them as npm packages.
             if let Some(ref template_url) = meta.template_url {
                 self.imports.push(ImportInfo {
                     source: normalize_asset_url(template_url),
@@ -2776,10 +2500,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     span: oxc_span::Span::default(),
                     source_span: oxc_span::Span::default(),
                 });
-                // Flag the module as an Angular component-template owner so
-                // the CRAP-inherit walker accepts it as an inheritance source
-                // for the `.html` target. Plain `import './x.html'` does not
-                // set this flag and is correctly rejected.
                 self.has_angular_component_template_url = true;
             }
             for style_url in &meta.style_urls {
@@ -2794,19 +2514,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 });
             }
 
-            // Scan inline template for member references.
-            //
-            // Bare identifier refs are emitted as sentinel `MemberAccess` so
-            // the analysis phase credits them as members of the component's
-            // own class (via `self_accessed_members`).
-            //
-            // Static member-access chains (`dataService.getTotal`) are emitted
-            // as regular `MemberAccess` entries and resolved at end of visit
-            // by `resolve_bound_member_accesses`, which maps `dataService`
-            // through the class's typed constructor params or properties to
-            // the concrete type name (e.g. `DataService`). This credits the
-            // target class's member as used through the existing member-access
-            // pipeline, without any Angular-specific analysis code.
             if let Some(ref template) = meta.inline_template {
                 let refs = crate::sfc_template::angular::collect_angular_template_refs(template);
                 for name in refs.identifiers {
@@ -2817,9 +2524,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 }
                 self.member_accesses.extend(refs.member_accesses);
 
-                // Defer template-complexity scanning to `parse.rs`, where the
-                // per-file `line_offsets` table is available to remap the
-                // synthetic finding onto the host `.ts` file's coordinates.
                 self.inline_template_findings
                     .push(super::InlineTemplateFinding {
                         template_source: template.clone(),
@@ -2827,7 +2531,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                     });
             }
 
-            // Emit sentinel accesses for host binding member references
             for name in &meta.host_member_refs {
                 self.member_accesses.push(MemberAccess {
                     object: crate::sfc_template::angular::ANGULAR_TPL_SENTINEL.to_string(),
@@ -2835,7 +2538,6 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 });
             }
 
-            // Emit sentinel accesses for inputs/outputs metadata members
             for name in &meta.input_output_members {
                 self.member_accesses.push(MemberAccess {
                     object: crate::sfc_template::angular::ANGULAR_TPL_SENTINEL.to_string(),
@@ -2843,16 +2545,8 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 });
             }
         }
-        // Track the super class name so `super.member` accesses inside this class
-        // body can be attributed to the parent (see `visit_static_member_expression`).
-        // Pushed for every class (including ones without a super clause) so the stack
-        // depth matches the visit depth when nested classes appear.
         self.class_super_stack
             .push(super::helpers::extract_super_class_name(class));
-        // Track class type-parameter constraints so `constructor(client: TClient)`
-        // inside `class BaseService<TClient extends BaseClient>` resolves to
-        // `this.client -> BaseClient`. Pushed for every class so the stack depth
-        // matches the visit depth when nested classes appear. See issue #388.
         self.class_type_param_constraints
             .push(super::helpers::collect_class_type_param_constraints(class));
         walk::walk_class(self, class);
@@ -2917,34 +2611,13 @@ fn static_member_object_name(expr: &Expression<'_>) -> Option<String> {
             static_member_object_name(&member.object)?,
             member.property.name
         )),
-        // `this.vc()` — Angular signal query call. The synthetic name
-        // `this.vc()` is registered in `binding_target_names` so the
-        // surrounding chain `this.vc()?.method()` can be resolved through
-        // the existing bound-member-access pipeline. Restricted to zero-arg
-        // calls so non-getter call sites do not steal the member access.
         Expression::CallExpression(call) if call.arguments.is_empty() => {
             Some(format!("{}()", static_member_object_name(&call.callee)?))
         }
-        // `new Class(...).method()`: credit the method on the constructed
-        // class. The receiver `new Class(...)` resolves to the bare class name
-        // so the surrounding member access is recorded as `Class.method` and
-        // credited through the same `local_to_export_keys` path as a direct
-        // static access. The bare identifier is recorded UNCONDITIONALLY, even
-        // for builtin-shaped names: distinguishing a global `new Map()` from a
-        // user `class Map {}` is the analyze layer's job, not extraction's. A
-        // global resolves to no user export there and drops silently, while a
-        // user-defined class named `URL` / `Request` / `Map` is credited
-        // correctly. Guarding on `is_builtin_constructor` here would silently
-        // re-introduce the issue-605 false positive for those classes.
-        // Member-expression callees (`new ns.Class()`) are out of scope.
-        // See issue #605.
         Expression::NewExpression(new_expr) => match &new_expr.callee {
             Expression::Identifier(callee) => Some(callee.name.to_string()),
             _ => None,
         },
-        // `(this.vc()?.method)` and similar optional chains wrap the
-        // member-access in a `ChainExpression`; descend into the wrapped form
-        // so `this.vc()?.refresh()` resolves the same way as `this.vc().refresh()`.
         Expression::ChainExpression(chain) => match &chain.expression {
             ChainElement::CallExpression(call) if call.arguments.is_empty() => {
                 Some(format!("{}()", static_member_object_name(&call.callee)?))

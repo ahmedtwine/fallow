@@ -1,7 +1,5 @@
 use super::helpers::*;
 
-// ---- find_type_only_dependencies tests ----
-
 #[test]
 fn type_only_dep_detected_when_all_imports_are_type_only() {
     let (graph, _) = build_graph_with_npm_imports(&[("zod", true)]);
@@ -18,7 +16,6 @@ fn type_only_dep_detected_when_all_imports_are_type_only() {
 
 #[test]
 fn type_only_dep_not_detected_when_runtime_import_exists() {
-    // One runtime import + one type-only import => not type-only
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -116,7 +113,6 @@ fn type_only_dep_not_detected_when_runtime_import_exists() {
 
 #[test]
 fn type_only_dep_not_detected_when_unused() {
-    // Dep is not imported at all => caught by unused_dependencies, not type_only
     let (graph, _) = build_graph_with_npm_imports(&[]);
     let pkg = make_pkg(&["zod"], &[], &[]);
     let config = test_config(PathBuf::from("/project"));
@@ -176,12 +172,8 @@ fn type_only_dep_skips_ignored_deps() {
     );
 }
 
-// ---- Additional coverage: find_type_only_dependencies only checks production deps ----
-
 #[test]
 fn type_only_dep_ignores_dev_dependencies() {
-    // A dev dependency that is only type-imported should NOT appear in type_only results,
-    // because find_type_only_dependencies only checks production dependencies.
     let (graph, _) = build_graph_with_npm_imports(&[("@types/lodash", true)]);
     let pkg = make_pkg(&[], &["@types/lodash"], &[]);
     let config = test_config(PathBuf::from("/project"));

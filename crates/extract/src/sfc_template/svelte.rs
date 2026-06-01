@@ -776,8 +776,6 @@ mod tests {
             &imported(&["item"]),
         );
 
-        // The `let:item` binding shadows the import, so it is not credited.
-        // `<Slot>` (no import) is captured as an auto-import candidate.
         assert!(usage.used_bindings.is_empty());
         assert!(usage.member_accesses.is_empty());
     }
@@ -789,13 +787,9 @@ mod tests {
             &imported(&["Item"]),
         );
 
-        // `let:Item` shadows the import; `<Item>` is the shadowed local so it is
-        // not credited or captured. `<Slot>` (no import) is captured.
         assert!(usage.used_bindings.is_empty());
         assert!(usage.member_accesses.is_empty());
     }
-
-    // --- Early returns ---
 
     #[test]
     fn empty_imported_bindings_returns_empty_usage() {
@@ -814,8 +808,6 @@ mod tests {
         assert!(usage.is_empty());
     }
 
-    // --- strip_non_template_content ---
-
     #[test]
     fn html_comments_are_stripped() {
         let usage = collect_template_usage(
@@ -829,8 +821,6 @@ mod tests {
 
     #[test]
     fn overlapping_ranges_are_merged_during_stripping() {
-        // The script and style blocks overlap conceptually with a comment
-        // that spans across them, testing the merge logic in strip_non_template_content
         let usage = collect_template_usage(
             "<script>let x;</script><!-- comment --><style>p{}</style><p>{fmt(v)}</p>",
             &imported(&["fmt"]),
@@ -838,8 +828,6 @@ mod tests {
 
         assert!(usage.used_bindings.contains("fmt"));
     }
-
-    // --- #key block ---
 
     #[test]
     fn key_block_marks_key_expression_used() {
@@ -851,8 +839,6 @@ mod tests {
         assert!(usage.used_bindings.contains("selectedId"));
         assert!(usage.used_bindings.contains("Child"));
     }
-
-    // --- #snippet block ---
 
     #[test]
     fn snippet_params_shadow_imported_names() {
@@ -876,35 +862,23 @@ mod tests {
 
     #[test]
     fn snippet_typed_params_do_not_stack_overflow() {
-        // Regression: `{ href, content }: Props` caused infinite recursion in
-        // `extract_pattern_binding_names` because the type annotation prevented
-        // `strip_wrapping` from matching, sending the input into a self-recursive
-        // comma-split path that never progressed.
         let usage = collect_template_usage(
             "{#snippet Link({ href, content }: Props)}<a {href}>{content}</a>{/snippet}",
             &imported(&["href", "content"]),
         );
 
-        // href and content are snippet-local bindings, so they shadow imports
         assert!(usage.is_empty());
     }
 
     #[test]
     fn snippet_tuple_typed_param_does_not_stack_overflow() {
-        // Regression for #172: `{#snippet foo(x: [number, number])}` overflowed
-        // the stack because the param string `x: [number, number]` reached the
-        // comma-split branch with all commas inside the tuple type, which kept
-        // recursing on the unchanged input.
         let usage = collect_template_usage(
             "{#snippet foo(x: [number, number])}{/snippet}",
             &imported(&["x"]),
         );
 
-        // x is a snippet-local binding, so it shadows the import
         assert!(usage.is_empty());
     }
-
-    // --- @html ---
 
     #[test]
     fn at_html_marks_expression_used() {
@@ -913,16 +887,12 @@ mod tests {
         assert!(usage.used_bindings.contains("sanitize"));
     }
 
-    // --- @render ---
-
     #[test]
     fn at_render_marks_expression_used() {
         let usage = collect_template_usage("{@render header()}", &imported(&["header"]));
 
         assert!(usage.used_bindings.contains("header"));
     }
-
-    // --- @attach ---
 
     #[test]
     fn at_attach_marks_expression_used() {
@@ -986,8 +956,6 @@ mod tests {
         );
     }
 
-    // --- @const ---
-
     #[test]
     fn at_const_marks_rhs_expression_used() {
         let usage = collect_template_usage(
@@ -1000,19 +968,13 @@ mod tests {
 
     #[test]
     fn at_const_shadows_subsequent_usages() {
-        // `myVal` is imported but @const declares a local `myVal`, shadowing
-        // subsequent references to it in the same scope
         let usage = collect_template_usage(
             "{#each items as item}{@const myVal = item.name}<p>{myVal}</p>{/each}",
             &imported(&["myVal"]),
         );
 
-        // The @const statement itself references `myVal` as the LHS assignment target,
-        // so it's marked as used, but subsequent {myVal} references are shadowed
         assert!(usage.used_bindings.contains("myVal"));
     }
-
-    // --- @debug ---
 
     #[test]
     fn at_debug_marks_expression_used() {
@@ -1020,8 +982,6 @@ mod tests {
 
         assert!(usage.used_bindings.contains("count"));
     }
-
-    // --- :else if ---
 
     #[test]
     fn else_if_marks_condition_used() {
@@ -1033,8 +993,6 @@ mod tests {
         assert!(usage.used_bindings.contains("isReady"));
     }
 
-    // --- :else ---
-
     #[test]
     fn else_branch_does_not_generate_usage() {
         let usage = collect_template_usage(
@@ -1044,8 +1002,6 @@ mod tests {
 
         assert!(usage.used_bindings.contains("fallback"));
     }
-
-    // --- #if block ---
 
     #[test]
     fn if_block_marks_condition_expression_used() {
@@ -1057,17 +1013,12 @@ mod tests {
         assert!(usage.used_bindings.contains("isVisible"));
     }
 
-    // --- closing block with unknown kind ---
-
     #[test]
     fn closing_unknown_block_kind_is_no_op() {
-        // {/unknownblock} should not crash or affect scopes
         let usage = collect_template_usage("{/unknownblock}<p>{fmt(x)}</p>", &imported(&["fmt"]));
 
         assert!(usage.used_bindings.contains("fmt"));
     }
-
-    // --- #each with key expression ---
 
     #[test]
     fn each_key_expression_marks_binding_used() {
@@ -1081,8 +1032,6 @@ mod tests {
 
     #[test]
     fn each_key_expression_has_access_to_each_locals() {
-        // The key expression can reference the `item` alias
-        // so `item` should be shadowed in the key context
         let usage = collect_template_usage(
             "{#each items as item (item.id)}<p>{item}</p>{/each}",
             &imported(&["item"]),
@@ -1090,8 +1039,6 @@ mod tests {
 
         assert!(usage.is_empty());
     }
-
-    // --- await with :catch ---
 
     #[test]
     fn catch_binding_shadows_import_name() {
@@ -1123,8 +1070,6 @@ mod tests {
         assert!(usage.used_bindings.contains("loadData"));
     }
 
-    // --- Markup tag branches ---
-
     #[test]
     fn html_doctype_and_processing_instructions_are_ignored() {
         let usage = collect_template_usage(
@@ -1137,7 +1082,6 @@ mod tests {
 
     #[test]
     fn void_html_tags_do_not_push_element_scope() {
-        // <input> is void; the closing </div> should pop the outer element scope, not fail
         let usage = collect_template_usage(
             "<div><input value={val} /><p>{handler(x)}</p></div>",
             &imported(&["val", "handler"]),
@@ -1154,11 +1098,8 @@ mod tests {
             &imported(&["item", "helper"]),
         );
 
-        // item is shadowed inside <div> by let:item, but helper is used outside
         assert!(usage.used_bindings.contains("helper"));
     }
-
-    // --- Directive directives ---
 
     #[test]
     fn animate_directive_marks_binding_used() {
@@ -1199,14 +1140,11 @@ mod tests {
         assert!(usage.used_bindings.contains("fade"));
     }
 
-    // --- Attribute value parsing ---
-
     #[test]
     fn unquoted_attribute_value_is_parsed() {
         let usage =
             collect_template_usage("<div data-value=hello>content</div>", &imported(&["hello"]));
 
-        // Unquoted attribute values are plain strings, not expressions
         assert!(usage.is_empty());
     }
 
@@ -1230,8 +1168,6 @@ mod tests {
         assert!(usage.used_bindings.contains("action"));
     }
 
-    // --- Expression in attribute value with surrounding text ---
-
     #[test]
     fn interpolated_attribute_value_marks_binding_used() {
         let usage = collect_template_usage(
@@ -1241,8 +1177,6 @@ mod tests {
 
         assert!(usage.used_bindings.contains("cls"));
     }
-
-    // --- Multiple expressions in a single text node ---
 
     #[test]
     fn multiple_curly_expressions_all_tracked() {
@@ -1255,8 +1189,6 @@ mod tests {
         assert!(usage.used_bindings.contains("second"));
     }
 
-    // --- Empty tag in curly braces ---
-
     #[test]
     fn empty_curly_braces_produce_no_usage() {
         let usage = collect_template_usage("{ }<p>{fmt(x)}</p>", &imported(&["fmt"]));
@@ -1264,16 +1196,12 @@ mod tests {
         assert!(usage.used_bindings.contains("fmt"));
     }
 
-    // --- Self-closing void tags ---
-
     #[test]
     fn self_closing_tag_does_not_push_scope() {
         let usage = collect_template_usage("<br /><p>{fmt(x)}</p>", &imported(&["fmt"]));
 
         assert!(usage.used_bindings.contains("fmt"));
     }
-
-    // --- Deeply nested scoping ---
 
     #[test]
     fn nested_each_and_if_scoping_works_correctly() {
@@ -1283,11 +1211,8 @@ mod tests {
         );
 
         assert!(usage.used_bindings.contains("format"));
-        // row is shadowed by the each binding
         assert!(!usage.used_bindings.contains("row"));
     }
-
-    // --- @const without equals (edge case) ---
 
     #[test]
     fn at_const_rhs_references_are_tracked() {
@@ -1299,17 +1224,12 @@ mod tests {
         assert!(usage.used_bindings.contains("compute"));
     }
 
-    // --- Closing tag without matching Element scope ---
-
     #[test]
     fn closing_tag_without_element_scope_is_safe() {
-        // </div> with no matching open scope should not crash
         let usage = collect_template_usage("</div><p>{fmt(x)}</p>", &imported(&["fmt"]));
 
         assert!(usage.used_bindings.contains("fmt"));
     }
-
-    // --- Snippet closing ---
 
     #[test]
     fn snippet_closing_pops_scope_correctly() {
@@ -1318,12 +1238,9 @@ mod tests {
             &imported(&["item", "outer"]),
         );
 
-        // item is shadowed inside snippet, outer is used outside
         assert!(!usage.used_bindings.contains("item"));
         assert!(usage.used_bindings.contains("outer"));
     }
-
-    // --- Key block closing ---
 
     #[test]
     fn key_block_closing_pops_scope() {
@@ -1337,16 +1254,12 @@ mod tests {
         assert!(usage.used_bindings.contains("helper"));
     }
 
-    // --- Plain expression fallthrough (no special prefix) ---
-
     #[test]
     fn plain_expression_without_prefix_is_tracked() {
         let usage = collect_template_usage("{count + 1}", &imported(&["count"]));
 
         assert!(usage.used_bindings.contains("count"));
     }
-
-    // --- Attribute with single-quoted value ---
 
     #[test]
     fn single_quoted_attribute_value_expressions_are_parsed() {

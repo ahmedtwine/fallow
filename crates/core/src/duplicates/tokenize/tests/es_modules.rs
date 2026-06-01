@@ -1,7 +1,5 @@
 use super::*;
 
-// ── ES module patterns ──────────────────────────────────────
-
 #[test]
 fn tokenize_import_declaration() {
     let tokens = tokenize("import { foo, bar } from './module';");
@@ -58,16 +56,12 @@ fn tokenize_dynamic_import() {
     let has_await = tokens
         .iter()
         .any(|t| matches!(t.kind, TokenKind::Keyword(KeywordType::Await)));
-    // Dynamic import() is an expression — no visit_import_expression override,
-    // so no Import keyword is emitted (only static import declarations emit it).
     assert!(
         !has_import,
         "Dynamic import() should not produce Import keyword"
     );
     assert!(has_await, "Should contain await keyword");
 }
-
-// ── Import with aliasing ────────────────────────────────────
 
 #[test]
 fn tokenize_import_with_as_alias() {
@@ -120,8 +114,6 @@ fn tokenize_import_namespace() {
     assert!(has_utils, "Should have namespace alias 'utils'");
 }
 
-// ── Export patterns ─────────────────────────────────────────
-
 #[test]
 fn tokenize_export_named_specifiers() {
     let tokens = tokenize("export { foo, bar };");
@@ -149,8 +141,5 @@ fn tokenize_export_named_with_from() {
         .iter()
         .any(|t| matches!(t.kind, TokenKind::Keyword(KeywordType::From)));
     assert!(has_export, "Re-export with from should have export keyword");
-    // ExportNamedDeclaration with source has a `from` and source string
-    // but the visitor uses walk::walk_export_named_declaration which
-    // doesn't emit a second From keyword. Verify it doesn't panic.
     let _ = has_from;
 }

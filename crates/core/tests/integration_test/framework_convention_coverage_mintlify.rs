@@ -9,8 +9,6 @@ fn mintlify_docs_root_is_credited_and_cli_dependency_is_tooling() {
 
     let unused_files = collect_unused_files(&root, &results);
 
-    // Acceptance criterion 1: docs MDX under the docs.json directory is treated
-    // as runtime-used without manual `dynamicallyLoaded` config.
     for docs_page in [
         "apps/docs/introduction.mdx",
         "apps/docs/guides/quickstart.mdx",
@@ -21,9 +19,6 @@ fn mintlify_docs_root_is_credited_and_cli_dependency_is_tooling() {
         );
     }
 
-    // Acceptance criterion 2: `mint` invoked via the docs script and active as
-    // tooling must not be reported as an unused (dev) dependency. Collect every
-    // package name across the regular, dev, and optional dependency buckets.
     let mut unused_dependencies: Vec<String> = Vec::new();
     unused_dependencies.extend(
         results
@@ -48,8 +43,6 @@ fn mintlify_docs_root_is_credited_and_cli_dependency_is_tooling() {
         "mint CLI should be credited as Mintlify tooling, unused deps: {unused_dependencies:?}"
     );
 
-    // Acceptance criterion 3: MDX outside the Mintlify docs root is NOT credited
-    // by this plugin and remains reportable as an unused file.
     assert!(
         unused_files
             .iter()

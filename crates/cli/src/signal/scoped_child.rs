@@ -111,9 +111,6 @@ impl Drop for ScopedChild {
         if let Some(id) = self.id.take() {
             registry::deregister(id);
         }
-        // Non-blocking reap so the PID is released if the child has
-        // already exited. Callers wanting a real wait should call
-        // `wait` / `wait_with_output` explicitly; Drop never blocks.
         if let Some(mut child) = self.inner.take() {
             let _ = child.try_wait();
         }
@@ -141,22 +138,12 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
     ScopedChild::spawn(command)?.wait_with_output()
 }
 
-// Every test in this module exec's `/bin/sh` / `true` / `echo`, so the
-// entire suite is cfg(unix)-only. Gating at the module level keeps the
-// Windows `unused_imports` lint quiet on `use super::*;` (since the
-// module would otherwise be reduced to just the import line on Windows).
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    // The only callers (`scoped_child_drop_deregisters` and
-    // `scoped_child_wait_deregisters_and_succeeds`) are cfg(unix), so on
-    // Windows this helper has no consumer. Gate with cfg(unix) rather than
-    // a per-arm `#[expect(dead_code)]` to keep the intent obvious.
     #[cfg(unix)]
     fn assert_deregistered(id: u64) {
-        // The registry is private; deregister is idempotent so calling
-        // it again is the cheapest way to assert "no longer present".
         registry::deregister(id);
     }
 

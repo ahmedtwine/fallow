@@ -31,8 +31,6 @@ pub fn validate_no_control_chars(s: &str, arg_name: &str) -> Result<(), String> 
 mod tests {
     use super::*;
 
-    // ── validate_no_control_chars ────────────────────────────────────
-
     #[test]
     fn control_chars_rejects_null_byte() {
         let result = validate_no_control_chars("main\x00branch", "--changed-since");
@@ -86,8 +84,6 @@ mod tests {
     fn control_chars_allows_paths_with_dots_and_slashes() {
         assert!(validate_no_control_chars("./path/to/config.toml", "--config").is_ok());
     }
-
-    // ── validate_git_ref ────────────────────────────────────────────
 
     #[test]
     fn git_ref_allows_reflog_timestamp() {
@@ -186,13 +182,11 @@ mod tests {
 
     #[test]
     fn git_ref_allows_multiple_braces_segments() {
-        // e.g. HEAD@{0}~3 is valid
         assert!(validate_git_ref("HEAD@{0}~3").is_ok());
     }
 
     #[test]
     fn git_ref_allows_space_in_complex_reflog() {
-        // HEAD@{3 days ago} — spaces allowed inside braces
         assert_eq!(
             validate_git_ref("HEAD@{3 days ago}").unwrap(),
             "HEAD@{3 days ago}"
@@ -216,8 +210,6 @@ mod tests {
         let result = validate_git_ref("main$HOME");
         assert!(result.is_err());
     }
-
-    // ── validate_git_ref additional injection tests ──────────────
 
     #[test]
     fn git_ref_rejects_pipe() {
@@ -250,8 +242,6 @@ mod tests {
         );
     }
 
-    // ── validate_root ────────────────────────────────────────────
-
     #[test]
     fn validate_root_nonexistent_path() {
         let result = validate_root(std::path::Path::new(
@@ -266,8 +256,6 @@ mod tests {
         let result = validate_root(&temp);
         assert!(result.is_ok());
     }
-
-    // ── validate_no_control_chars boundary tests ────────────────
 
     #[test]
     fn control_chars_rejects_form_feed() {

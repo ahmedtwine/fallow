@@ -45,9 +45,6 @@ pub fn build_health_args(params: &HealthParams) -> Vec<String> {
     if params.file_scores == Some(true) {
         args.push("--file-scores".to_string());
     }
-    // --ownership and --ownership-email-mode imply --hotspots on the CLI; we
-    // mirror that mapping here so MCP consumers don't need to set hotspots
-    // explicitly. Skipping the duplicate `--hotspots` keeps clap happy.
     let ownership_active = params.ownership == Some(true) || params.ownership_email_mode.is_some();
     if params.hotspots == Some(true) || ownership_active {
         args.push("--hotspots".to_string());

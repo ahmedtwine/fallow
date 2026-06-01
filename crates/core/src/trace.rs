@@ -15,12 +15,6 @@ use crate::graph::{ModuleGraph, ReferenceKind};
 /// Handles monorepo scenarios where module paths may be canonicalized
 /// (symlinks resolved) while user-provided paths are not.
 fn path_matches(module_path: &Path, root: &Path, user_path: &str) -> bool {
-    // Normalise to forward slashes on both sides so user-supplied
-    // forward-slashed input (`src/utils.ts`, the shape MCP and most
-    // cross-platform tooling produces) matches Windows-shaped module
-    // paths (`D:\a\...\src\utils.ts`). Without this, the four byte-level
-    // string comparisons below all silently miss on Windows even though
-    // the file is in the graph. POSIX is a no-op.
     let user_path_norm = user_path.replace('\\', "/");
     let rel = module_path.strip_prefix(root).unwrap_or(module_path);
     let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -182,13 +176,11 @@ pub fn trace_export(
     file_path: &str,
     export_name: &str,
 ) -> Option<ExportTrace> {
-    // Find the file in the graph
     let module = graph
         .modules
         .iter()
         .find(|m| path_matches(&m.path, root, file_path))?;
 
-    // Find the export
     let export = module.exports.iter().find(|e| {
         let name_str = e.name.to_string();
         name_str == export_name || (export_name == "default" && name_str == "default")
@@ -209,7 +201,6 @@ pub fn trace_export(
         })
         .collect();
 
-    // Find re-export chains involving this export
     let re_export_chains: Vec<ReExportChain> = graph
         .modules
         .iter()
@@ -310,7 +301,6 @@ pub fn trace_file(graph: &ModuleGraph, root: &Path, file_path: &str) -> Option<F
         })
         .collect();
 
-    // Edges FROM this file (what it imports)
     let imports_from: Vec<PathBuf> = graph
         .edges_for(module.file_id)
         .iter()
@@ -322,7 +312,6 @@ pub fn trace_file(graph: &ModuleGraph, root: &Path, file_path: &str) -> Option<F
         })
         .collect();
 
-    // Reverse deps: who imports this file
     let imported_by: Vec<PathBuf> = graph
         .reverse_deps
         .get(module.file_id.0 as usize)
@@ -776,7 +765,6 @@ mod tests {
 
     #[test]
     fn trace_dependency_used() {
-        // Build a graph with npm package usage
         let files = vec![DiscoveredFile {
             id: FileId(0),
             path: PathBuf::from("/project/src/app.ts"),
@@ -918,7 +906,6 @@ mod tests {
         assert!(trace.matched_instance.is_some());
         assert_eq!(trace.clone_groups.len(), 1);
         assert_eq!(trace.clone_groups[0].instances.len(), 2);
-        // The enriched trace carries the fingerprint + group-level suggestion.
         assert!(trace.clone_groups[0].fingerprint.starts_with("dup:"));
         assert_eq!(trace.clone_groups[0].suggestion.estimated_savings, 11);
     }
@@ -961,7 +948,6 @@ mod tests {
         assert!(hit.matched_instance.is_some());
         assert_eq!(hit.clone_groups.len(), 1);
         assert_eq!(hit.clone_groups[0].fingerprint, fp);
-        // Representative location flows onto the trace header.
         assert_eq!(hit.line, 10);
 
         let miss = trace_clone_by_fingerprint(&report, Path::new("/project"), "dup:deadbeef");
@@ -1140,9 +1126,6 @@ mod tests {
         let root = Path::new(r"D:\a\fallow\fallow\tests\fixtures\basic-project");
         let module_path =
             PathBuf::from(r"D:\a\fallow\fallow\tests\fixtures\basic-project\src\utils.ts");
-        // user_path uses forward slashes (the shape MCP and other
-        // cross-platform tooling emit), but the stored path uses
-        // Windows backslashes. The helper should still match.
         assert!(path_matches(&module_path, root, "src/utils.ts"));
         assert!(path_matches(&module_path, root, r"src\utils.ts"));
     }
@@ -1152,8 +1135,6 @@ mod tests {
         let root = Path::new("/some/other/root");
         let module_path =
             PathBuf::from(r"D:\a\fallow\fallow\tests\fixtures\basic-project\src\utils.ts");
-        // root does not prefix module_path; the ends_with("/src/utils.ts")
-        // fallback should still match once both sides are forward-slashed.
         assert!(path_matches(&module_path, root, "src/utils.ts"));
     }
 

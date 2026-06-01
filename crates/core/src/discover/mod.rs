@@ -8,10 +8,8 @@ use std::path::{Component, Path};
 use fallow_config::{PackageJson, ResolvedConfig};
 use rustc_hash::FxHashSet;
 
-// Re-export types from fallow-types
 pub use fallow_types::discover::{DiscoveredFile, EntryPoint, EntryPointSource, FileId};
 
-// Re-export public functions — preserves the existing `crate::discover::*` API
 pub(crate) use entry_points::resolve_entry_path;
 pub use entry_points::{
     CategorizedEntryPoints, compile_glob_set, discover_dynamically_loaded_entry_points,
@@ -265,9 +263,6 @@ fn extract_hidden_segments(path: &str) -> Vec<String> {
         return Vec::new();
     }
     let mut out = Vec::new();
-    // Skip the last component (treated as a filename: the walker filters
-    // files by extension, not by hidden status, so hidden files are already
-    // passed through without scoping).
     let upto = components.len().saturating_sub(1);
     for component in &components[..upto] {
         if let Component::Normal(name) = component {
@@ -284,11 +279,8 @@ fn extract_hidden_segments(path: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    // ── ALLOWED_HIDDEN_DIRS exhaustiveness ───────────────────────────
-
     #[test]
     fn allowed_hidden_dirs_count() {
-        // Guard: if a new dir is added, add a test for it
         assert_eq!(
             ALLOWED_HIDDEN_DIRS.len(),
             5,
@@ -324,11 +316,8 @@ mod tests {
         }
     }
 
-    // ── Re-export smoke tests ───────────────────────────────────────
-
     #[test]
     fn file_id_re_exported() {
-        // Verify the re-export works by constructing a FileId through the discover module
         let id = FileId(42);
         assert_eq!(id.0, 42);
     }
@@ -344,8 +333,6 @@ mod tests {
         let result = compile_glob_set(&["**/*.ts".to_string()]);
         assert!(result.is_some());
     }
-
-    // ── SCRIPT_SCOPE_DENYLIST exhaustiveness ────────────────────────
 
     #[test]
     fn script_scope_denylist_all_start_with_dot() {
@@ -374,8 +361,6 @@ mod tests {
             );
         }
     }
-
-    // ── extract_hidden_segments ─────────────────────────────────────
 
     #[test]
     fn extract_hidden_segments_single_segment() {
@@ -416,15 +401,12 @@ mod tests {
 
     #[test]
     fn extract_hidden_segments_skips_trailing_filename() {
-        // The last component is a file. The walker filters files by extension,
-        // not by hidden status, so it must not appear in the scope.
         assert!(extract_hidden_segments(".env").is_empty());
         assert!(extract_hidden_segments("src/.eslintrc.js").is_empty());
     }
 
     #[test]
     fn extract_hidden_segments_skips_paths_with_parent_dir() {
-        // `..` anywhere in the path means the path can escape a package root.
         assert!(extract_hidden_segments("../.config/eslint.config.js").is_empty());
         assert!(extract_hidden_segments(".config/../other/x.js").is_empty());
         assert!(extract_hidden_segments("../../.config/eslint.config.js").is_empty());
@@ -432,7 +414,6 @@ mod tests {
 
     #[test]
     fn extract_hidden_segments_skips_absolute_paths() {
-        // Absolute paths cannot be safely scoped to a package root.
         #[cfg(unix)]
         {
             assert!(extract_hidden_segments("/etc/.config/eslint.config.js").is_empty());
@@ -445,12 +426,9 @@ mod tests {
 
     #[test]
     fn extract_hidden_segments_ignores_bare_dot() {
-        // `.` is the current directory marker, not a hidden segment.
         assert!(extract_hidden_segments(".").is_empty());
         assert!(extract_hidden_segments("./src/index.ts").is_empty());
     }
-
-    // ── collect_script_hidden_dir_scopes ────────────────────────────
 
     #[expect(
         clippy::disallowed_types,
@@ -486,8 +464,6 @@ mod tests {
         let scopes = collect_script_hidden_dir_scopes(&config, Some(&pkg), &[]);
 
         assert_eq!(scopes.len(), 1, "one scope for the root package");
-        // We cannot reach into HiddenDirScope's private fields, but we can verify
-        // via the file walker that the directory is now traversed.
         let target_dir = dir.path().join(".config");
         std::fs::create_dir_all(&target_dir).unwrap();
         std::fs::write(target_dir.join("eslint.config.js"), "export default {};").unwrap();
@@ -530,7 +506,6 @@ mod tests {
     fn script_scope_denies_known_bad_dirs() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = make_config(dir.path().to_path_buf());
-        // A script referencing a denied dir must NOT produce a scope.
         let pkg = make_pkg_with_scripts(&[
             ("cache", "tsx .nx/scripts/cache.ts"),
             ("vscode", "node .vscode/build.js"),
@@ -547,7 +522,6 @@ mod tests {
     fn script_scope_mixes_denied_and_allowed_dirs() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = make_config(dir.path().to_path_buf());
-        // Mix of denied (.nx) and allowed (.config). Only the allowed survives.
         let pkg = make_pkg_with_scripts(&[(
             "lint",
             "nx run-many --target=lint && eslint -c .config/eslint.config.js",
@@ -555,7 +529,6 @@ mod tests {
         let scopes = collect_script_hidden_dir_scopes(&config, Some(&pkg), &[]);
         assert_eq!(scopes.len(), 1, "one scope for the .config reference");
 
-        // Confirm by walking: .config/ should be discovered, .nx/ should not.
         std::fs::create_dir_all(dir.path().join(".config")).unwrap();
         std::fs::write(
             dir.path().join(".config/eslint.config.js"),
@@ -620,7 +593,6 @@ mod tests {
     fn script_scope_dedupes_within_package() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = make_config(dir.path().to_path_buf());
-        // Two scripts both reference .config: should produce one scope with one dir.
         let pkg = make_pkg_with_scripts(&[
             ("lint", "eslint -c .config/eslint.config.js"),
             ("test", "vitest --config .config/vitest.config.ts"),
@@ -633,8 +605,6 @@ mod tests {
     fn script_scope_workspace_packages_have_own_scope_root() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = make_config(dir.path().to_path_buf());
-        // Workspace has its own .config/ that should be scoped to its root,
-        // not the project root.
         let ws_root = dir.path().join("packages/app");
         std::fs::create_dir_all(&ws_root).unwrap();
         let ws_pkg_path = ws_root.join("package.json");
@@ -651,14 +621,12 @@ mod tests {
         let scopes = collect_script_hidden_dir_scopes(&config, None, &[ws]);
         assert_eq!(scopes.len(), 1);
 
-        // The scope should only allow .config under the workspace root, not anywhere else.
         std::fs::create_dir_all(ws_root.join(".config")).unwrap();
         std::fs::write(
             ws_root.join(".config/eslint.config.js"),
             "export default {};",
         )
         .unwrap();
-        // A sibling .config under a different (unscoped) package must stay hidden.
         let other_root = dir.path().join("packages/other");
         std::fs::create_dir_all(other_root.join(".config")).unwrap();
         std::fs::write(

@@ -159,7 +159,6 @@ pub fn build_duplication_grouping(
     resolver: &OwnershipResolver,
 ) -> DuplicationGrouping {
     let fingerprints = CloneFingerprintSet::from_groups(&report.clone_groups);
-    // Bucket clone groups by largest owner.
     let mut buckets: BTreeMap<String, Vec<AttributedCloneGroup>> = BTreeMap::new();
     for group in &report.clone_groups {
         let attributed = AttributedCloneGroup::from_group(group, root, resolver);
@@ -169,13 +168,9 @@ pub fn build_duplication_grouping(
             .push(attributed);
     }
 
-    // For each bucket, recompute stats from its clone groups by reusing
-    // `recompute_stats`. Use the original (non-attributed) clone groups to
-    // feed the helper so we share the dedup logic with the project report.
     let mut groups: Vec<DuplicationGroup> = buckets
         .into_iter()
         .map(|(key, attributed_groups)| {
-            // Reconstruct a partial DuplicationReport for stats recomputation.
             let original_groups: Vec<CloneGroup> = attributed_groups
                 .iter()
                 .map(|ag| CloneGroup {
@@ -205,10 +200,6 @@ pub fn build_duplication_grouping(
             };
             subset.stats = recompute_stats(&subset);
 
-            // Restrict clone families to those whose group memberships overlap
-            // this bucket. Using a file-set membership check matches how the
-            // project-level report treats families: a family's groups must all
-            // share its file set.
             let bucket_files: FxHashSet<&Path> = attributed_groups
                 .iter()
                 .flat_map(|ag| ag.instances.iter().map(|i| i.instance.file.as_path()))
@@ -237,7 +228,6 @@ pub fn build_duplication_grouping(
         })
         .collect();
 
-    // Sort: most clone groups first, alphabetical tiebreak, (unowned) last.
     groups.sort_by(|a, b| {
         let a_unowned = a.key == UNOWNED_LABEL;
         let b_unowned = b.key == UNOWNED_LABEL;
@@ -316,7 +306,6 @@ mod tests {
             instance("/root/src/a.ts", 1, 10),
             instance("/root/lib/b.ts", 1, 10),
         ]);
-        // 1 vs 1 -- alphabetical: lib < src
         let key = largest_owner(&r, Path::new("/root"), &OwnershipResolver::Directory);
         assert_eq!(key, "lib");
     }
@@ -356,7 +345,6 @@ mod tests {
     fn build_grouping_unowned_pinned_last() {
         let co = CodeOwners::parse("/src/ @frontend\n").unwrap();
         let resolver = OwnershipResolver::Owner(co);
-        // src group attributed to @frontend; docs group has no rule -> unowned
         let g_src = group(vec![
             instance("/root/src/a.ts", 1, 10),
             instance("/root/src/b.ts", 1, 10),
@@ -368,7 +356,6 @@ mod tests {
         let r = report(vec![g_src, g_docs]);
         let grouping = build_duplication_grouping(&r, Path::new("/root"), &resolver);
         assert_eq!(grouping.groups.len(), 2);
-        // unowned must be last
         assert_eq!(grouping.groups.last().unwrap().key, UNOWNED_LABEL);
     }
 
@@ -382,7 +369,6 @@ mod tests {
         let r = report(vec![g]);
         let grouping =
             build_duplication_grouping(&r, Path::new("/root"), &OwnershipResolver::Directory);
-        // Group has src=2, lib=1 -> primary src; instances carry their own owner.
         assert_eq!(grouping.groups.len(), 1);
         let bucket = &grouping.groups[0];
         assert_eq!(bucket.key, "src");
@@ -394,8 +380,6 @@ mod tests {
         let owners: Vec<&str> = cg.instances.iter().map(|i| i.owner.as_str()).collect();
         assert!(owners.contains(&"src"));
         assert!(owners.contains(&"lib"));
-        // Each AttributedCloneGroupFinding carries the canonical 2-action array
-        // (extract-shared + suppress-line).
         assert_eq!(finding.actions.len(), 2);
     }
 

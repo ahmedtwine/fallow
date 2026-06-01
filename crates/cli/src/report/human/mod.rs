@@ -242,16 +242,13 @@ fn push_section_footer_impl(lines: &mut Vec<String>, title: &str, item_count: us
     if let Some((desc, url)) = section_footer_text(title) {
         lines.push(format!("  {}", format!("{desc} \u{2014} {url}").dimmed()));
     }
-    // Only show suppress/fix hints for sections with 3+ items to reduce noise
     if item_count >= 3 {
-        // Auto-fix hint for fixable categories
         if is_auto_fixable(title) {
             lines.push(format!(
                 "  {}",
                 "To auto-fix: fallow fix --dry-run".dimmed()
             ));
         }
-        // Suppress hint: config-level for rollup, inline for individual items
         if let Some(rule) = section_suppress_rule(title) {
             let comment = if rollup {
                 "To suppress a directory: add to ignorePatterns in .fallowrc.json".to_string()
@@ -279,7 +276,6 @@ pub(super) fn build_grouped_by_file<'a, T>(
     max_files: usize,
     max_items_per_file: usize,
 ) {
-    // Group items by file path, preserving indices
     let mut file_groups: Vec<(String, Vec<usize>)> = Vec::new();
     let mut file_map: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
 
@@ -293,7 +289,6 @@ pub(super) fn build_grouped_by_file<'a, T>(
         }
     }
 
-    // Sort files by item count descending, alphabetical tiebreaker
     file_groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
 
     let total_files = file_groups.len();
@@ -349,7 +344,6 @@ pub(super) fn strip_ansi(s: &str) -> String {
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
-            // Skip until 'm' (end of SGR sequence)
             for inner in chars.by_ref() {
                 if inner == 'm' {
                     break;
@@ -375,8 +369,6 @@ pub(super) fn plain(lines: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── Utility function tests ──
 
     #[test]
     fn thousands_zero() {
@@ -416,8 +408,6 @@ mod tests {
         assert_eq!(result, "index.ts");
     }
 
-    // ── strip_ansi utility ──
-
     #[test]
     fn strip_ansi_removes_color_codes() {
         let colored_str = "hello".red().bold().to_string();
@@ -433,8 +423,6 @@ mod tests {
     fn strip_ansi_handles_empty_string() {
         assert_eq!(strip_ansi(""), "");
     }
-
-    // ── Section header tests ──
 
     #[test]
     fn section_header_uses_bullet_indicator() {

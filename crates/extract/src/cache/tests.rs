@@ -217,12 +217,10 @@ fn module_to_cached_roundtrip_named_export() {
     let cached = module_to_cached(&module, 0, 0);
     let restored = cached_to_module(&cached, FileId(0));
 
-    // Non-empty iconify_prefixes must survive the cache round-trip (issue #608).
     assert_eq!(
         restored.iconify_prefixes,
         vec!["jam".to_string(), "ic".to_string()]
     );
-    // Non-empty auto_import_candidates must survive the cache round-trip (issue #704).
     assert_eq!(
         restored.auto_import_candidates,
         vec!["Card001".to_string(), "BaseButton".to_string()]
@@ -625,7 +623,6 @@ fn test_cache_dir(name: &str) -> std::path::PathBuf {
         .join("fallow_cache_tests")
         .join(name)
         .join(format!("{}", std::process::id()));
-    // Clean up any leftover from previous runs
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -718,20 +715,14 @@ fn cache_version_mismatch_returns_none() {
     store.insert(Path::new("test.ts"), module);
     store.save(&dir, 0, DEFAULT_CACHE_MAX_SIZE).unwrap();
 
-    // Verify the cache loads correctly before tampering
     assert!(CacheStore::load(&dir, 0, DEFAULT_CACHE_MAX_SIZE).is_some());
 
-    // Read raw bytes and modify the version field.
-    // The version (CACHE_VERSION) is the first encoded field.
-    // Replace the first byte with a different version value (e.g., 255)
-    // to simulate a version mismatch.
     let cache_file = dir.join("cache.bin");
     let mut data = std::fs::read(&cache_file).unwrap();
     assert!(!data.is_empty());
     data[0] = 255; // Corrupt the version byte
     std::fs::write(&cache_file, &data).unwrap();
 
-    // Loading should return None due to version mismatch
     let result = CacheStore::load(&dir, 0, DEFAULT_CACHE_MAX_SIZE);
     assert!(result.is_none());
 
@@ -820,7 +811,6 @@ fn get_by_path_only_returns_entry_regardless_of_hash() {
     };
     store.insert(Path::new("test.ts"), module);
 
-    // get_by_path_only should return the entry without checking hash
     let result = store.get_by_path_only(Path::new("test.ts"));
     assert!(result.is_some());
     assert_eq!(result.unwrap().content_hash, 42);
@@ -878,7 +868,6 @@ fn retain_paths_removes_stale_entries() {
     store.insert(Path::new("/project/c.ts"), m());
     assert_eq!(store.len(), 3);
 
-    // Only a.ts and c.ts still exist in the project
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1098,7 +1087,6 @@ fn get_by_metadata_returns_none_for_zero_mtime() {
     };
     store.insert(Path::new("test.ts"), module);
 
-    // Zero mtime should never match (falls through to content hash check)
     assert!(
         store
             .get_by_metadata(Path::new("test.ts"), 0, 500)
@@ -1188,8 +1176,6 @@ fn module_to_cached_roundtrip_line_offsets() {
     assert_eq!(restored.line_offsets, vec![0, 15, 30, 45]);
 }
 
-// ── Additional coverage ─────────────────────────────────────
-
 #[test]
 fn module_to_cached_roundtrip_suppressions_with_kinds() {
     use crate::suppress::{IssueKind, Suppression};
@@ -1253,8 +1239,6 @@ fn module_to_cached_roundtrip_suppressions_with_kinds() {
 
 #[test]
 fn module_to_cached_roundtrip_unknown_suppression_kinds() {
-    // Issue #449: ensure CachedUnknownSuppressionKind round-trips so warm
-    // caches surface the same stale-suppression diagnostics as cold runs.
     use fallow_types::suppress::UnknownSuppressionKind;
 
     let module = ModuleInfo {
@@ -1908,7 +1892,6 @@ fn cache_save_no_eviction_when_under_threshold() {
     for i in 0..10u64 {
         store.insert(Path::new(&format!("file{i}.ts")), synthetic_module(i, i, 1));
     }
-    // 256 MB cap, 10 small entries: no eviction expected.
     store
         .save(&dir, 42, DEFAULT_CACHE_MAX_SIZE)
         .expect("save under threshold");
@@ -1923,8 +1906,6 @@ fn cache_save_no_eviction_when_under_threshold() {
 fn cache_save_evicts_when_over_threshold() {
     let dir = test_cache_dir("evict_over_threshold");
     let mut store = CacheStore::new();
-    // 50 entries, ~1 KB each, with increasing last_access_secs.
-    // Cap = 40 KB so the post-encode size sits well above the 32 KB trigger.
     for i in 0..50u64 {
         store.insert(Path::new(&format!("file{i}.ts")), synthetic_module(i, i, 1));
     }
@@ -1932,11 +1913,7 @@ fn cache_save_evicts_when_over_threshold() {
     store.save(&dir, 99, cap).expect("save with eviction");
 
     let loaded = CacheStore::load(&dir, 99, DEFAULT_CACHE_MAX_SIZE).expect("load after eviction");
-    // Some entries must have been evicted.
     assert!(loaded.len() < 50, "eviction removed entries");
-    // Eviction order is ascending last_access_secs: the oldest (lowest i)
-    // entries should leave first. Confirm at least one tail entry stays
-    // and at least one head entry is gone.
     let kept_max = (0..50u64)
         .filter(|i| {
             loaded
@@ -1959,8 +1936,6 @@ fn cache_save_evicts_when_over_threshold() {
         "oldest entry was evicted (kept_min = {kept_min})"
     );
 
-    // Final on-disk size sits below the 60% target (24 KB), with slack for
-    // the bitcode envelope.
     let on_disk = std::fs::read(dir.join("cache.bin")).unwrap();
     assert!(
         on_disk.len() < cap * 80 / 100,
@@ -1976,10 +1951,6 @@ fn cache_save_evicts_when_over_threshold() {
 fn cache_save_always_honors_cap_with_huge_entries() {
     let dir = test_cache_dir("huge_entry_overshoot");
     let mut store = CacheStore::new();
-    // One ~10 KB entry under a 1 KB cap. The single entry overshoots the
-    // cap; the store must persist it anyway (so the cache stays useful)
-    // and emit a `tracing::warn!` (not asserted directly here, since
-    // capturing tracing in unit tests requires an extra harness).
     store.insert(Path::new("huge.ts"), synthetic_module(7, 0, 10));
     store
         .save(&dir, 5, 1024)
@@ -2001,12 +1972,10 @@ fn cache_load_returns_none_on_config_hash_mismatch() {
         .save(&dir, 0xDEAD_BEEF, DEFAULT_CACHE_MAX_SIZE)
         .expect("save with config_hash A");
 
-    // Load with a different config_hash: must be None.
     assert!(
         CacheStore::load(&dir, 0xCAFE_BABE, DEFAULT_CACHE_MAX_SIZE).is_none(),
         "mismatched config_hash invalidates cache"
     );
-    // Same config_hash still round-trips.
     assert!(
         CacheStore::load(&dir, 0xDEAD_BEEF, DEFAULT_CACHE_MAX_SIZE).is_some(),
         "matching config_hash round-trips"
@@ -2037,12 +2006,6 @@ fn cache_load_round_trip_with_matching_config_hash() {
 
 #[test]
 fn cache_load_honors_user_max_size_above_default() {
-    // Regression: an earlier version of `load` gated on `DEFAULT_CACHE_MAX_SIZE`
-    // unconditionally, so a user setting `cache.maxSizeMb = 512` could write a
-    // 400 MB cache via `save` then have it silently discarded on the next run.
-    // The fix uses `max(max_size_bytes, DEFAULT_CACHE_MAX_SIZE)` as the load
-    // ceiling so user-supplied caps above the default actually take effect,
-    // and a misconfigured tiny cap does NOT discard a valid existing cache.
     let dir = test_cache_dir("load_honors_user_max");
     let mut store = CacheStore::new();
     store.insert(Path::new("a.ts"), synthetic_module(1, 0, 1));
@@ -2050,15 +2013,11 @@ fn cache_load_honors_user_max_size_above_default() {
         .save(&dir, 0, DEFAULT_CACHE_MAX_SIZE)
         .expect("save under default");
 
-    // Tiny user cap (1 byte) does NOT discard the existing valid cache:
-    // the default acts as a floor on the load ceiling.
     assert!(
         CacheStore::load(&dir, 0, 1).is_some(),
         "tiny user cap does not discard valid existing cache"
     );
 
-    // User cap above the default also works (matches the cap the cache was
-    // saved under).
     assert!(
         CacheStore::load(&dir, 0, DEFAULT_CACHE_MAX_SIZE * 2).is_some(),
         "user cap above default round-trips"
@@ -2069,17 +2028,8 @@ fn cache_load_honors_user_max_size_above_default() {
 
 #[test]
 fn cache_load_returns_none_on_bitcode_decode_failure() {
-    // Regression: across a CACHE_VERSION bump the on-disk schema typically
-    // gains or removes fields, so bitcode cannot deserialize old bytes into
-    // the new struct shape. The old `load` only emitted the upgrade
-    // `tracing::info!` AFTER the decode succeeded, so the common
-    // upgrade path went silent. The fix emits the info log on EITHER
-    // decode failure OR version mismatch, since both indicate
-    // "on-disk file incompatible with this build."
     let dir = test_cache_dir("decode_fail_info");
     std::fs::create_dir_all(&dir).unwrap();
-    // Write deliberately-malformed bytes (cannot decode into any CacheStore
-    // shape). The `load` path must return `None` without panicking.
     std::fs::write(dir.join("cache.bin"), b"not-a-valid-bitcode-payload").unwrap();
     assert!(CacheStore::load(&dir, 0, DEFAULT_CACHE_MAX_SIZE).is_none());
 
@@ -2095,7 +2045,6 @@ fn cache_save_atomic_write_leaves_no_tmp_on_success() {
         .save(&dir, 0, DEFAULT_CACHE_MAX_SIZE)
         .expect("save atomic");
 
-    // `cache.bin` exists, `cache.bin.tmp` does not.
     assert!(dir.join("cache.bin").exists(), "cache.bin present");
     assert!(
         !dir.join("cache.bin.tmp").exists(),

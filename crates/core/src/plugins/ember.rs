@@ -62,36 +62,17 @@ const ENABLERS: &[&str] = &[
 /// `unused-dependency` for build-/CLI-/runtime-resolved packages. Don't
 /// dedupe.
 const TOOLING_DEPENDENCIES: &[&str] = &[
-    // Core Ember runtime / build pipeline
-    //
-    // `ember-source` is the meta-package: source code imports through the
-    // `@ember/*` namespace (e.g. `@ember/application`, `@ember/routing/route`)
-    // and never references the `ember-source` specifier directly.
     "ember-source",
     "ember-cli",
     "ember-cli-htmlbars",
     "ember-cli-babel",
     "ember-auto-import",
-    // Embroider runtime core. The compat / webpack / vite halves are
-    // `require()`'d from `ember-cli-build.js` (which is an entry pattern),
-    // and `@embroider/addon-shim` is `require()`'d from each v2 addon's
-    // `index.js` (reached via `package.json#main`); they're credited through
-    // the normal import graph and don't need an allowlist entry. The macros /
-    // router / test-setup halves are imported from source and likewise rely
-    // on the import graph.
     "@embroider/core",
-    // Glint type-checker CLI + tsconfig environment shims (`@glint/template`
-    // IS imported as type-only and so is omitted here).
     "@glint/core",
     "@glint/environment-ember-loose",
     "@glint/environment-ember-template-imports",
-    // Test infrastructure invoked by the runner, not imported from source
-    // (`ember-qunit`, `qunit`, `qunit-dom`, `@ember/test-helpers` are imported
-    // and so are omitted here).
     "ember-cli-test-loader",
     "ember-exam",
-    // Common addons that act through ember-cli config, package.json keys, or
-    // the build server rather than via source imports.
     "ember-template-lint",
     "ember-template-imports",
     "ember-source-channel-url",
@@ -101,18 +82,9 @@ const TOOLING_DEPENDENCIES: &[&str] = &[
     "ember-cli-sri",
     "ember-cli-terser",
     "loader.js",
-    // ember-cli build / runtime addons that register through
-    // `ember-cli-build.js`, initializers, or `package.json#ember` rather
-    // than via source imports. All ship as devDeps in the default
-    // `ember new` blueprint.
     "broccoli-asset-rev",
     "ember-cli-app-version",
     "ember-export-application-global",
-    // TypeScript ecosystem deps that the typescript plugin normally credits
-    // via tsconfig `extends` / `compilerOptions.plugins`. Listed here as a
-    // safety net because the default Ember TS blueprint ships them in
-    // devDeps before the tsconfig is fully wired up, and a fresh Ember user
-    // shouldn't have to debug a blueprint dep showing as unused.
     "@tsconfig/ember",
     "@glint/tsserver-plugin",
 ];
@@ -133,27 +105,6 @@ const COMPONENT_MEMBERS: &[&str] = &[
     "didDestroyElement",
 ];
 
-// `EmberObject` teardown lifecycle that the framework invokes reflectively
-// on every subclass: `init` runs during instance construction, `willDestroy`
-// is the documented teardown hook, and `destroy` is its less-common
-// lower-level companion. The three names appear at the tail of each
-// class-specific member list below so a user override on (say) a `Service`
-// subclass is not flagged as unused.
-//
-// Intentionally NOT allowlisted: inherited utility methods that the user
-// *calls* on the instance (`get`, `set`, `getProperties`, `setProperties`,
-// `incrementProperty`, `decrementProperty`, `toggleProperty`,
-// `notifyPropertyChange`, `cacheFor`, `addObserver`, `removeObserver`,
-// `toString`, `send`, `controllerFor`, `paramsFor`, `modelFor`,
-// `intermediateTransitionTo`, `refresh`, `has`, `off`, `on`, `one`,
-// `trigger`, `register`, `reset`, `boot`, `visit`, `buildInstance`,
-// `advanceReadiness`, `deferReadiness`). Users almost never override
-// them, so an allowlist entry would silence the "you defined this and
-// nothing calls it" check without preventing realistic false positives.
-// Same reasoning excludes `isDestroyed` / `isDestroying` /
-// `concatenatedProperties` / `mergedProperties` (set by the framework,
-// never user-defined as a field).
-
 /// Route hooks called by the Ember router during transitions, plus the
 /// convention properties (`actions`, `queryParams`, `templateName`,
 /// `controllerName`) that the resolver reads reflectively.
@@ -173,7 +124,6 @@ const ROUTE_MEMBERS: &[&str] = &[
     "queryParams",
     "templateName",
     "controllerName",
-    // EmberObject lifecycle (init / willDestroy / destroy).
     "init",
     "willDestroy",
     "destroy",
@@ -189,7 +139,6 @@ const CONTROLLER_MEMBERS: &[&str] = &[
     "queryParams",
     "templateName",
     "controllerName",
-    // EmberObject lifecycle.
     "init",
     "willDestroy",
     "destroy",
@@ -197,15 +146,7 @@ const CONTROLLER_MEMBERS: &[&str] = &[
 
 const SERVICE_MEMBERS: &[&str] = &["init", "willDestroy", "destroy"];
 
-const HELPER_MEMBERS: &[&str] = &[
-    "compute",
-    "recompute",
-    // EmberObject lifecycle (class-based helpers extend `Helper` which
-    // extends `EmberObject`; function-based helpers don't have lifecycle).
-    "init",
-    "willDestroy",
-    "destroy",
-];
+const HELPER_MEMBERS: &[&str] = &["compute", "recompute", "init", "willDestroy", "destroy"];
 
 const MODIFIER_MEMBERS: &[&str] = &[
     "modify",
@@ -229,7 +170,6 @@ const APPLICATION_MEMBERS: &[&str] = &[
     "eventDispatcher",
     "resolver",
     "rootElement",
-    // EmberObject lifecycle.
     "init",
     "willDestroy",
     "destroy",
@@ -280,18 +220,7 @@ const ROUTER_MEMBERS: &[&str] = &[
 ///   in the resolver; the escape hatch today is `ignoreDependencies` per
 ///   addon (or migrating to its v2 build).
 const VIRTUAL_MODULE_PREFIXES: &[&str] = &[
-    // Bare `ember` (legacy `import Ember from 'ember'`). The trailing slash
-    // is load-bearing: it makes the entry exact-match `ember` (via the
-    // `strip_suffix('/')` shortcut in the suppression logic) AND match any
-    // future `ember/<subpath>` shape without also covering `ember-cli`,
-    // `ember-data`, or `ember-source`. A no-slash entry would prefix-match
-    // every `ember-*` real npm package and mask legitimate missing-dep
-    // reports.
     "ember/",
-    // ember-source modules exposed via the AMD loader / Embroider rewriter.
-    // Each entry covers its bare specifier plus every subpath
-    // (`@ember/object` also covers `@ember/object/computed`,
-    // `@ember/object/proxy`, etc.) via `starts_with`.
     "@ember/application",
     "@ember/array",
     "@ember/canary-features",
@@ -311,23 +240,12 @@ const VIRTUAL_MODULE_PREFIXES: &[&str] = &[
     "@ember/routing",
     "@ember/runloop",
     "@ember/service",
-    // `@ember/template` covers `template-compilation`, `template-compiler`,
-    // and `template-factory` via prefix-match.
     "@ember/template",
     "@ember/utils",
     "@ember/version",
 ];
 
-// Build-time template placeholders (`{{rootURL}}` Handlebars expressions,
-// `###APPNAME###` ember-cli blueprint scaffolds) that leak into `<script
-// src>` / `<link href>` extractions from `app/index.html` are filtered out
-// at extraction time by `crate::extract::html::is_template_placeholder`
-// (see `crates/extract/src/html.rs`). The filter is generic across template
-// engines, not Ember-specific, so the Ember plugin doesn't carry a
-// per-framework substring list here.
-
 const ENTRY_PATTERNS: &[&str] = &[
-    // Classic app/ layout
     "app/app.{js,ts,gjs,gts}",
     "app/router.{js,ts}",
     "app/index.html",
@@ -344,21 +262,9 @@ const ENTRY_PATTERNS: &[&str] = &[
     "app/adapters/**/*.{js,ts}",
     "app/serializers/**/*.{js,ts}",
     "app/transforms/**/*.{js,ts}",
-    // The classic v1 addon `addon/` and `addon-test-support/` layouts are
-    // intentionally NOT exposed as entry-point globs. v1 addons predate
-    // strict-mode `.gts` / `.gjs` (they ship the legacy AMD module
-    // shape via ember-cli-babel and the classic resolver); the Ember
-    // plugin's template scanner, `.gts` parser, and `@ember/*` virtual
-    // prefixes only deliver value for strict-mode code. Maintainers of v1
-    // addons can declare those paths explicitly via `entry` in their fallow
-    // config; v2 addons follow the standard `package.json#main` /
-    // `exports` entry shape and don't need framework-specific globs.
-
-    // Tests
     "tests/test-helper.{js,ts}",
     "tests/index.html",
     "tests/**/*-test.{js,ts,gjs,gts}",
-    // Build / config
     "config/environment.js",
     "config/targets.js",
     "config/optional-features.json",
@@ -428,32 +334,21 @@ mod tests {
     fn tooling_dependencies_cover_runtime_only_packages() {
         let plugin = EmberPlugin;
         let deps = plugin.tooling_dependencies();
-        // Build / CLI / config-only packages that no source file imports must
-        // be credited via the tooling list.
         assert!(deps.contains(&"ember-source"));
         assert!(deps.contains(&"ember-cli-htmlbars"));
         assert!(deps.contains(&"@embroider/core"));
         assert!(deps.contains(&"@glint/core"));
         assert!(deps.contains(&"ember-exam"));
         assert!(deps.contains(&"loader.js"));
-        // ember-cli build / runtime addons that ship in the default blueprint.
         assert!(deps.contains(&"broccoli-asset-rev"));
         assert!(deps.contains(&"ember-cli-app-version"));
         assert!(deps.contains(&"ember-export-application-global"));
-        // TS-ecosystem safety nets (also covered by the typescript plugin when
-        // tsconfig is wired up; listed here for the fresh-blueprint case).
         assert!(deps.contains(&"@tsconfig/ember"));
         assert!(deps.contains(&"@glint/tsserver-plugin"));
     }
 
     #[test]
     fn tooling_dependencies_omits_source_imported_packages() {
-        // Packages a modern Ember app imports directly (`import Component from
-        // '@glimmer/component'`, `import { tracked } from '@glimmer/tracking'`,
-        // `import { module, test } from 'qunit'`, etc.) MUST NOT appear in
-        // the tooling list. The normal import graph already credits them, and
-        // listing them here would mask a real removal when a user genuinely
-        // drops the dependency.
         let plugin = EmberPlugin;
         let deps = plugin.tooling_dependencies();
         for name in [
@@ -471,9 +366,6 @@ mod tests {
             "@embroider/macros",
             "@embroider/router",
             "@embroider/test-setup",
-            // Reached via the normal import graph through `ember-cli-build.js`
-            // (an entry pattern) which `require()`s the build half, and via
-            // each v2 addon's `package.json#main` index.js for the shim.
             "@embroider/webpack",
             "@embroider/vite",
             "@embroider/addon-shim",
@@ -538,13 +430,6 @@ mod tests {
 
     #[test]
     fn entry_patterns_do_not_include_v1_addon_layout() {
-        // v1 addon `addon/` / `addon-test-support/` layouts are out of scope
-        // because they predate strict-mode `.gts` / `.gjs` and gain nothing from
-        // the plugin's value-adds. Re-introducing them as automatic entry
-        // patterns would credit unused files in apps that happen to have an
-        // `addon/` directory for unrelated reasons; v1-addon maintainers
-        // should declare the paths via `entry` in their fallow config
-        // instead. Regression fence against re-introducing the v1 globs.
         let plugin = EmberPlugin;
         let patterns = plugin.entry_patterns();
         for v1_only in [
@@ -572,15 +457,8 @@ mod tests {
 
     #[test]
     fn virtual_module_prefixes_cover_ember_source_runtime() {
-        // Every specifier the user actually encounters in a strict-mode
-        // Ember app and that `ember-source` rewrites at build time must be
-        // covered. Includes top-level paths, subpaths under those roots,
-        // the `template-*` family covered by the bare `@ember/template`
-        // prefix via starts_with, and the bare `ember` legacy specifier
-        // covered exactly via the `ember/` trailing-slash entry.
         let prefixes = EmberPlugin.virtual_module_prefixes();
         for spec in [
-            // The exact specifiers from the original bug report.
             "@ember/object",
             "@ember/object/computed",
             "@ember/template",
@@ -590,7 +468,6 @@ mod tests {
             "@ember/routing/router-service",
             "@ember/helper",
             "@ember/modifier",
-            // Other common runtime entries.
             "@ember/application",
             "@ember/component",
             "@ember/component/helper",
@@ -602,7 +479,6 @@ mod tests {
             "@ember/template-compilation",
             "@ember/template-factory",
             "@ember/owner",
-            // Bare `ember` (legacy `import Ember from 'ember'`).
             "ember",
         ] {
             assert!(
@@ -617,11 +493,6 @@ mod tests {
 
     #[test]
     fn virtual_module_prefixes_do_not_swallow_real_ember_npm_packages() {
-        // Parts of the `@ember/*` namespace ARE real npm packages users
-        // install explicitly. Silencing them with a blanket prefix would
-        // mask legitimate `unlisted-dependency` reports when a user removes
-        // one from `package.json`. This test is the regression fence
-        // against re-introducing a blanket `@ember/` prefix.
         let prefixes = EmberPlugin.virtual_module_prefixes();
         for real in [
             "@ember/test-helpers",
@@ -642,13 +513,6 @@ mod tests {
 
     #[test]
     fn virtual_module_prefixes_do_not_swallow_ember_dash_packages() {
-        // `@ember-data/*`, `@glimmer/*`, and the entire `ember-*` family of
-        // real npm packages (`ember-source`, `ember-cli`, `ember-data`,
-        // `ember-in-viewport`, ...) resolve through normal node resolution.
-        // A missing or misspelled specifier in any of those namespaces must
-        // still surface. The `ember/` virtual entry uses a trailing slash
-        // precisely so it ONLY matches bare `ember` and `ember/<subpath>`,
-        // not `ember-<anything>`.
         let prefixes = EmberPlugin.virtual_module_prefixes();
         for spec in [
             "@ember-data/store",

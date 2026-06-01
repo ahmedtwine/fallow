@@ -149,7 +149,6 @@ fn insert_test_src_split<T>(lines: &mut Vec<String>, items: &[T], get_path: impl
         .filter(|item| is_test_path(get_path(item)))
         .count();
     let src_count = items.len() - test_count;
-    // Only show when there's a meaningful split (both > 0 and test is >=30%)
     if test_count == 0 || src_count == 0 {
         return;
     }
@@ -161,7 +160,6 @@ fn insert_test_src_split<T>(lines: &mut Vec<String>, items: &[T], get_path: impl
         "  {}",
         format!("{src_count} in src, {test_count} in test directories").dimmed()
     );
-    // Insert before the trailing blank line (if present)
     if lines.last().is_some_and(String::is_empty) {
         let pos = lines.len() - 1;
         lines.insert(pos, annotation);
@@ -186,14 +184,12 @@ pub(in crate::report) fn print_human(
 ) {
     if !quiet {
         eprintln!();
-        // Config quality signal: warn when findings are dominated by one directory
         emit_config_quality_signal(results, root);
     }
 
     let total = results.total_issues();
     print_explain_tip_if_tty(show_explain_tip && total > 0, quiet);
 
-    // Human output always includes section footers with doc links.
     for line in build_human_lines_with_explain(results, root, rules, top, explain) {
         println!("{line}");
     }
@@ -207,7 +203,6 @@ pub(in crate::report) fn print_human(
                     .bold()
             );
         } else {
-            // Compute suppressed counts so the footer reflects visible items
             let unused_file_set: FxHashSet<&std::path::Path> = results
                 .unused_files
                 .iter()
@@ -1004,9 +999,6 @@ fn push_unresolved_catalog_references_section(
                 )
             };
             out.push(detail_line);
-            // When exactly one alternative catalog declares the package, the
-            // fix is unambiguous; surface the concrete switch as a third line
-            // so a human reading CI output can apply it without thinking.
             if finding.available_in_catalogs.len() == 1 {
                 let target = &finding.available_in_catalogs[0];
                 out.push(format!(
@@ -1203,12 +1195,10 @@ fn build_dir_rollup_section(
     let level = severity_to_level(rules.unused_files);
     lines.push(build_section_header(title, unused_files.len(), level));
 
-    // Group by first directory component (root-level files go under "(project root)")
     let mut dir_counts: Vec<(String, usize, bool)> = Vec::new();
     let mut dir_map: FxHashMap<String, usize> = FxHashMap::default();
     for f in unused_files {
         let rel = relative_path(&f.file.path, root);
-        // Detect root-level files: only one path component means no parent directory
         let (dir, is_dir) = if rel.components().count() <= 1 {
             ("(project root)".to_string(), false)
         } else {
@@ -1229,8 +1219,6 @@ fn build_dir_rollup_section(
     }
     dir_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
 
-    // Second-level rollup: when one directory holds >80% of files, expand it
-    // into two-level sub-directories (e.g. `packages/react-query/`) for clarity.
     let total = unused_files.len();
     let dominant = dir_counts
         .iter()
@@ -1260,7 +1248,6 @@ fn build_dir_rollup_section(
             }
         }
         sub_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
-        // Combine: sub-entries for the dominant dir + remaining first-level entries
         let mut combined = sub_counts;
         for entry in &dir_counts {
             if entry.0 != *dom_dir {
@@ -1283,7 +1270,6 @@ fn build_dir_rollup_section(
     }
     if display_entries.len() > MAX_FLAT_ITEMS {
         let remaining = display_entries.len() - MAX_FLAT_ITEMS;
-        // Use directory-specific wording and scoping hint when total issues are high
         let hint = if remaining > SCOPING_HINT_THRESHOLD || total_issues > SCOPING_HINT_THRESHOLD {
             format!(
                 "... and {remaining} more director{} \u{2014} try --workspace <name> or --changed-since main to scope",
@@ -1382,7 +1368,6 @@ fn build_duplicate_exports_section(
     let title = "Duplicate exports";
     lines.push(build_section_header(title, items.len(), level));
 
-    // Group by sorted file-pair key
     let mut pair_groups: Vec<(String, String, Vec<&str>)> = Vec::new();
     let mut pair_map: rustc_hash::FxHashMap<(String, String), usize> =
         rustc_hash::FxHashMap::default();
@@ -1400,7 +1385,6 @@ fn build_duplicate_exports_section(
         paths.sort();
         paths.dedup();
 
-        // For multi-file duplicates, pair the first two
         let key = (paths[0].clone(), paths.get(1).cloned().unwrap_or_default());
         if let Some(&group_idx) = pair_map.get(&key) {
             pair_groups[group_idx].2.push(&dup.export_name);
@@ -1414,7 +1398,6 @@ fn build_duplicate_exports_section(
         }
     }
 
-    // Sort by count descending
     pair_groups.sort_by_key(|b| std::cmp::Reverse(b.2.len()));
 
     let shown = pair_groups.len().min(MAX_FLAT_ITEMS);
@@ -1432,7 +1415,6 @@ fn build_duplicate_exports_section(
             display.join(", ")
         };
 
-        // Vertical layout: file_a on line 1, <-> file_b on line 2, exports on line 3
         let elided_b = elide_common_prefix(file_a, file_b);
         lines.push(format!("  {}", format_path(file_a)));
         lines.push(format!(
@@ -1456,9 +1438,6 @@ fn build_duplicate_exports_section(
     }
     if should_show_namespace_barrel_hint(items) {
         if truncation_emitted {
-            // Keep the truncation hint and the namespace-barrel hint visually
-            // distinct; without this blank line both render as one block of
-            // dim text and read as a single run-on note.
             lines.push(String::new());
         }
         lines.push(format!("  {}", NAMESPACE_BARREL_HINT.dimmed()));
@@ -1481,7 +1460,6 @@ fn build_circular_deps_section(
     let title = "Circular dependencies";
     lines.push(build_section_header(title, items.len(), level));
 
-    // Group cycles by their first file (hub)
     let mut hub_groups: Vec<(String, Vec<&fallow_core::results::CircularDependency>)> = Vec::new();
     let mut hub_map: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
 
@@ -1500,7 +1478,6 @@ fn build_circular_deps_section(
         }
     }
 
-    // Sort by cycle count descending, alphabetical tiebreaker
     hub_groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
 
     let shown = hub_groups.len().min(MAX_FLAT_ITEMS);
@@ -1519,17 +1496,14 @@ fn build_circular_deps_section(
                 .map(|p| relative_path(p, root).display().to_string())
                 .collect();
 
-            // Build chain: elide common prefix with hub, add closing return to hub
             let mut chain_parts: Vec<String> = Vec::new();
             for path in &rel_paths[1..] {
                 let elided = elide_common_prefix(hub_path, path);
                 chain_parts.push(format_path(elided));
             }
-            // Close the cycle back to hub filename
             let (_, hub_filename) = split_dir_filename(hub_path);
             chain_parts.push(hub_filename.bold().to_string());
 
-            // When every file in the cycle is a .d.ts, tag it as type-only
             let type_only_tag = if cycle
                 .files
                 .iter()
@@ -1787,7 +1761,6 @@ pub(in crate::report) fn print_grouped_human(
         eprintln!();
     }
 
-    // ── Summary line: groups sorted by issue count descending ───────
     let mut group_counts: Vec<(&str, usize)> = groups
         .iter()
         .map(|g| (g.key.as_str(), g.results.total_issues()))
@@ -1820,7 +1793,6 @@ pub(in crate::report) fn print_grouped_human(
         }
         grand_total += total;
 
-        // Group header: bold cyan key with issue count and per-type breakdown
         let issue_word = if total == 1 { "issue" } else { "issues" };
         let breakdown = build_summary_footer(&group.results, 0, 0);
         let header_text = if breakdown.is_empty() {
@@ -1829,7 +1801,6 @@ pub(in crate::report) fn print_grouped_human(
             format!("{} ({total} {issue_word}: {breakdown})", group.key)
         };
 
-        // Optionally append matching CODEOWNERS rules for Owner mode
         let header_text = match resolver {
             Some(r @ OwnershipResolver::Owner(_)) => {
                 let matched = collect_matching_rules(&group.results, root, r);
@@ -1844,15 +1815,12 @@ pub(in crate::report) fn print_grouped_human(
 
         println!("{}", header_text.cyan().bold());
 
-        // Section-mode: list the section's default owners under the heading
-        // so human output mirrors the `owners` metadata emitted in JSON.
         if let Some(ref owners) = group.owners
             && !owners.is_empty()
         {
             println!("  {} {}", "owners:".dimmed(), owners.join(" ").dimmed());
         }
 
-        // Build lines and dedup doc URL footers across groups
         let lines = build_human_lines_with_explain(&group.results, root, rules, None, explain);
         for line in &lines {
             if line.contains("docs.fallow.tools") && !seen_footers.insert(line.clone()) {
@@ -1925,7 +1893,6 @@ fn emit_config_quality_signal(results: &AnalysisResults, root: &Path) {
     if let Some((dominant_dir, count)) = dir_counts.iter().max_by_key(|(_, c)| **c) {
         let pct = (*count as f64 / total as f64) * 100.0;
         if pct > 80.0 {
-            // Source-heavy directories get different advice than test/example dirs
             let is_source_dir =
                 matches!(dominant_dir.as_str(), "packages" | "src" | "lib" | "apps");
             let advice = if is_source_dir {
@@ -1961,10 +1928,8 @@ fn build_summary_footer(
     let mut add = |count: usize, label: &str| {
         if count > 0 {
             let display_label = if count == 1 && label.ends_with("ies") {
-                // Singularize -ies plurals: "dependencies" → "dependency"
                 format!("{}y", &label[..label.len() - 3])
             } else if count == 1 && label.ends_with('s') {
-                // Singularize simple plurals: "enum members" → "enum member"
                 label[..label.len() - 1].to_string()
             } else {
                 label.to_string()
@@ -1999,7 +1964,6 @@ fn build_summary_footer(
     add(results.unused_class_members.len(), "class members");
     add(results.unresolved_imports.len(), "unresolved imports");
     add(results.unlisted_dependencies.len(), "unlisted dependencies");
-    // Count unique file-pairs (consistent with the section renderer's grouping)
     {
         let mut pair_set = rustc_hash::FxHashSet::default();
         for dup in &results.duplicate_exports {
@@ -2192,8 +2156,6 @@ mod tests {
         crate::report::test_helpers::sample_results(root)
     }
 
-    // ── Empty results ──
-
     #[test]
     fn empty_results_produce_no_lines() {
         let root = PathBuf::from("/project");
@@ -2202,8 +2164,6 @@ mod tests {
         let lines = build_human_lines(&results, &root, &rules, None);
         assert!(lines.is_empty());
     }
-
-    // ── Section headers contain title and count ──
 
     #[test]
     fn section_headers_contain_title_and_count() {
@@ -2228,8 +2188,6 @@ mod tests {
         assert!(text.contains("Circular dependencies (1)"));
     }
 
-    // ── Multiple items show correct counts ──
-
     #[test]
     fn section_header_shows_correct_count_for_multiple_items() {
         let root = PathBuf::from("/project");
@@ -2247,8 +2205,6 @@ mod tests {
         assert!(text.contains("Unused files (5)"));
     }
 
-    // ── Unused files display relative paths ──
-
     #[test]
     fn unused_files_show_relative_paths() {
         let root = PathBuf::from("/project");
@@ -2264,8 +2220,6 @@ mod tests {
         assert!(text.contains("src/components/Button.tsx"));
         assert!(!text.contains("/project/"));
     }
-
-    // ── Unused exports show file grouping, line, and name ──
 
     #[test]
     fn unused_exports_grouped_by_file_with_line_and_name() {
@@ -2297,16 +2251,11 @@ mod tests {
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
 
-        // Count of 2 in header
         assert!(text.contains("Unused exports (2)"));
-        // File path appears as group header
         assert!(text.contains("src/utils.ts"));
-        // Both export names appear
         assert!(text.contains(":10 helperFn"));
         assert!(text.contains(":25 anotherFn"));
     }
-
-    // ── Re-exports are tagged ──
 
     #[test]
     fn re_exports_are_tagged() {
@@ -2350,8 +2299,6 @@ mod tests {
         assert!(!text.contains("(re-export)"));
     }
 
-    // ── Unused members show parent.member format ──
-
     #[test]
     fn unused_enum_members_show_parent_dot_member() {
         let root = PathBuf::from("/project");
@@ -2394,8 +2341,6 @@ mod tests {
         assert!(text.contains(":99"));
     }
 
-    // ── Dependencies display ──
-
     #[test]
     fn unused_deps_at_root_show_package_name_only() {
         let root = PathBuf::from("/project");
@@ -2413,7 +2358,6 @@ mod tests {
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
         assert!(text.contains("lodash"));
-        // Should NOT show "(package.json)" for root deps
         assert!(!text.contains("(package.json)"));
     }
 
@@ -2478,8 +2422,6 @@ mod tests {
         assert!(!text.contains("(package.json; imported in packages/consumer)"));
     }
 
-    // ── Unresolved imports show specifier ──
-
     #[test]
     fn unresolved_imports_show_specifier_and_line() {
         let root = PathBuf::from("/project");
@@ -2500,8 +2442,6 @@ mod tests {
         assert!(text.contains(":7"));
         assert!(text.contains("@org/missing-pkg"));
     }
-
-    // ── Namespace-barrel hint helpers ──
 
     fn make_dup(name: &str, paths: &[&str]) -> DuplicateExportFinding {
         DuplicateExportFinding::with_actions(DuplicateExport {
@@ -2528,7 +2468,6 @@ mod tests {
         assert!(is_namespace_barrel_location(Path::new("src/x/index.mjs")));
         assert!(is_namespace_barrel_location(Path::new("src/x/index.cjs")));
         assert!(is_namespace_barrel_location(Path::new("src/x/index.jsx")));
-        // Case-insensitive on the extension only.
         assert!(is_namespace_barrel_location(Path::new(
             "components/ui/button/index.TS"
         )));
@@ -2542,11 +2481,9 @@ mod tests {
         assert!(!is_namespace_barrel_location(Path::new(
             "components/ui/button/Button.ts"
         )));
-        // basename must be exactly `index`; uppercase `Index` does not match.
         assert!(!is_namespace_barrel_location(Path::new(
             "components/ui/button/Index.ts"
         )));
-        // Unsupported extensions.
         assert!(!is_namespace_barrel_location(Path::new(
             "components/ui/button/index.svelte"
         )));
@@ -2599,7 +2536,6 @@ mod tests {
 
     #[test]
     fn namespace_barrel_hint_does_not_fire_below_findings_floor() {
-        // 2 of 2 findings match the barrel shape, but the floor is 3 findings.
         let items = vec![
             make_dup(
                 "Root",
@@ -2627,9 +2563,6 @@ mod tests {
 
     #[test]
     fn namespace_barrel_hint_skips_single_location_findings_when_computing_ratio() {
-        // Single-location findings are filtered out of the human render and
-        // should not affect the ratio. Three barrel-shaped renderable findings
-        // alongside a single-location finding still satisfy the gate.
         let items = vec![
             make_dup(
                 "Root",
@@ -2674,7 +2607,6 @@ mod tests {
     fn duplicate_exports_section_omits_hint_when_gate_fails() {
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
-        // Only one finding -> below floor.
         results.duplicate_exports.push(make_dup(
             "Sym",
             &[
@@ -2690,8 +2622,6 @@ mod tests {
             "hint must not fire below the 3-finding floor: {text}"
         );
     }
-
-    // ── Duplicate exports show locations ──
 
     #[test]
     fn duplicate_exports_show_name_and_locations() {
@@ -2719,11 +2649,8 @@ mod tests {
         let text = plain(&lines);
         assert!(text.contains("Config"));
         assert!(text.contains("src/config.ts"));
-        // file_b shown with common prefix elided
         assert!(text.contains("types.ts"));
     }
-
-    // ── Circular dependencies show cycle with arrow ──
 
     #[test]
     fn circular_dependencies_show_cycle_with_arrow_and_repeat() {
@@ -2747,20 +2674,16 @@ mod tests {
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
-        // Hub file shown first, chain with elided paths and arrows
         assert!(text.contains("a.ts"));
         assert!(text.contains("b.ts"));
         assert!(text.contains("c.ts"));
         assert!(text.contains("\u{2192}"));
     }
 
-    // ── Empty sections are omitted ──
-
     #[test]
     fn empty_sections_are_omitted() {
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
-        // Only add unused files, no other issues
         results
             .unused_files
             .push(UnusedFileFinding::with_actions(UnusedFile {
@@ -2775,11 +2698,8 @@ mod tests {
         assert!(!text.contains("Unresolved imports"));
     }
 
-    // ── Severity levels affect section header indicator ──
-
     #[test]
     fn section_header_uses_bullet_indicator() {
-        // The section header always contains the bullet character
         let header = build_section_header("Test section", 3, Level::Error);
         let text = strip_ansi(&header);
         assert!(text.contains("\u{25cf}"));
@@ -2788,7 +2708,6 @@ mod tests {
 
     #[test]
     fn section_header_formats_for_all_levels() {
-        // Verify all three levels produce valid headers (not panicking, contain the title)
         for level in [Level::Error, Level::Warn, Level::Info] {
             let header = build_section_header("Items", 7, level);
             let text = strip_ansi(&header);
@@ -2799,13 +2718,10 @@ mod tests {
         }
     }
 
-    // ── Grouped sections sort by file path ──
-
     #[test]
     fn grouped_exports_from_different_files_sorted_by_path() {
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
-        // Add exports in non-alphabetical order
         results
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
@@ -2831,13 +2747,10 @@ mod tests {
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
-        // a-file should appear before z-file in output
         let a_pos = text.find("src/a-file.ts").unwrap();
         let z_pos = text.find("src/z-file.ts").unwrap();
         assert!(a_pos < z_pos, "Files should be sorted alphabetically");
     }
-
-    // ── File grouping deduplicates file headers ──
 
     #[test]
     fn grouped_items_from_same_file_share_one_file_header() {
@@ -2859,18 +2772,12 @@ mod tests {
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
-        // "src/utils.ts" should appear exactly once as a group header
         let count = text.matches("src/utils.ts").count();
         assert_eq!(count, 1, "File header should appear once, found {count}");
     }
 
-    // ── Severity affects which sections appear ──
-
     #[test]
     fn off_severity_still_shows_section_when_items_present() {
-        // When severity is Off, the items are normally filtered before reaching
-        // the reporter. But if items ARE present, the section should still render
-        // (with Info-level styling).
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
         results
@@ -2887,8 +2794,6 @@ mod tests {
         assert!(text.contains("Unused files (1)"));
     }
 
-    // ── Deeply nested paths display correctly ──
-
     #[test]
     fn deeply_nested_paths_display_correctly() {
         let root = PathBuf::from("/project");
@@ -2904,8 +2809,6 @@ mod tests {
         assert!(text.contains("packages/ui/src/components/forms/inputs/TextInput.tsx"));
     }
 
-    // ── All section types produce output when populated ──
-
     #[test]
     fn all_issue_types_produce_output_lines() {
         let root = PathBuf::from("/project");
@@ -2913,7 +2816,6 @@ mod tests {
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
-        // Every populated section must produce a header with a count
         assert!(text.contains("Unused files (1)"));
         assert!(text.contains("Unused exports (1)"));
         assert!(text.contains("Unused type exports (1)"));
@@ -2931,8 +2833,6 @@ mod tests {
         ));
         assert!(text.contains("Circular dependencies (1)"));
     }
-
-    // ── Sections end with empty line separator ──
 
     #[test]
     fn each_section_ends_with_empty_line_separator() {
@@ -2954,16 +2854,12 @@ mod tests {
             }));
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
-        // Category headers + issue sections each add an empty line separator.
-        // Unused Code header + unused_files + Dependencies header + unused_deps = 4 empty lines.
         let empty_count = lines.iter().filter(|l| l.is_empty()).count();
         assert_eq!(
             empty_count, 4,
             "Expected 4 empty separators (2 category headers + 2 sections), got {empty_count}"
         );
     }
-
-    // ── Type-only dependencies section has specific title ──
 
     #[test]
     fn type_only_deps_section_title_includes_suggestion() {
@@ -2984,8 +2880,6 @@ mod tests {
         assert!(text.contains("Type-only dependencies (consider moving to devDependencies)"));
     }
 
-    // ── Warn severity renders with correct indicator for section header ──
-
     #[test]
     fn warn_severity_produces_header_with_bullet() {
         let root = PathBuf::from("/project");
@@ -2999,17 +2893,12 @@ mod tests {
                     line: 8,
                 },
             ));
-        // type_only_dependencies defaults to Warn
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
-        // Verify the section appears with the correct title (the styling differs
-        // between Warn and Error, but the structural content is the same)
         assert!(text.contains("\u{25cf}"));
         assert!(text.contains("Type-only dependencies"));
     }
-
-    // ── Unlisted dependencies show package name ──
 
     #[test]
     fn unlisted_deps_show_package_name() {
@@ -3029,13 +2918,10 @@ mod tests {
         assert!(text.contains("@scope/unknown-pkg"));
     }
 
-    // ── Hub-grouped circular deps ──
-
     #[test]
     fn circular_deps_grouped_by_hub() {
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
-        // Two cycles sharing the same hub file
         results
             .circular_dependencies
             .push(CircularDependencyFinding::with_actions(
@@ -3061,20 +2947,15 @@ mod tests {
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
-        // Should show "(2 cycles)" for the hub
         assert!(text.contains("(2 cycles)"));
-        // Hub file appears once
         assert_eq!(text.matches("hub.ts").count(), 3); // header + 2 chain endings
     }
-
-    // ── Summary footer ──
 
     #[test]
     fn summary_footer_uses_short_labels() {
         let root = PathBuf::from("/project");
         let results = sample_results(&root);
         let footer = build_summary_footer(&results, 0, 0);
-        // Should use short labels, not "unused file" etc.
         assert!(footer.contains("1 file"));
         assert!(footer.contains("1 export"));
         assert!(footer.contains("1 circular"));
@@ -3085,7 +2966,6 @@ mod tests {
     fn summary_footer_singularizes_pre_pluralized_labels_for_count_1() {
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
-        // Add exactly 1 of each pre-pluralized category
         results.unused_enum_members.push(
             fallow_core::results::UnusedEnumMemberFinding::with_actions(UnusedMember {
                 path: root.join("src/types.ts"),
@@ -3107,7 +2987,6 @@ mod tests {
             }),
         );
         let footer = build_summary_footer(&results, 0, 0);
-        // Pre-pluralized labels should be singularized for count=1
         assert!(
             footer.contains("1 enum member"),
             "Expected '1 enum member' but got: {footer}"
@@ -3126,8 +3005,6 @@ mod tests {
         );
     }
 
-    // ── Section footers with docs links ──
-
     #[test]
     fn section_footer_contains_docs_link() {
         let root = PathBuf::from("/project");
@@ -3140,12 +3017,9 @@ mod tests {
         let rules = RulesConfig::default();
         let lines = build_human_lines(&results, &root, &rules, None);
         let text = plain(&lines);
-        // Human output always includes section footers with doc links
         assert!(text.contains("docs.fallow.tools/explanations/dead-code"));
         assert!(text.contains("Files not reachable from any entry point"));
     }
-
-    // ── Truncation tests ──
 
     #[test]
     fn flat_section_truncates_at_max() {
@@ -3168,7 +3042,6 @@ mod tests {
     fn grouped_section_truncates_files() {
         let root = PathBuf::from("/project");
         let mut results = AnalysisResults::default();
-        // 15 files with 1 export each
         for i in 0..15 {
             results
                 .unused_exports
@@ -3188,8 +3061,6 @@ mod tests {
         assert!(text.contains("... and 5 more in 5 files"));
     }
 
-    // ── --top flag limits items shown ──
-
     #[test]
     fn top_flag_limits_unused_files_shown() {
         let root = PathBuf::from("/project");
@@ -3205,10 +3076,8 @@ mod tests {
         let lines = build_human_lines(&results, &root, &rules, Some(2));
         let text = plain(&lines);
 
-        // Header still shows the full count
         assert!(text.contains("Unused files (5)"));
 
-        // Only 2 of the 5 files should be listed
         let file_lines: Vec<&str> = text
             .lines()
             .filter(|l| l.contains("src/dead") && l.contains(".ts"))
@@ -3220,7 +3089,6 @@ mod tests {
             file_lines.len()
         );
 
-        // Truncation hint for the remaining 3
         assert!(
             text.contains("... and 3 more"),
             "Expected truncation hint, got:\n{text}"

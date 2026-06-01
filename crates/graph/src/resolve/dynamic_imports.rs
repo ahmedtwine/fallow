@@ -45,19 +45,11 @@ pub(super) fn resolve_single_dynamic_import(
 ) -> Vec<ResolvedImport> {
     let target = resolve_specifier(ctx, file_path, &imp.source, false);
 
-    // Speculative imports are synthesised by fallow (e.g. the Vitest
-    // `__mocks__/<file>` auto-mock sibling) to credit a side-effect file when
-    // it exists. The user never wrote the synthesised path, so when it fails
-    // to resolve drop the entry silently rather than surfacing it as an
-    // `unresolved-import` finding. The credit path is unaffected: a
-    // speculative import whose target resolves still produces a regular
-    // `ResolvedImport`. See issue #378.
     if imp.is_speculative && matches!(target, ResolveResult::Unresolvable(_)) {
         return Vec::new();
     }
 
     if !imp.destructured_names.is_empty() {
-        // `const { a, b } = await import('./x')` -> Named imports
         return imp
             .destructured_names
             .iter()
@@ -84,7 +76,6 @@ pub(super) fn resolve_single_dynamic_import(
     }
 
     if imp.local_name.is_some() {
-        // `const mod = await import('./x')` -> Namespace with local_name
         return vec![ResolvedImport {
             info: ImportInfo {
                 source: imp.source.clone(),
@@ -99,7 +90,6 @@ pub(super) fn resolve_single_dynamic_import(
         }];
     }
 
-    // Side-effect only: `await import('./x')` with no assignment
     vec![ResolvedImport {
         info: ImportInfo {
             source: imp.source.clone(),
@@ -131,7 +121,6 @@ pub(super) fn resolve_dynamic_patterns(
                 .ok()
                 .map(|g| g.compile_matcher())?;
             let matched: Vec<FileId> = if canonical_paths.is_empty() {
-                // Root is canonical — use raw file paths directly (no extra allocation)
                 files
                     .iter()
                     .filter(|f| {

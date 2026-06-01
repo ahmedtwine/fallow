@@ -21,7 +21,6 @@ use crate::resolve::ResolvedModule;
 use fallow_types::discover::{DiscoveredFile, EntryPoint, FileId};
 use fallow_types::extract::ImportedName;
 
-// Re-export all public types so downstream sees the same API as before.
 pub use re_exports::GraphReExportCycle;
 pub use types::{ExportSymbol, ModuleNode, ReExportEdge, ReferenceKind, SymbolReference};
 
@@ -100,9 +99,6 @@ pub(super) struct ImportedSymbol {
     pub(super) is_type_only: bool,
 }
 
-// Size assertions to prevent memory regressions in hot-path graph types.
-// `Edge` is stored in a flat contiguous Vec for cache-friendly traversal.
-// `ImportedSymbol` is stored in a Vec per Edge.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<Edge>() == 32);
 #[cfg(target_pointer_width = "64")]
@@ -152,8 +148,6 @@ impl ModuleGraph {
 
         let module_count = files.len();
 
-        // Compute the total capacity needed, accounting for workspace FileIds
-        // that may exceed files.len() if IDs are assigned beyond the file count.
         let max_file_id = files
             .iter()
             .map(|f| f.id.0 as usize)
@@ -161,35 +155,23 @@ impl ModuleGraph {
             .map_or(0, |m| m + 1);
         let total_capacity = max_file_id.max(module_count);
 
-        // Build path -> FileId index (borrows paths from files slice to avoid cloning)
         let path_to_id: FxHashMap<&Path, FileId> =
             files.iter().map(|f| (f.path.as_path(), f.id)).collect();
 
-        // Build FileId -> ResolvedModule index
         let module_by_id: FxHashMap<FileId, &ResolvedModule> =
             resolved_modules.iter().map(|m| (m.file_id, m)).collect();
 
-        // Build entry point set — use path_to_id map instead of O(n) scan per entry
         let mut entry_point_ids = Self::resolve_entry_point_ids(entry_points, &path_to_id);
         let runtime_entry_point_ids =
             Self::resolve_entry_point_ids(runtime_entry_points, &path_to_id);
         let test_entry_point_ids = Self::resolve_entry_point_ids(test_entry_points, &path_to_id);
 
-        // TypeScript declaration files (`.d.ts`, `.d.mts`, `.d.cts`) participate
-        // in the program's ambient type surface globally. They are already
-        // exempt from `unused-files` (declaration_file_module is silently
-        // ignored). Treat them as overall entry points so any
-        // `typeof import('./x').Y` reference inside a `declare global { ... }`
-        // or `declare module 'pkg' { ... }` body keeps the target file
-        // reachable. Runtime/test reachability stays narrower: declaration
-        // files emit no runtime side effects. See issues #396 and #397.
         for file in files {
             if is_declaration_file_path(&file.path) {
                 entry_point_ids.insert(file.id);
             }
         }
 
-        // Phase 1: Build flat edge storage, module nodes, and package usage from resolved modules
         let mut graph = Self::populate_edges(
             files,
             &module_by_id,
@@ -200,23 +182,12 @@ impl ModuleGraph {
             total_capacity,
         );
 
-        // Phase 2: Record which files reference which exports (namespace + CSS module narrowing)
         graph.populate_references(&module_by_id, &entry_point_ids);
 
-        // Phase 2b: Cross-package namespace-object alias propagation. Credits
-        // members reached through `import { API } from '@scope/lib'; API.foo.bar`
-        // when the source module exposes `foo` as a namespace alias inside an
-        // exported object literal. See issue #303.
         namespace_aliases::propagate_cross_package_aliases(&mut graph, &module_by_id);
 
-        // Phase 2c: Namespace re-export propagation. Credits members reached
-        // through `import { Foo } from './barrel'; Foo.member` when the barrel
-        // does `export * as Foo from './source'`. Without this pass, the
-        // synthesised `Foo` stub on the barrel collects a reference but the
-        // member access never reaches `./source`'s real exports. See issue #324.
         namespace_re_exports::propagate_namespace_re_exports(&mut graph, &module_by_id);
 
-        // Phase 3: BFS from entry points to mark overall/runtime/test reachability
         graph.mark_reachable(
             &entry_point_ids,
             &runtime_entry_point_ids,
@@ -224,11 +195,6 @@ impl ModuleGraph {
             total_capacity,
         );
 
-        // Phase 4: Propagate references through re-export chains, and
-        // collect any re-export cycles (multi-node or self-loop) for the
-        // user-visible `re-export-cycle` finding type. The same Tarjan SCC
-        // pass still emits one `tracing::warn!` per cycle for RUST_LOG=warn
-        // operators; the returned vec is the structured surface.
         graph.re_export_cycles = graph.resolve_re_export_chains();
 
         graph
@@ -335,9 +301,7 @@ mod tests {
     use fallow_types::extract::{ExportName, ImportInfo, ImportedName, VisibilityTag};
     use std::path::PathBuf;
 
-    // Helper to build a simple module graph
     fn build_simple_graph() -> ModuleGraph {
-        // Two files: entry.ts imports foo from utils.ts
         let files = vec![
             DiscoveredFile {
                 id: FileId(0),
@@ -706,7 +670,6 @@ mod tests {
 
     #[test]
     fn graph_unreachable_module() {
-        // Three files: entry imports utils, orphan is not imported
         let files = vec![
             DiscoveredFile {
                 id: FileId(0),
@@ -885,7 +848,6 @@ mod tests {
     #[test]
     fn graph_edges_for_no_imports() {
         let graph = build_simple_graph();
-        // utils.ts has no outgoing imports
         let targets = graph.edges_for(FileId(1));
         assert!(targets.is_empty());
     }
@@ -908,7 +870,6 @@ mod tests {
     #[test]
     fn graph_find_import_span_start_wrong_target() {
         let graph = build_simple_graph();
-        // No edge from entry.ts to itself
         let span_start = graph.find_import_span_start(FileId(0), FileId(0));
         assert!(span_start.is_none());
     }
@@ -923,7 +884,6 @@ mod tests {
     #[test]
     fn graph_find_import_span_start_no_edges() {
         let graph = build_simple_graph();
-        // utils.ts has no outgoing edges
         let span_start = graph.find_import_span_start(FileId(1), FileId(0));
         assert!(span_start.is_none());
     }
@@ -931,9 +891,7 @@ mod tests {
     #[test]
     fn graph_reverse_deps_populated() {
         let graph = build_simple_graph();
-        // utils.ts (FileId(1)) should be imported by entry.ts (FileId(0))
         assert!(graph.reverse_deps[1].contains(&FileId(0)));
-        // entry.ts (FileId(0)) should not be imported by anyone
         assert!(graph.reverse_deps[0].is_empty());
     }
 
@@ -1106,11 +1064,9 @@ mod tests {
         ];
 
         let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
-        // Side-effect import should create an edge but not reference specific exports
         assert_eq!(graph.edge_count(), 1);
         let styles = &graph.modules[1];
         let export = &styles.exports[0];
-        // Side-effect import doesn't match any named export
         assert!(
             export.references.is_empty(),
             "side-effect import should not reference named exports"
@@ -1190,7 +1146,6 @@ mod tests {
         assert!(graph.modules[0].is_entry_point());
         assert!(graph.modules[1].is_entry_point());
         assert!(!graph.modules[2].is_entry_point());
-        // All should be reachable — shared is reached from main
         assert!(graph.modules[0].is_reachable());
         assert!(graph.modules[1].is_reachable());
         assert!(graph.modules[2].is_reachable());

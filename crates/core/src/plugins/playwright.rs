@@ -29,11 +29,6 @@ define_plugin!(
     resolve_config(config_path, source, root) {
         let mut result = PluginResult::default();
 
-        // Playwright resolves globalSetup, globalTeardown, and webServer.command
-        // relative to the directory of the config file, not the project root.
-        // `config_path` is absolute at the registry call site, so a nested
-        // `apps/web/playwright.config.ts` resolves its paths under `apps/web`;
-        // relative `config_path` values (unit tests) fall back to the root.
         let config_dir = config_path
             .parent()
             .filter(|parent| parent.is_absolute())
@@ -45,7 +40,6 @@ define_plugin!(
             result.referenced_dependencies.push(dep);
         }
 
-        // globalSetup / globalTeardown -> setup files
         if let Some(setup) =
             config_parser::extract_config_string(source, config_path, &["globalSetup"])
         {
@@ -61,7 +55,6 @@ define_plugin!(
                 .push(config_dir.join(teardown.trim_start_matches("./")));
         }
 
-        // webServer.command -> CLI dependencies + reachable script/file entries
         let (web_deps, web_setup) = collect_web_server(source, config_path, root, config_dir);
         result.referenced_dependencies.extend(web_deps);
         result.setup_files.extend(web_setup);
@@ -91,7 +84,6 @@ fn collect_web_server(
 ) -> (Vec<String>, Vec<PathBuf>) {
     let mut commands: Vec<(String, Option<String>)> = Vec::new();
 
-    // Object form: webServer: { command: "...", cwd: "..." }
     if let Some(command) =
         config_parser::extract_config_string(source, config_path, &["webServer", "command"])
     {
@@ -99,7 +91,6 @@ fn collect_web_server(
         commands.push((command, cwd));
     }
 
-    // Array form: webServer: [{ command: "...", cwd: "..." }, ...]
     commands.extend(config_parser::extract_config_array_object_string_pairs(
         source,
         config_path,
@@ -330,7 +321,6 @@ mod tests {
             };
         "#;
         let result = resolve(source);
-        // `node` is a runner but excluded from dependency credit (it is not a package).
         assert!(
             !result.referenced_dependencies.contains(&"node".to_string()),
             "node must not be credited as a dependency, got {:?}",
@@ -453,8 +443,6 @@ mod tests {
 
     #[test]
     fn web_server_file_args_resolve_from_nested_config_dir_not_root() {
-        // Playwright's webServer.cwd defaults to the config file's directory.
-        // A nested config without cwd must resolve script paths under that dir.
         let source = r#"
             export default {
                 webServer: { command: "tsx scripts/e2e-server.ts" }

@@ -92,13 +92,8 @@ mod tests {
         assert_eq!(normalize(Path::new("../other/file.ts")), "../other/file.ts");
     }
 
-    // Test the actual backslash replacement — the core purpose of this module.
-    // On Unix, Path::new doesn't split on backslash, so to_string_lossy() preserves
-    // literal backslashes, and .replace('\\', "/") converts them.
-
     #[test]
     fn backslash_replacement_in_string() {
-        // Directly test the replace logic that runs on Windows paths
         let windows_path = "src\\utils\\index.ts";
         assert_eq!(windows_path.replace('\\', "/"), "src/utils/index.ts");
     }

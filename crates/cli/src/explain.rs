@@ -10,8 +10,6 @@ use colored::Colorize;
 use fallow_config::OutputFormat;
 use serde_json::{Value, json};
 
-// ── Docs base URL ────────────────────────────────────────────────
-
 const DOCS_BASE: &str = "https://docs.fallow.tools";
 
 /// Docs URL for the dead-code (check) command.
@@ -29,8 +27,6 @@ pub const COVERAGE_SETUP_DOCS: &str = "https://docs.fallow.tools/cli/coverage#ag
 /// Docs URL for `fallow coverage analyze --format json --explain`.
 pub const COVERAGE_ANALYZE_DOCS: &str = "https://docs.fallow.tools/cli/coverage#analyze";
 
-// ── Shared field definitions ────────────────────────────────────
-
 /// `_meta` description for the per-finding `actions[]` array shared across
 /// `check`, `health`, and `dupes` JSON output.
 const ACTIONS_FIELD_DEFINITION: &str = "Per-finding fix and suppression suggestions. Each entry carries a `type` discriminant (kebab-case) plus a per-action `auto_fixable` bool. Consumers dispatch on `type` to choose the remediation and filter on `auto_fixable` of each individual entry.";
@@ -40,8 +36,6 @@ const ACTIONS_FIELD_DEFINITION: &str = "Per-finding fix and suppression suggesti
 /// per-instance flips so agents know to branch on the field value of EACH
 /// finding's action, not on the action `type` alone.
 const ACTIONS_AUTO_FIXABLE_FIELD_DEFINITION: &str = "Evaluated PER FINDING, not per action type. The same `type` may carry `auto_fixable: true` on one finding and `auto_fixable: false` on another when per-instance guards in the `fallow fix` applier discriminate. Filter on this bool of each individual action, not on `type` alone. Current per-instance flips: (1) `remove-catalog-entry` is `true` only when the finding's `hardcoded_consumers` array is empty (else fallow fix skips the entry to avoid breaking `pnpm install`); (2) the primary dependency action flips between `remove-dependency` (`auto_fixable: true`) and `move-dependency` (`auto_fixable: false`) based on `used_in_workspaces`; (3) `add-to-config` for `ignoreExports` is `true` when fallow fix can safely apply the action, which means EITHER a fallow config file already exists OR no config exists and the working directory is NOT inside a monorepo subpackage (the applier then creates `.fallowrc.json` using `fallow init`'s framework-aware scaffolding and layers the new rules on top); `false` inside a monorepo subpackage with no workspace-root config because the applier refuses to fragment per-package configs; (4) `update-catalog-reference` is always `false` today (catalog-switching applier not yet wired). All `suppress-line` and `suppress-file` actions are uniformly `false`.";
-
-// ── Check rules ─────────────────────────────────────────────────
 
 /// Rule definition for SARIF `fullDescription` and JSON `_meta`.
 pub struct RuleDef {
@@ -581,8 +575,6 @@ fn print_explain_markdown(rule: &RuleDef, guide: &RuleGuide) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-// ── Health SARIF rules ──────────────────────────────────────────
-
 pub const HEALTH_RULES: &[RuleDef] = &[
     RuleDef {
         id: "fallow/high-cyclomatic-complexity",
@@ -722,8 +714,6 @@ pub const DUPES_RULES: &[RuleDef] = &[RuleDef {
     full: "A block of code that appears in multiple locations with identical or near-identical token sequences. Clone detection uses normalized token comparison: identifier names and literals are abstracted away in non-strict modes.",
     docs_path: "explanations/duplication#clone-groups",
 }];
-
-// ── JSON _meta builders ─────────────────────────────────────────
 
 /// Build the `_meta` object for `fallow dead-code --format json --explain`.
 #[must_use]
@@ -1095,8 +1085,6 @@ pub fn coverage_analyze_meta() -> Value {
 mod tests {
     use super::*;
 
-    // ── rule_by_id ───────────────────────────────────────────────────
-
     #[test]
     fn rule_by_id_finds_check_rule() {
         let rule = rule_by_id("fallow/unused-file").unwrap();
@@ -1121,8 +1109,6 @@ mod tests {
         assert!(rule_by_id("").is_none());
     }
 
-    // ── rule_docs_url ────────────────────────────────────────────────
-
     #[test]
     fn rule_docs_url_format() {
         let rule = rule_by_id("fallow/unused-export").unwrap();
@@ -1130,8 +1116,6 @@ mod tests {
         assert!(url.starts_with("https://docs.fallow.tools/"));
         assert!(url.contains("unused-exports"));
     }
-
-    // ── CHECK_RULES completeness ─────────────────────────────────────
 
     #[test]
     fn check_rules_all_have_fallow_prefix() {
@@ -1163,15 +1147,12 @@ mod tests {
         }
     }
 
-    // ── check_meta ───────────────────────────────────────────────────
-
     #[test]
     fn check_meta_has_docs_and_rules() {
         let meta = check_meta();
         assert!(meta.get("docs").is_some());
         assert!(meta.get("rules").is_some());
         let rules = meta["rules"].as_object().unwrap();
-        // Verify all 13 rule categories are present (stripped fallow/ prefix)
         assert_eq!(rules.len(), CHECK_RULES.len());
         assert!(rules.contains_key("unused-file"));
         assert!(rules.contains_key("unused-export"));
@@ -1241,8 +1222,6 @@ mod tests {
         }
     }
 
-    // ── health_meta ──────────────────────────────────────────────────
-
     #[test]
     fn health_meta_has_metrics() {
         let meta = health_meta();
@@ -1256,8 +1235,6 @@ mod tests {
         assert!(metrics.contains_key("fan_out"));
     }
 
-    // ── dupes_meta ───────────────────────────────────────────────────
-
     #[test]
     fn dupes_meta_has_metrics() {
         let meta = dupes_meta();
@@ -1268,8 +1245,6 @@ mod tests {
         assert!(metrics.contains_key("clone_groups"));
         assert!(metrics.contains_key("clone_families"));
     }
-
-    // ── coverage_setup_meta ─────────────────────────────────────────
 
     #[test]
     fn coverage_setup_meta_has_docs_fields_enums_and_warnings() {
@@ -1319,8 +1294,6 @@ mod tests {
         );
     }
 
-    // ── coverage_analyze_meta ────────────────────────────────────────
-
     #[test]
     fn coverage_analyze_meta_documents_data_source_and_action_vocabulary() {
         let meta = coverage_analyze_meta();
@@ -1341,8 +1314,6 @@ mod tests {
         let warnings = meta["warnings"].as_object().unwrap();
         assert!(warnings.contains_key("cloud_functions_unmatched"));
     }
-
-    // ── HEALTH_RULES completeness ──────────────────────────────────
 
     #[test]
     fn health_rules_all_have_fallow_prefix() {
@@ -1387,8 +1358,6 @@ mod tests {
         }
     }
 
-    // ── DUPES_RULES completeness ───────────────────────────────────
-
     #[test]
     fn dupes_rules_all_have_fallow_prefix() {
         for rule in DUPES_RULES {
@@ -1428,8 +1397,6 @@ mod tests {
         }
     }
 
-    // ── CHECK_RULES field completeness ─────────────────────────────
-
     #[test]
     fn check_rules_all_have_non_empty_fields() {
         for rule in CHECK_RULES {
@@ -1447,8 +1414,6 @@ mod tests {
         }
     }
 
-    // ── rule_docs_url with health/dupes rules ──────────────────────
-
     #[test]
     fn rule_docs_url_health_rule() {
         let rule = rule_by_id("fallow/high-cyclomatic-complexity").unwrap();
@@ -1464,8 +1429,6 @@ mod tests {
         assert!(url.starts_with("https://docs.fallow.tools/"));
         assert!(url.contains("duplication"));
     }
-
-    // ── health_meta metric structure ───────────────────────────────
 
     #[test]
     fn health_meta_all_metrics_have_name_and_description() {
@@ -1528,8 +1491,6 @@ mod tests {
         }
     }
 
-    // ── dupes_meta metric structure ────────────────────────────────
-
     #[test]
     fn dupes_meta_all_metrics_have_name_and_description() {
         let meta = dupes_meta();
@@ -1553,8 +1514,6 @@ mod tests {
         assert!(metrics.contains_key("line_count"));
     }
 
-    // ── docs URLs ─────────────────────────────────────────────────
-
     #[test]
     fn check_docs_url_valid() {
         assert!(CHECK_DOCS.starts_with("https://"));
@@ -1573,8 +1532,6 @@ mod tests {
         assert!(DUPES_DOCS.contains("dupes"));
     }
 
-    // ── check_meta docs URL matches constant ──────────────────────
-
     #[test]
     fn check_meta_docs_url_matches_constant() {
         let meta = check_meta();
@@ -1592,8 +1549,6 @@ mod tests {
         let meta = dupes_meta();
         assert_eq!(meta["docs"].as_str().unwrap(), DUPES_DOCS);
     }
-
-    // ── rule_by_id finds all check rules ──────────────────────────
 
     #[test]
     fn rule_by_id_finds_all_check_rules() {
@@ -1627,8 +1582,6 @@ mod tests {
             );
         }
     }
-
-    // ── Rule count verification ───────────────────────────────────
 
     #[test]
     fn check_rules_count() {

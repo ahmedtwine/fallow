@@ -44,12 +44,6 @@ pub fn run_config(
 
     match result {
         Ok(Some((config, path))) => {
-            // Mirror the contract the analysis path enforces: an invalid
-            // boundary configuration (unknown zone reference, redundant
-            // root-prefix) exits 2 at config load. Without this, `fallow config`
-            // happily prints a "loaded fine" view of a config that `fallow
-            // check` immediately rejects, producing a false signal during
-            // debug sessions. Surfaced by review of #468.
             if let Err(errors) = config.validate_resolved_boundaries(root) {
                 let joined = errors
                     .iter()
@@ -76,7 +70,6 @@ pub fn run_config(
             if !path_only {
                 println!("no config file found, using defaults");
             }
-            // Empty stdout when --path is set; non-zero exit so scripts can detect.
             ExitCode::from(EXIT_NO_CONFIG)
         }
         Err(e) => emit_error(&e, 2, output),
@@ -91,7 +84,6 @@ mod tests {
     fn run_config_no_file_returns_exit_3() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
-        // No config file in the directory.
         let exit = run_config(dir.path(), None, false, OutputFormat::Human);
         assert_eq!(
             format!("{exit:?}"),
@@ -134,8 +126,6 @@ mod tests {
 
     #[test]
     fn run_config_explicit_config_path_is_used_over_discovery() {
-        // Confirm `--config` overrides directory walk (the discovered config
-        // would be `discovered.json`, but we pass `explicit.json`).
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         let discovered = dir.path().join(".fallowrc.json");
@@ -152,17 +142,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist.json");
         let exit = run_config(dir.path(), Some(&missing), false, OutputFormat::Human);
-        // Failure to load explicit config returns exit 2 (error), not exit 3 (no config).
         assert_eq!(format!("{exit:?}"), format!("{:?}", ExitCode::from(2)));
     }
 
     #[test]
     fn run_config_rejects_unknown_boundary_zone_reference() {
-        // The CLI's `fallow config` subcommand must enforce the same
-        // hard-error contract as the analysis paths: a typo'd zone in
-        // `boundaries.rules[]` exits 2 instead of printing a "loaded fine"
-        // view of a config that `fallow check` then rejects. Surfaced by
-        // review of #468.
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(

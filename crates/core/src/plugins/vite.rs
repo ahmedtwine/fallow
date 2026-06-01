@@ -43,8 +43,6 @@ fn is_additional_data_package_import(
     if local_style_candidate_exists(root, normalized) {
         return false;
     }
-    // Non-relative stylesheet specifiers with no local candidate are package
-    // references, including bare packages like `bootstrap`.
     true
 }
 
@@ -93,12 +91,7 @@ define_plugin!(
     config_patterns: &["vite.config.{ts,js,mts,mjs}"],
     always_used: &["vite.config.{ts,js,mts,mjs}"],
     tooling_dependencies: &["vite", "@vitejs/plugin-react", "@vitejs/plugin-vue"],
-    // Vite plugins create virtual modules with `virtual:` prefix
-    // (e.g., `virtual:pwa-register`, `virtual:emoji-mart-lang-importer`)
     virtual_module_prefixes: &["virtual:"],
-    // Under --include-entry-exports, the default export of vite.config.* is the
-    // entry: Vite's CLI consumes it. Marking it framework-used prevents the
-    // false-positive in #282 (mirrors the vitest fix in #271).
     used_exports: [("vite.config.{ts,js,mts,mjs}", CONFIG_EXPORTS)],
     resolve_config(config_path, source, root) {
         let mut result = PluginResult::default();
@@ -112,9 +105,6 @@ define_plugin!(
             config_parser::extract_vite_react_babel_dependencies(source, config_path),
         );
 
-        // Credit babel-plugin-react-compiler when React Compiler is wired
-        // through @vitejs/plugin-react / @rolldown/plugin-babel in the top-level
-        // `plugins` array. See crate::plugins::react_compiler (#623, #751).
         result.referenced_dependencies.extend(super::react_compiler::extract_dependencies(
             source,
             config_path,
@@ -131,16 +121,8 @@ define_plugin!(
             }
         }
 
-        // Vitest test config is commonly embedded in vite.config.* via
-        // defineConfig({ test: {...}, resolve: { alias } }). The Vitest plugin
-        // never sees this file (its config_patterns are vitest.config.* /
-        // vitest.workspace.* only), so extract the test-block + projects aliases
-        // here. Top-level resolve.alias above stays path-alias-only (no
-        // mock-file entry seeding / dependency credit) to keep pure-Vite
-        // behavior unchanged. See crate::plugins::test_alias.
         super::test_alias::apply_test_block_aliases(&mut result, source, config_path, root);
 
-        // build.rollupOptions.input → entry points (string, array, or object)
         let rollup_input = config_parser::extract_config_string_or_array(
             source,
             config_path,
@@ -148,7 +130,6 @@ define_plugin!(
         );
         result.extend_entry_patterns(rollup_input);
 
-        // build.lib.entry → entry points (string or array)
         let lib_entry = config_parser::extract_config_string_or_array(
             source,
             config_path,
@@ -156,7 +137,6 @@ define_plugin!(
         );
         result.extend_entry_patterns(lib_entry);
 
-        // optimizeDeps.include → referenced dependencies
         let optimize_include = config_parser::extract_config_string_array(
             source,
             config_path,
@@ -168,7 +148,6 @@ define_plugin!(
                 .push(crate::resolve::extract_package_name(dep));
         }
 
-        // optimizeDeps.exclude → referenced dependencies
         let optimize_exclude = config_parser::extract_config_string_array(
             source,
             config_path,
@@ -180,7 +159,6 @@ define_plugin!(
                 .push(crate::resolve::extract_package_name(dep));
         }
 
-        // ssr.external → referenced dependencies
         let ssr_external =
             config_parser::extract_config_string_array(source, config_path, &["ssr", "external"]);
         for dep in &ssr_external {
@@ -189,7 +167,6 @@ define_plugin!(
                 .push(crate::resolve::extract_package_name(dep));
         }
 
-        // ssr.noExternal → referenced dependencies
         let ssr_no_external =
             config_parser::extract_config_string_array(source, config_path, &["ssr", "noExternal"]);
         for dep in &ssr_no_external {
@@ -198,17 +175,6 @@ define_plugin!(
                 .push(crate::resolve::extract_package_name(dep));
         }
 
-        // css.preprocessorOptions.{scss,sass,less,stylus}.additionalData →
-        // SCSS / Sass strings injected at the top of every preprocessed file.
-        // The string body itself is not parsed, but `@use` / `@import` /
-        // `@forward` / `@plugin` directives inside it reference real files that no source
-        // file imports directly. Seed those files as entry points so they do
-        // not get reported as `unused-files`. Function-form `additionalData`
-        // is skipped (out of static-analysis scope) and stylesheet content is
-        // the only string treated as preprocessor source. Specifiers are
-        // stripped of their leading `./` because entry patterns are matched
-        // against project-relative paths via globset (which does not normalize
-        // `./` prefixes). See issue #195 (Case A).
         for preprocessor in ["scss", "sass", "less", "stylus"] {
             let body = config_parser::extract_config_string_or_array(
                 source,
@@ -342,9 +308,6 @@ mod tests {
 
     #[test]
     fn resolve_config_extracts_embedded_test_alias_and_project_resolve_alias() {
-        // The common defineConfig({ test: {...}, resolve: { alias } }) shape in
-        // vite.config.ts: the Vite plugin must extract the Vitest test-block
-        // aliases (the Vitest plugin never sees vite.config.ts).
         let source = r#"
             import { defineConfig } from 'vite';
             export default defineConfig({
@@ -377,8 +340,6 @@ mod tests {
             "test.projects[*].resolve.alias in vite.config must be extracted: {:?}",
             result.path_aliases
         );
-        // The top-level resolve.alias `@`->`./src` stays handled by Vite's own
-        // A-only extraction (path alias, no entry seeding).
         assert!(
             result
                 .path_aliases
@@ -435,10 +396,6 @@ mod tests {
 
     #[test]
     fn resolve_config_rollup_input_evaluates_path_helpers() {
-        // Issue #604: rollupOptions.input values written as path-helper calls
-        // (resolve(__dirname, "..."), path.resolve(...), join(...),
-        // import.meta.dirname equivalents) must be evaluated to project-relative
-        // entry patterns. CSS entries are preserved like any other entry.
         let source = r#"
             import { resolve, join } from "node:path";
             import path from "node:path";
@@ -485,7 +442,6 @@ mod tests {
 
     #[test]
     fn resolve_config_lib_entry_evaluates_path_helper() {
-        // build.lib.entry as a single top-level path-helper call.
         let source = r#"
             import { resolve } from "node:path";
             import { defineConfig } from "vite";
@@ -606,8 +562,6 @@ mod tests {
 
     #[test]
     fn resolve_config_react_compiler_preset_call_references_dependency() {
-        // The canonical @vitejs/plugin-react 6.x shape (#751): proves the Vite
-        // plugin wires the react_compiler module over its top-level `plugins`.
         let source = r#"
             import { defineConfig } from "vite";
             import react, { reactCompilerPreset } from "@vitejs/plugin-react";

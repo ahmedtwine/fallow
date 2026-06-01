@@ -85,8 +85,6 @@ pub fn normalize_script_entry_pattern(ws_prefix: &str, raw: &str) -> Option<Stri
         match segment {
             "" | "." => {}
             ".." => {
-                // Path escapes the project root would not match anything in
-                // the file index. Skip rather than seed an unmatchable pattern.
                 stack.pop()?;
             }
             other => stack.push(other),
@@ -133,10 +131,8 @@ pub fn filter_production_scripts(scripts: &HashMap<String, String>) -> HashMap<S
 /// Production scripts: `start`, `build`, `serve`, `preview`, `prepare`, `prepublishOnly`,
 /// and their `pre`/`post` lifecycle hooks, plus namespaced variants like `build:prod`.
 fn is_production_script(name: &str) -> bool {
-    // Check the root name (before any `:` namespace separator)
     let root_name = name.split(':').next().unwrap_or(name);
 
-    // Direct match (including scripts that happen to start with pre/post like preview, prepare)
     if matches!(
         root_name,
         "start" | "build" | "serve" | "preview" | "prepare" | "prepublishOnly" | "postinstall"
@@ -144,7 +140,6 @@ fn is_production_script(name: &str) -> bool {
         return true;
     }
 
-    // Check lifecycle hooks: pre/post + production script name
     let base = root_name
         .strip_prefix("pre")
         .or_else(|| root_name.strip_prefix("post"));
@@ -203,7 +198,6 @@ fn accumulate_command(
     bin_map: &FxHashMap<String, String>,
     result: &mut ScriptAnalysis,
 ) {
-    // Track env wrapper packages (cross-env, dotenv) as used before parsing
     for wrapper in ENV_WRAPPERS {
         if command.split_whitespace().any(|token| token == *wrapper) {
             let pkg = resolve_binary_to_package(wrapper, root, bin_map);
@@ -214,10 +208,8 @@ fn accumulate_command(
     }
 
     for cmd in parse_script(command) {
-        // Map binary to package name and track as used
         if !cmd.binary.is_empty() && !is_builtin_command(&cmd.binary) {
             if NODE_RUNNERS.contains(&cmd.binary.as_str()) {
-                // Node runners themselves are packages (node excluded)
                 if cmd.binary != "node" && cmd.binary != "bun" {
                     let pkg = resolve_binary_to_package(&cmd.binary, root, bin_map);
                     result.used_packages.insert(pkg);
@@ -267,7 +259,6 @@ fn extract_args_for_binary(
     while idx < tokens.len() {
         let token = tokens[idx];
 
-        // Node runners have flags that consume the next argument
         if is_node_runner
             && matches!(
                 token,
@@ -314,9 +305,6 @@ fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
 
     let binary = tokens[idx].to_string();
 
-    // Script multiplexers (concurrently, run-s, run-p, npm-run-all):
-    // their positional arguments are script names, not binaries or file paths.
-    // Only the multiplexer binary itself is a used package.
     if SCRIPT_MULTIPLEXERS.contains(&binary.as_str()) {
         return Some(ScriptCommand {
             binary,
@@ -337,19 +325,16 @@ fn parse_command_segment(segment: &str) -> Option<ScriptCommand> {
 
 /// Extract a config file path from a `--config` or `-c` flag.
 fn extract_config_arg(token: &str, next: Option<&str>) -> Option<String> {
-    // --config=path/to/config.js
     if let Some(value) = token.strip_prefix("--config=")
         && !value.is_empty()
     {
         return Some(value.to_string());
     }
-    // -c=path
     if let Some(value) = token.strip_prefix("-c=")
         && !value.is_empty()
     {
         return Some(value.to_string());
     }
-    // --config path or -c path
     if matches!(token, "--config" | "-c")
         && let Some(next_token) = next
         && !next_token.starts_with('-')
@@ -373,24 +358,14 @@ fn is_env_assignment(token: &str) -> bool {
 /// guard for sibling script extractors. Lenient: passes bare names
 /// without extensions (e.g. `deploy.log`, `Makefile`).
 pub fn could_be_file_path(token: &str) -> bool {
-    // GitHub Actions expressions split on whitespace into chunks like
-    // `}}/path"`. Reject any token containing `${{`, or a stray `}}` that
-    // is not balanced by `{{` (which would be a Mustache/Handlebars
-    // template path like `templates/{{name}}.hbs`).
     if token.contains("${{") || (token.contains("}}") && !token.contains("{{")) {
         return false;
     }
 
-    // Backslash is not valid in Unix paths. Catches regex escapes like
-    // `)\./[^` from `grep -oP '...\./...'`.
     if token.contains('\\') {
         return false;
     }
 
-    // Reject empty `[]` and unclosed `[^...` character classes. Only the
-    // first `[` is checked; that suffices for the in-the-wild fragments
-    // (`.[]`, `)\./[^`) and a token already rejected by the backslash
-    // guard never reaches here.
     if let Some(open) = token.find('[') {
         let after_open = &token[open + 1..];
         let close_offset = after_open.find(']');
@@ -474,8 +449,6 @@ fn is_builtin_command(cmd: &str) -> bool {
 mod tests {
     use super::*;
 
-    // --- normalize_script_entry_pattern tests ---
-
     #[test]
     fn normalize_root_level_strips_dot_slash() {
         assert_eq!(
@@ -502,8 +475,6 @@ mod tests {
 
     #[test]
     fn normalize_workspace_prefix_collapses_parent_segment() {
-        // `apps/api/../shared/scripts/deploy.ts` collapses one level up from
-        // `apps/api` to `apps`, producing `apps/shared/scripts/deploy.ts`.
         assert_eq!(
             normalize_script_entry_pattern("apps/api", "../shared/scripts/deploy.ts").as_deref(),
             Some("apps/shared/scripts/deploy.ts")
@@ -512,7 +483,6 @@ mod tests {
 
     #[test]
     fn normalize_workspace_prefix_collapses_two_parent_segments_to_root() {
-        // `apps/api/../../top.ts` collapses fully to root: `top.ts`.
         assert_eq!(
             normalize_script_entry_pattern("apps/api", "../../top.ts").as_deref(),
             Some("top.ts")
@@ -521,7 +491,6 @@ mod tests {
 
     #[test]
     fn normalize_path_escaping_project_root_skipped() {
-        // Cannot collapse beyond root; skip rather than seed unmatchable pattern.
         assert_eq!(normalize_script_entry_pattern("", "../outside.ts"), None);
         assert_eq!(
             normalize_script_entry_pattern("apps/api", "../../../outside.ts"),
@@ -542,14 +511,11 @@ mod tests {
 
     #[test]
     fn normalize_workspace_prefix_with_trailing_slash() {
-        // Defensive: workspace prefixes from path display can end with `/`.
         assert_eq!(
             normalize_script_entry_pattern("apps/api/", "./scripts/deploy.ts").as_deref(),
             Some("apps/api/scripts/deploy.ts")
         );
     }
-
-    // --- parse_script tests ---
 
     #[test]
     fn simple_binary() {
@@ -653,12 +619,9 @@ mod tests {
 
     #[test]
     fn bare_yarn_skipped() {
-        // `yarn build` runs the "build" script
         let cmds = parse_script("yarn build");
         assert!(cmds.is_empty());
     }
-
-    // --- env wrappers ---
 
     #[test]
     fn cross_env_prefix() {
@@ -687,8 +650,6 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].binary, "jest");
     }
-
-    // --- node runners ---
 
     #[test]
     fn node_runner_file_args() {
@@ -728,8 +689,6 @@ mod tests {
         assert_eq!(cmds[0].file_args, vec!["file1.mjs", "file2.mjs"]);
     }
 
-    // --- config args ---
-
     #[test]
     fn config_equals() {
         let cmds = parse_script("webpack --config=webpack.prod.js");
@@ -753,8 +712,6 @@ mod tests {
         assert_eq!(cmds[0].binary, "eslint");
         assert_eq!(cmds[0].config_args, vec![".eslintrc.json"]);
     }
-
-    // --- binary -> package mapping ---
 
     #[test]
     fn tsc_maps_to_typescript() {
@@ -793,8 +750,6 @@ mod tests {
         assert_eq!(pkg, "npm-run-all");
     }
 
-    // --- extract_package_from_bin_path ---
-
     #[test]
     fn bin_path_regular_package() {
         let path = std::path::Path::new("../webpack/bin/webpack.js");
@@ -813,8 +768,6 @@ mod tests {
         );
     }
 
-    // --- builtin commands ---
-
     #[test]
     fn builtin_commands_not_tracked() {
         let scripts: HashMap<String, String> =
@@ -822,8 +775,6 @@ mod tests {
         let result = analyze_scripts(&scripts, Path::new("/nonexistent"), &FxHashMap::default());
         assert!(result.used_packages.is_empty());
     }
-
-    // --- analyze_scripts integration ---
 
     #[test]
     fn analyze_extracts_binaries() {
@@ -858,7 +809,6 @@ mod tests {
             std::iter::once(("seed".to_string(), "ts-node scripts/seed.ts".to_string())).collect();
         let result = analyze_scripts(&scripts, Path::new("/nonexistent"), &FxHashMap::default());
         assert!(result.entry_files.contains(&"scripts/seed.ts".to_string()));
-        // ts-node should be tracked as a used package
         assert!(result.used_packages.contains("ts-node"));
     }
 
@@ -893,14 +843,11 @@ mod tests {
         ))
         .collect();
         let result = analyze_scripts(&scripts, Path::new("/nonexistent"), &FxHashMap::default());
-        // cross-env is tracked, npm run is skipped, jest is tracked
         assert!(result.used_packages.contains("cross-env"));
         assert!(result.used_packages.contains("jest"));
         assert!(!result.used_packages.contains("npm"));
         assert!(result.config_files.contains(&"jest.ci.js".to_string()));
     }
-
-    // --- is_env_assignment ---
 
     #[test]
     fn env_assignment_valid() {
@@ -915,8 +862,6 @@ mod tests {
         assert!(!is_env_assignment("webpack"));
         assert!(!is_env_assignment("./scripts/build.js"));
     }
-
-    // --- split_shell_operators ---
 
     #[test]
     fn split_respects_quotes() {
@@ -957,8 +902,6 @@ mod tests {
         assert_eq!(cmds[2].binary, "proxy");
     }
 
-    // --- is_production_script ---
-
     #[test]
     fn production_script_start() {
         assert!(super::is_production_script("start"));
@@ -993,8 +936,6 @@ mod tests {
         assert!(!super::is_production_script("e2e"));
     }
 
-    // --- mixed operator parsing ---
-
     #[test]
     fn mixed_operators_all_binaries_detected() {
         let cmds = parse_script("build && serve & watch || fallback");
@@ -1019,8 +960,6 @@ mod tests {
         assert_eq!(cmds[0].binary, "webpack");
     }
 
-    // --- filter_production_scripts ---
-
     #[test]
     fn filter_keeps_production_scripts() {
         let scripts: HashMap<String, String> = [
@@ -1040,8 +979,6 @@ mod tests {
         assert!(!filtered.contains_key("lint"));
         assert!(!filtered.contains_key("dev"));
     }
-
-    // --- looks_like_file_path tests ---
 
     #[test]
     fn looks_like_file_path_with_known_extensions() {
@@ -1079,7 +1016,6 @@ mod tests {
 
     #[test]
     fn looks_like_file_path_github_actions_expression_not_file() {
-        // Fragments of `${{ env.X }}/path` expressions.
         assert!(!super::looks_like_file_path(
             r#""${{ env.ENVIRONMENT_URL }}/api/health/ready""#
         ));
@@ -1089,15 +1025,12 @@ mod tests {
 
     #[test]
     fn looks_like_file_path_jq_array_iterator_not_file() {
-        // `.[]` from `jq -c '.[]'`. Empty char class fires the guard.
         assert!(!super::looks_like_file_path(".[]"));
         assert!(!super::looks_like_file_path("'.[]'"));
     }
 
     #[test]
     fn looks_like_file_path_regex_fragment_not_file() {
-        // `)\./[^` from `grep -oP '(?<=Module )\./[^ ]+...'`. Backslash
-        // and unclosed-class guards both fire.
         assert!(!super::looks_like_file_path(r")\./[^"));
         assert!(!super::looks_like_file_path(r"path\with\backslash"));
         assert!(!super::looks_like_file_path("prefix/[^unclosed"));
@@ -1109,11 +1042,8 @@ mod tests {
         assert!(super::looks_like_file_path("pages/[...slug].ts"));
     }
 
-    // --- could_be_file_path tests (lenient negative-only filter) ---
-
     #[test]
     fn could_be_file_path_passes_bare_names() {
-        // Lenient: tokens without extensions or path separators pass.
         assert!(super::could_be_file_path("deploy.log"));
         assert!(super::could_be_file_path("Makefile"));
         assert!(super::could_be_file_path("Cargo.lock"));
@@ -1121,15 +1051,12 @@ mod tests {
 
     #[test]
     fn could_be_file_path_passes_balanced_mustache() {
-        // Mustache/Handlebars template paths balance `{{ }}` and must pass.
-        // The `}}` guard only fires when `}}` appears without a matching `{{`.
         assert!(super::could_be_file_path("templates/{{name}}.hbs"));
         assert!(super::could_be_file_path("{{partial}}.html"));
     }
 
     #[test]
     fn could_be_file_path_rejects_ghs_fragments() {
-        // GHA expression split-fragments and standalone `}}` tokens.
         assert!(!super::could_be_file_path("${{ env.X }}"));
         assert!(!super::could_be_file_path("}}/path"));
     }
@@ -1139,8 +1066,6 @@ mod tests {
         assert!(!super::could_be_file_path(r")\./[^"));
         assert!(!super::could_be_file_path(".[]"));
     }
-
-    // --- extract_config_arg tests ---
 
     #[test]
     fn extract_config_arg_with_equals() {
@@ -1194,15 +1119,11 @@ mod tests {
         assert_eq!(super::extract_config_arg("-c=", None), None);
     }
 
-    // --- node runner flag skipping ---
-
     #[test]
     fn node_require_flag_skips_next_arg() {
         let cmds = parse_script("node -r tsconfig-paths/register ./src/server.ts");
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].binary, "node");
-        // "tsconfig-paths/register" should be skipped (consumed by -r)
-        // "./src/server.ts" should be a file arg
         assert!(cmds[0].file_args.contains(&"./src/server.ts".to_string()));
         assert!(
             !cmds[0]
@@ -1215,11 +1136,8 @@ mod tests {
     fn node_eval_skips_next_arg() {
         let cmds = parse_script("node --eval \"console.log(1)\" scripts/run.js");
         assert_eq!(cmds.len(), 1);
-        // The eval string is consumed, only scripts/run.js should be a file arg
         assert!(cmds[0].file_args.contains(&"scripts/run.js".to_string()));
     }
-
-    // --- is_production_script edge cases ---
 
     #[test]
     fn production_script_prepublish_only() {
@@ -1233,14 +1151,11 @@ mod tests {
 
     #[test]
     fn production_script_preserve_is_not_production() {
-        // "preserve" starts with "pre" but "serve" after stripping "pre" is a match
-        // Let's check: strip "pre" → "serve" which matches, so it IS production
         assert!(super::is_production_script("preserve"));
     }
 
     #[test]
     fn production_script_preinstall() {
-        // strip "pre" → "install" which matches
         assert!(super::is_production_script("preinstall"));
     }
 
@@ -1252,8 +1167,6 @@ mod tests {
         assert!(!super::is_production_script("lint:fix"));
     }
 
-    // --- is_env_assignment edge cases ---
-
     #[test]
     fn env_assignment_empty_value() {
         assert!(is_env_assignment("KEY="));
@@ -1263,8 +1176,6 @@ mod tests {
     fn env_assignment_equals_at_start_is_not_assignment() {
         assert!(!is_env_assignment("=value"));
     }
-
-    // --- empty/edge scripts ---
 
     #[test]
     fn parse_empty_script() {
@@ -1287,11 +1198,8 @@ mod tests {
         assert!(result.entry_files.is_empty());
     }
 
-    // --- bun as package manager ---
-
     #[test]
     fn bun_treated_as_package_manager() {
-        // `bun scripts/build.ts` is treated like `yarn build` — runs a script, not a binary
         let cmds = parse_script("bun scripts/build.ts");
         assert!(
             cmds.is_empty(),
@@ -1308,7 +1216,6 @@ mod tests {
 
     #[test]
     fn bun_runtime_flag_extracts_binary() {
-        // `bun --bun prek install` runs the `prek` binary with the bun runtime.
         let cmds = parse_script("bun --bun prek install");
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].binary, "prek");
@@ -1323,15 +1230,12 @@ mod tests {
 
     #[test]
     fn bun_runtime_flag_before_run_is_script() {
-        // `bun --watch run dev` delegates to the "dev" script, not a binary.
         let cmds = parse_script("bun --watch run dev");
         assert!(cmds.is_empty());
     }
 
     #[test]
     fn bun_unknown_flag_credits_nothing() {
-        // `--filter` takes a value; conservatively treated as a script
-        // delegation so neither the flag value nor `run` is credited.
         let cmds = parse_script("bun --filter foo run build");
         assert!(cmds.is_empty());
     }
@@ -1343,8 +1247,6 @@ mod tests {
         assert_eq!(cmds[0].binary, "cowsay");
     }
 
-    // --- script multiplexers ---
-
     #[test]
     fn concurrently_with_npm_prefix() {
         let scripts = HashMap::from([(
@@ -1352,9 +1254,7 @@ mod tests {
             "concurrently \"npm:server\" \"npm:worker\"".to_string(),
         )]);
         let result = analyze_scripts(&scripts, Path::new("/fake"), &FxHashMap::default());
-        // concurrently itself should be detected as a used package
         assert!(result.used_packages.contains("concurrently"));
-        // npm:server and npm:worker are script references, not packages
         assert!(!result.used_packages.contains("server"));
         assert!(!result.used_packages.contains("worker"));
         assert!(!result.used_packages.contains("npm:server"));
@@ -1364,9 +1264,7 @@ mod tests {
     fn run_p_with_bare_script_names() {
         let scripts = HashMap::from([("dev".to_string(), "run-p server worker".to_string())]);
         let result = analyze_scripts(&scripts, Path::new("/fake"), &FxHashMap::default());
-        // run-p maps to npm-run-all package
         assert!(result.used_packages.contains("npm-run-all"));
-        // server and worker are script names, not packages
         assert!(!result.used_packages.contains("server"));
         assert!(!result.used_packages.contains("worker"));
     }
@@ -1402,7 +1300,6 @@ mod tests {
         assert!(result.used_packages.contains("concurrently"));
         assert!(!result.used_packages.contains("server"));
         assert!(!result.used_packages.contains("worker"));
-        // --kill-others should not be treated as a package
         assert!(!result.used_packages.contains("kill-others"));
     }
 

@@ -33,8 +33,6 @@ fn git(root: &Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .args(args)
         .current_dir(root)
-        // Isolate from parent git context (pre-push hook sets GIT_DIR to the main repo,
-        // which overrides current_dir and causes commits to leak into the real repo)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -44,15 +42,8 @@ fn git(root: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} should succeed");
 }
 
-// ---------------------------------------------------------------------------
-// JSON output structure
-// ---------------------------------------------------------------------------
-
 #[test]
 fn health_json_output_is_valid() {
-    // Disable the default CRAP gate (30.0) so the fixture's branchy untested
-    // function doesn't push the process to exit 1. This test only verifies
-    // shape, not findings.
     let output = run_fallow(
         "health",
         "complexity-project",
@@ -63,16 +54,8 @@ fn health_json_output_is_valid() {
     assert!(json.is_object(), "health JSON output should be an object");
 }
 
-// ---------------------------------------------------------------------------
-// CI-gate exit semantics (issue #786)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn health_min_score_zero_exits_zero_with_findings() {
-    // The headline bug: complexity-project has above-threshold functions, so
-    // plain `fallow health` exits 1. With --min-score 0 the score gate is
-    // authoritative and can never fail, so the run must exit 0 even though
-    // findings are present and printed.
     let plain = run_fallow("health", "complexity-project", &["--quiet"]);
     assert_eq!(plain.code, 1, "plain health should still fail on findings");
 
@@ -90,7 +73,6 @@ fn health_min_score_zero_exits_zero_with_findings() {
 
 #[test]
 fn health_min_score_below_threshold_fails() {
-    // An unreachably high threshold forces the score gate to fire.
     let output = run_fallow(
         "health",
         "complexity-project",
@@ -105,8 +87,6 @@ fn health_min_score_below_threshold_fails() {
 
 #[test]
 fn health_min_score_demotes_rendered_findings_with_informational_note() {
-    // When --min-score passes but the findings list is rendered (--complexity),
-    // a dimmed stderr note clarifies the findings did not fail the build.
     let output = run_fallow(
         "health",
         "complexity-project",
@@ -291,7 +271,6 @@ fn health_json_has_findings() {
         &["--complexity", "--format", "json", "--quiet"],
     );
     let json = parse_json(&output);
-    // complexity-project has a function with cyclomatic > 10
     assert!(
         json.get("findings").is_some(),
         "health JSON should have findings key"
@@ -347,12 +326,6 @@ fn health_reports_angular_template_complexity() {
     );
 }
 
-// Issue #234: synthetic `<component>` rollup finding sums the worst class
-// method's complexity with the template's, so an Angular component whose
-// class scores moderately and whose template scores moderately is ranked
-// as one heavy component-level finding rather than two scattered medium
-// ones. The per-function and per-`<template>` entries stay alongside the
-// rollup; the rollup is strictly additive.
 #[test]
 fn health_emits_component_rollup_for_angular_component() {
     let output = run_fallow(
@@ -374,7 +347,6 @@ fn health_emits_component_rollup_for_angular_component() {
     let json = parse_json(&output);
     let findings = json["findings"].as_array().expect("findings array");
 
-    // Per-function class finding is still emitted (rollup is strictly additive).
     let class_fn = findings
         .iter()
         .find(|finding| {
@@ -387,7 +359,6 @@ fn health_emits_component_rollup_for_angular_component() {
     let class_cyc = class_fn["cyclomatic"].as_u64().expect("class cyclomatic");
     let class_cog = class_fn["cognitive"].as_u64().expect("class cognitive");
 
-    // Per-template synthetic finding is still emitted.
     let template = findings
         .iter()
         .find(|finding| {
@@ -402,7 +373,6 @@ fn health_emits_component_rollup_for_angular_component() {
         .expect("template cyclomatic");
     let template_cog = template["cognitive"].as_u64().expect("template cognitive");
 
-    // The new <component> rollup: cyc = class + template, cog = class + template.
     let rollup = findings
         .iter()
         .find(|finding| {
@@ -423,8 +393,6 @@ fn health_emits_component_rollup_for_angular_component() {
         "rollup cognitive must equal worst class cog + template cog"
     );
 
-    // Breakdown payload carries the pre-summation numbers so consumers can
-    // explain the score without re-deriving the link.
     let breakdown = rollup["component_rollup"]
         .as_object()
         .unwrap_or_else(|| panic!("expected component_rollup payload, got: {rollup:#?}"));
@@ -444,16 +412,11 @@ fn health_emits_component_rollup_for_angular_component() {
         template_path.ends_with("host-game.component.html"),
         "template_path must point at the .html template, got: {template_path:?}"
     );
-    // Stronger: the path must be project-relative, not absolute (regression
-    // guard for strip_root_prefix coverage of nested objects).
     assert!(
         !template_path.starts_with('/') && !template_path.contains("/var/folders/"),
         "template_path must be project-relative (no absolute prefix), got: {template_path:?}"
     );
 
-    // Suppression action sits above the worst class method so the same
-    // `// fallow-ignore-next-line complexity` placement hides both the
-    // per-function finding and the rollup.
     let actions = rollup["actions"].as_array().expect("rollup actions array");
     let suppress = actions
         .iter()
@@ -466,26 +429,12 @@ fn health_emits_component_rollup_for_angular_component() {
     );
 }
 
-// Tier 1 of #186: synthetic <template> findings on Angular .html files
-// inherit their CRAP coverage signal from the owning .component.ts via the
-// inverse templateUrl edge. The score itself can match today's accidental
-// fallback when the .html stays test-reachable, so the regression target is
-// the new `coverage_source` discriminator and `inherited_from` provenance:
-// without the redirect, the template's per-function CRAP entry would carry
-// `coverage_source: "estimated"` (or absent under non-Istanbul paths) and
-// no `inherited_from`. With the redirect, it carries
-// `coverage_source: "estimated_component_inherited"` and points at the
-// component .ts. The integration_test asserts on both fields and on the
-// `coverage_tier` they imply.
 #[test]
 fn health_angular_template_crap_inherits_from_component_ts() {
     let dir = tempdir().unwrap();
     let fixture = fixture_path("angular-template-complexity");
     copy_dir_recursive(&fixture, dir.path());
 
-    // Replace package.json so jest activates (jest plugin gates `**/*.spec.ts`
-    // as Test entry points; without it the spec file we drop in below would
-    // not seed test reachability into the component .ts).
     write_file(
         &dir.path().join("package.json"),
         r#"{
@@ -501,11 +450,6 @@ fn health_angular_template_crap_inherits_from_component_ts() {
         }"#,
     );
 
-    // A spec that imports the component class makes PermissionsComponent
-    // test-reachable; the templateUrl SideEffect edge would normally cascade
-    // reachability to the .html too, so today's accidental fallback already
-    // produces `coverage_tier: "partial"` on the template. The fix's
-    // observable delta is the `coverage_source` / `inherited_from` pair.
     write_file(
         &dir.path().join("src/permissions.component.spec.ts"),
         "import { PermissionsComponent } from './permissions.component';\n\
@@ -515,9 +459,6 @@ fn health_angular_template_crap_inherits_from_component_ts() {
     );
 
     let component_ts = dir.path().join("src/permissions.component.ts");
-    // Istanbul coverage keyed on the .ts component, NOT the .html: the
-    // template path never matches Istanbul's fnMap, so the fix must walk
-    // the inverse templateUrl edge to find this entry.
     let coverage_path = dir.path().join("coverage/coverage-final.json");
     let mut coverage = serde_json::Map::new();
     coverage.insert(
@@ -548,12 +489,6 @@ fn health_angular_template_crap_inherits_from_component_ts() {
             "3",
             "--max-cognitive",
             "3",
-            // Keep --max-crap above the fixture's template cyclomatic (25)
-            // so full_coverage_can_clear_crap stays true and the inherited
-            // override emits an `increase-coverage` action with `target_path`
-            // pointing at the .ts owner. A more aggressive threshold would
-            // short-circuit to refactor-function and silently skip the
-            // action-ladder pivot half of the contract.
             "--max-crap",
             "30",
             "--format",
@@ -597,11 +532,6 @@ fn health_angular_template_crap_inherits_from_component_ts() {
         "<template> coverage_tier inherited from the tested component .ts must be partial or high, got: {tier:?}"
     );
 
-    // Action-ladder pivot: the inherited-coverage finding must emit an
-    // `increase-coverage` action whose `target_path` points at the .ts
-    // owner, not the .html template. Without this pivot, AI agents
-    // following the action description would scaffold tests against the
-    // structurally untestable .html path instead of the component file.
     let actions = template["actions"]
         .as_array()
         .expect("actions array present on health finding");
@@ -618,17 +548,6 @@ fn health_angular_template_crap_inherits_from_component_ts() {
     );
 }
 
-// Negative regression for tier 1 of #186: a plain `import "./tpl.html"` from
-// a non-Angular `.ts` file ALSO produces a SideEffect graph edge identical to
-// the one Angular emits for `@Component({ templateUrl })`. Without the
-// `has_angular_component_template_url` gate on the owner candidate, the
-// CRAP-inherit walker would credit the non-component owner and emit
-// `coverage_source: "estimated_component_inherited"` plus
-// `inherited_from: "src/main.ts"`, violating the documented contract that
-// inherited_from points at an Angular component .ts. This test reproduces
-// the bug shape (template-complex .html imported by a plain main.ts with no
-// @Component decorator) and asserts the discriminator stays `"estimated"`
-// (the standard fallback) and inherited_from stays absent.
 #[test]
 fn health_angular_template_inherit_rejects_non_component_owner() {
     let dir = tempdir().unwrap();
@@ -636,14 +555,10 @@ fn health_angular_template_inherit_rejects_non_component_owner() {
         &dir.path().join("package.json"),
         r#"{"name":"issue-186-negative","main":"src/main.ts"}"#,
     );
-    // main.ts imports the template purely as a side-effect URL; it carries
-    // no @Component decorator, so it is NOT a template owner.
     write_file(
         &dir.path().join("src/main.ts"),
         "import \"./template.html\";\nexport const tag = \"plain\";\n",
     );
-    // Same template shape the angular-template-complexity fixture uses so the
-    // template-complexity scanner produces a `<template>` finding.
     write_file(
         &dir.path().join("src/template.html"),
         "@if (user) {\n  @if (user.isAdmin) {\n    @for (item of user.permissions; track item.id) {\n      @switch (item.status) {\n        @case ('active') { <a/> }\n        @case ('pending') { <b/> }\n        @default { <c/> }\n      }\n    }\n  }\n}\n",
@@ -677,9 +592,6 @@ fn health_angular_template_inherit_rejects_non_component_owner() {
         })
         .unwrap_or_else(|| panic!("expected <template> finding, got: {findings:#?}"));
 
-    // The crucial assertion: a non-Angular `.ts` importer must NOT be
-    // credited as an inherit owner. The discriminator stays `estimated`
-    // and inherited_from stays absent.
     let source = template
         .get("coverage_source")
         .and_then(|v| v.as_str())
@@ -735,14 +647,11 @@ fn health_reports_angular_inline_template_complexity() {
         template["cognitive"].as_u64().unwrap_or_default() > 3,
         "inline template should exceed cognitive threshold: {template:#?}"
     );
-    // Anchored at the `@Component` decorator (line 16 of host-game.component.ts).
     assert_eq!(
         template["line"].as_u64(),
         Some(16),
         "inline template finding should anchor at the @Component decorator: {template:#?}"
     );
-    // The .ts host file uses TS-style suppression actions, not the HTML
-    // suppress-file action that external `templateUrl` files emit.
     let actions = template["actions"].as_array().expect("actions array");
     assert!(
         actions
@@ -892,10 +801,6 @@ fn health_save_baseline_creates_parent_directory() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Exit code with threshold
-// ---------------------------------------------------------------------------
-
 #[test]
 fn health_exits_0_below_threshold() {
     let output = run_fallow(
@@ -904,8 +809,6 @@ fn health_exits_0_below_threshold() {
         &[
             "--max-cyclomatic",
             "50",
-            // Raise the CRAP gate out of the way so this test isolates the
-            // cyclomatic/cognitive behaviour under test.
             "--max-crap",
             "10000",
             "--complexity",
@@ -940,10 +843,6 @@ fn health_exits_1_when_threshold_exceeded() {
         "health should exit 1 when complexity exceeds threshold"
     );
 }
-
-// ---------------------------------------------------------------------------
-// CRAP threshold (--max-crap)
-// ---------------------------------------------------------------------------
 
 /// With a high `--max-crap`, no function should trigger a CRAP finding and the
 /// summary's `max_crap_threshold` must reflect the CLI override.
@@ -1014,10 +913,6 @@ fn health_exits_1_when_crap_threshold_exceeded() {
         "at least one finding should carry a populated `crap` score when --max-crap triggered"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Section flags
-// ---------------------------------------------------------------------------
 
 #[test]
 fn health_score_flag_shows_score() {
@@ -1604,7 +1499,6 @@ fn health_coverage_gaps_suppressed_file_excluded() {
     let root = dir.path();
     copy_dir_recursive(&fixture_path("coverage-gaps"), root);
 
-    // Add suppression comment to setup-only.ts
     write_file(
         &root.join("src/setup-only.ts"),
         r#"// fallow-ignore-file coverage-gaps
@@ -1781,10 +1675,6 @@ export const shared = sharedGap();
 
 #[test]
 fn health_workspace_scopes_vital_signs_and_health_score() {
-    // Regression: --workspace scoped findings/file_scores correctly but left
-    // vital_signs and health_score at monorepo-wide values, masking a
-    // significant divergence between project- and workspace-level health.
-    // Issue #184.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
@@ -1800,7 +1690,6 @@ fn health_workspace_scopes_vital_signs_and_health_score() {
         &root.join(".fallowrc.json"),
         r#"{"duplicates":{"min_tokens":10,"min_lines":3}}"#,
     );
-    // app: small, simple package
     write_file(
         &root.join("packages/app/package.json"),
         r#"{ "name": "app", "main": "src/index.ts" }"#,
@@ -1810,7 +1699,6 @@ fn health_workspace_scopes_vital_signs_and_health_score() {
         r"export const greet = (name: string): string => `hello ${name}`;
 ",
     );
-    // lib: a larger package (more files contribute to LOC / file count)
     write_file(
         &root.join("packages/lib/package.json"),
         r#"{ "name": "lib", "main": "src/index.ts" }"#,
@@ -1848,7 +1736,6 @@ export * from "./util_4";
         duplicated_lib_function,
     );
 
-    // `--score` forces hotspot analysis, which requires a git repo.
     git(root, &["init"]);
     git(root, &["config", "user.name", "Test User"]);
     git(root, &["config", "user.email", "test@example.com"]);
@@ -1945,9 +1832,6 @@ export * from "./util_4";
 
 #[test]
 fn health_group_by_package_emits_per_workspace_envelope() {
-    // Regression: --group-by package was accepted by `fallow health` but the
-    // resolver was silently discarded; consumers got monorepo-wide output
-    // with no `grouped_by` or `groups` keys. Issue #184.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
@@ -2086,8 +1970,6 @@ fn health_group_by_package_emits_per_workspace_envelope() {
         "beta health score should include its duplicate-code penalty"
     );
 
-    // Top-level vital_signs / health_score remain monorepo-wide so consumers
-    // that ignore grouping still see the project headline.
     assert!(
         json["vital_signs"].is_object(),
         "top-level vital_signs must remain populated alongside groups"
@@ -2100,11 +1982,6 @@ fn health_group_by_package_emits_per_workspace_envelope() {
 
 #[test]
 fn health_group_by_package_tags_sarif_results_with_group() {
-    // Regression: ship per-finding `properties.group` on SARIF (and the
-    // top-level `group` field on CodeClimate) so CI surfaces like GitHub
-    // Code Scanning and GitLab Code Quality can partition findings per
-    // workspace package without dropping out of the SARIF/CodeClimate
-    // pipeline. Companion to the JSON envelope work in #184.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
@@ -2120,7 +1997,6 @@ fn health_group_by_package_tags_sarif_results_with_group() {
         &root.join("packages/alpha/package.json"),
         r#"{ "name": "alpha", "main": "src/index.ts" }"#,
     );
-    // Functions branchy enough to exceed the very-low cyclomatic threshold below.
     write_file(
         &root.join("packages/alpha/src/index.ts"),
         r"export const branchy = (n: number): number => {
@@ -2221,11 +2097,6 @@ fn health_group_by_package_tags_sarif_results_with_group() {
 
 #[test]
 fn health_group_by_non_monorepo_emits_single_json_error() {
-    // Regression: panel review caught that `--group-by package --format json`
-    // on a non-monorepo emitted TWO top-level JSON objects (the hotspot-needs-git
-    // error + the group-by-needs-monorepo error), producing invalid JSON for any
-    // pipeline doing `jq .`. Resolver validation now runs upfront so misconfig
-    // fails before the rest of the pipeline.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
@@ -2245,7 +2116,6 @@ fn health_group_by_non_monorepo_emits_single_json_error() {
         "non-monorepo --group-by package should fail"
     );
 
-    // Critical: stdout must be exactly ONE JSON object, parseable by `jq .`.
     let parsed: serde_json::Value =
         serde_json::from_str(&output.stdout).expect("stdout should be a single valid JSON object");
     assert_eq!(parsed["error"], serde_json::json!(true));
@@ -2329,14 +2199,8 @@ fn health_coverage_gaps_changed_since_scopes_results() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Human output snapshot
-// ---------------------------------------------------------------------------
-
 #[test]
 fn health_human_output_snapshot() {
-    // Use --max-cyclomatic 10 so the 14-branch classify() function exceeds the threshold
-    // and produces actual output to snapshot (default threshold of 20 would show nothing)
     let output = run_fallow(
         "health",
         "complexity-project",
@@ -2347,15 +2211,8 @@ fn health_human_output_snapshot() {
     insta::assert_snapshot!("health_human_complexity", redacted);
 }
 
-// ---------------------------------------------------------------------------
-// Plugin-scoped hidden directory traversal
-// ---------------------------------------------------------------------------
-
 #[test]
 fn health_file_scores_include_plugin_scoped_hidden_dirs_for_react_router() {
-    // `fallow health --file-scores` must analyze React Router's `.client` /
-    // `.server` convention folders; otherwise its file-level metrics ignore a
-    // real chunk of the project.
     let output = run_fallow(
         "health",
         "react-router-conventions",
@@ -2383,10 +2240,6 @@ fn health_file_scores_include_plugin_scoped_hidden_dirs_for_react_router() {
         "expected app/.client/analytics.ts in file_scores: {scored_paths:?}"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Combined-mode --score / --trend human rendering (issue #557)
-// ---------------------------------------------------------------------------
 
 /// Count occurrences of a literal substring in `haystack`.
 fn count_occurrences(haystack: &str, needle: &str) -> usize {

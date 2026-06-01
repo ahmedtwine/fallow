@@ -71,8 +71,6 @@ fn create_audit_fixture(_suffix: &str) -> TempDir {
         Command::new("git")
             .args(args)
             .current_dir(dir)
-            // Isolate from parent git context (pre-push hook sets GIT_DIR to the main repo,
-            // which overrides current_dir and causes commits to leak into the real repo)
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -162,10 +160,6 @@ fn run_fallow_raw_with_env(
         code: output.status.code().unwrap_or(-1),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Audit JSON output structure
-// ---------------------------------------------------------------------------
 
 #[test]
 fn audit_json_has_verdict_and_schema() {
@@ -370,10 +364,6 @@ fn audit_json_has_summary_with_changes() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Audit baseline support (issue #139)
-// ---------------------------------------------------------------------------
-
 /// Create a fixture whose legacy file already has several unused exports,
 /// then branch and touch that file without introducing new issues.
 ///
@@ -395,7 +385,6 @@ fn create_audit_baseline_fixture() -> TempDir {
     )
     .unwrap();
 
-    // Legacy file with multiple pre-existing unused exports.
     fs::write(
         dir.join("src/legacy.ts"),
         "export const used = 1;\n\
@@ -433,7 +422,6 @@ fn create_audit_baseline_fixture() -> TempDir {
     git(&["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
     git(&["checkout", "-b", "feature"]);
 
-    // Touch the legacy file without adding new issues.
     let legacy = fs::read_to_string(dir.join("src/legacy.ts")).unwrap();
     fs::write(dir.join("src/legacy.ts"), format!("{legacy}// touched\n")).unwrap();
     git(&["add", "."]);
@@ -619,9 +607,6 @@ fn audit_base_preserves_node_modules_tsconfig_extends_context() {
     )
     .unwrap();
 
-    // Add a real new export so the diff is not token-equivalent. A comment-only
-    // change would trip the `can_reuse_current_as_base` fast path and skip
-    // `BaseWorktree::create` entirely, defeating the point of this test.
     fs::write(
         dir.join("src/feature.ts"),
         "export const used = 1;\nexport const legacyUnused = 2;\nexport const introduced = 3;\n",
@@ -859,8 +844,6 @@ fn audit_with_dead_code_baseline_filters_preexisting_issues() {
     let dir = tmp.path();
     let baseline_path = dir.join(".fallow-dead-code-baseline.json");
 
-    // Save baseline from `main` state (before touching the file).
-    // Switch back to main, save, then back to feature.
     let git = |args: &[&str]| {
         Command::new("git")
             .args(args)
@@ -899,7 +882,6 @@ fn audit_with_dead_code_baseline_filters_preexisting_issues() {
     );
     git(&["checkout", "feature"]);
 
-    // Now audit with the dead-code baseline.
     let output = run_fallow_raw(&[
         "audit",
         "--root",
@@ -991,10 +973,6 @@ fn audit_rejects_global_save_baseline_flag() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Audit error handling
-// ---------------------------------------------------------------------------
-
 #[test]
 fn audit_badge_format_exits_2() {
     let dir = create_audit_fixture("badge");
@@ -1021,9 +999,6 @@ fn audit_badge_format_exits_2() {
 fn audit_max_crap_flag_fails_when_threshold_crossed() {
     let dir = create_audit_fixture("crap");
 
-    // Introduce a file with a branchy, untested function. Combined with the
-    // low `--max-crap 1`, any non-trivial cyclomatic count is guaranteed to
-    // exceed the threshold.
     write_branchy_change(dir.path());
 
     let output = run_fallow_raw(&[
@@ -1050,10 +1025,6 @@ fn audit_max_crap_flag_fails_when_threshold_crossed() {
         "verdict should be fail when CRAP threshold is crossed"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Issue #301: ambient git repo-state env vars must not break audit
-// ---------------------------------------------------------------------------
 
 fn audit_with_env(root: &Path, env: &[(&str, &str)]) -> common::CommandOutput {
     let bin = fallow_bin();
@@ -1095,8 +1066,6 @@ fn audit_succeeds_when_ambient_git_env_vars_leak_from_a_hook() {
     let dir = create_audit_fixture("hook_env_leak");
     let root = dir.path();
 
-    // `GIT_INDEX_FILE=.git/index` is the exact leak shape `git commit`
-    // produces; absolute form must also remain a no-op since fallow strips it.
     let abs_index = root.join(".git/index").to_string_lossy().to_string();
     let cases: &[(&str, &str)] = &[
         ("GIT_INDEX_FILE", ".git/index"),
@@ -1207,14 +1176,6 @@ fn audit_rejects_relative_coverage_root() {
 
 #[test]
 fn audit_coverage_relative_path_resolves_against_root_through_base_snapshot() {
-    // Regression: audit.rs::compute_base_snapshot recursively invokes the
-    // health analysis with --root rebound to a temporary base worktree. A
-    // relative --coverage path that worked on the HEAD pass must NOT be
-    // re-resolved against the worktree on the base pass; the coverage file
-    // only exists inside the user's project root. This test exercises the
-    // full audit pipeline (HEAD pass + base-worktree recursion) with a
-    // relative coverage path while the working directory is OUTSIDE the
-    // project, so the resolution against process cwd would silently fail.
     let dir = create_audit_fixture("coverage-relative");
     write_branchy_change(dir.path());
 
@@ -1222,8 +1183,6 @@ fn audit_coverage_relative_path_resolves_against_root_through_base_snapshot() {
     let branchy_source = dir.path().join("src/index.ts");
     write_branchy_istanbul_coverage(&coverage_path, &branchy_source.to_string_lossy());
 
-    // Pass --coverage as a relative path; --root is the project. Resolution
-    // must happen against --root, not against the binary's process cwd.
     let with_relative = run_fallow_raw(&[
         "audit",
         "--root",

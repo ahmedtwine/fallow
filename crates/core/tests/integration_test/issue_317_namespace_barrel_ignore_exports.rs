@@ -1,6 +1,4 @@
-//! Issue #317: ignoreExports must also gate duplicate-exports for shadcn /
-//! Radix / bits-ui namespace-barrel patterns where many `index.ts` files
-//! intentionally export the same short names (Root, Content, Trigger).
+//! Issue #317: ignoreExports must also gate namespace-barrel duplicate exports.
 
 use fallow_config::{
     FallowConfig, IgnoreExportRule, IgnoreExportsUsedInFileConfig, OutputFormat, RulesConfig,
@@ -52,10 +50,6 @@ fn make_config(
 
 #[test]
 fn duplicate_exports_flagged_without_ignore_exports() {
-    // Baseline: with no ignoreExports config, shadcn-style component barrels
-    // (components/ui/dialog/index.ts and components/ui/card/index.ts both
-    // exporting Root, Content, Trigger) trip duplicate-exports because page.ts
-    // is a common importer.
     let root = fixture_path("issue-317-namespace-barrel-ignore-exports");
     let config = make_config(root, vec![]);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -81,9 +75,6 @@ fn duplicate_exports_flagged_without_ignore_exports() {
 
 #[test]
 fn ignore_exports_wildcard_clears_duplicate_exports() {
-    // Fix path: ignoreExports with a glob over the barrels and exports: ["*"]
-    // must remove every duplicate-export group whose contributing files all
-    // match the glob.
     let root = fixture_path("issue-317-namespace-barrel-ignore-exports");
     let config = make_config(
         root,
@@ -107,8 +98,6 @@ fn ignore_exports_wildcard_clears_duplicate_exports() {
 
 #[test]
 fn ignore_exports_named_clears_only_listed_names() {
-    // Partial path: listing specific names suppresses only those, leaving any
-    // other coincidental duplicates intact (Content, Trigger here).
     let root = fixture_path("issue-317-namespace-barrel-ignore-exports");
     let config = make_config(
         root,

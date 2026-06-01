@@ -5,8 +5,6 @@ use super::framework_convention_coverage_common::{
 
 #[test]
 fn astro_template_script_src_and_inline_imports_are_followed() {
-    // Issue #295: per-component <script src="..."> and inline <script> imports
-    // should keep their targets reachable from the Astro page entry.
     let root = fixture_path("astro-script-references");
     let config = create_config(root.clone());
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -23,8 +21,6 @@ fn astro_template_script_src_and_inline_imports_are_followed() {
         "is:inline script imports should not create reachability edges, unused files: {unused_files:?}"
     );
 
-    // The Astro page itself, the foo() call inside foo.ts, and the inline
-    // import of bar should not suppress legitimate unused-export detection.
     let unused_exports = collect_unused_exports(&root, &results);
     assert!(
         has_unused_export(&unused_exports, "src/scripts/bar.ts", "unusedHelper"),

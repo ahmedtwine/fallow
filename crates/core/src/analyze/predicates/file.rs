@@ -10,7 +10,6 @@ pub(in crate::analyze) fn is_declaration_file(path: &std::path::Path) -> bool {
 /// nothing imports an HTML file, so "unused" is meaningless for them. They serve as
 /// entry points in Vite/Parcel-style apps and their referenced assets are tracked
 /// via `<script src>` and `<link href>` edges.
-// Keep in sync with fallow_extract::html::is_html_file (crate boundary prevents sharing)
 pub(in crate::analyze) fn is_html_file(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -25,20 +24,14 @@ pub(in crate::analyze) fn is_html_file(path: &std::path::Path) -> bool {
 pub(in crate::analyze) fn is_config_file(path: &std::path::Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-    // Dotfiles with "rc" suffix pattern (e.g., .secretlintrc.cjs, .commitlintrc.js, .prettierrc.js)
-    // Only match files with "rc." before the extension — avoids false matches on arbitrary dotfiles.
     if name.starts_with('.') && !name.starts_with("..") {
         let lower = name.to_ascii_lowercase();
-        // .foorc.{ext} pattern — standard for tool configs
         if lower.contains("rc.") {
             return true;
         }
     }
 
-    // Files matching common config naming patterns.
-    // Each pattern is a prefix — the file must start with it.
     let config_patterns = [
-        // Build tools
         "babel.config.",
         "rollup.config.",
         "webpack.config.",
@@ -51,7 +44,6 @@ pub(in crate::analyze) fn is_config_file(path: &std::path::Path) -> bool {
         "esbuild.config.",
         "swc.config.",
         "turbo.",
-        // Testing
         "jest.config.",
         "jest.setup.",
         "vitest.config.",
@@ -61,13 +53,11 @@ pub(in crate::analyze) fn is_config_file(path: &std::path::Path) -> bool {
         "playwright.config.",
         "cypress.config.",
         "karma.conf.",
-        // Linting & formatting
         "eslint.config.",
         "prettier.config.",
         "stylelint.config.",
         "lint-staged.config.",
         "commitlint.config.",
-        // Frameworks / CMS
         "next.config.",
         "next-sitemap.config.",
         "nuxt.config.",
@@ -81,9 +71,7 @@ pub(in crate::analyze) fn is_config_file(path: &std::path::Path) -> bool {
         "sentry.server.config.",
         "sentry.edge.config.",
         "react-router.config.",
-        // Documentation
         "typedoc.",
-        // Analysis & misc
         "knip.config.",
         "fallow.config.",
         "i18next-parser.config.",
@@ -93,7 +81,6 @@ pub(in crate::analyze) fn is_config_file(path: &std::path::Path) -> bool {
         "release-it.",
         "release.config.",
         "contentlayer.config.",
-        // Environment declarations
         "next-env.d.",
         "env.d.",
         "vite-env.d.",
@@ -112,13 +99,10 @@ pub(in crate::analyze) fn is_barrel_with_reachable_sources(
     module: &crate::graph::ModuleNode,
     graph: &crate::graph::ModuleGraph,
 ) -> bool {
-    // Must have re-exports
     if module.re_exports.is_empty() {
         return false;
     }
 
-    // Must be a pure barrel: no local exports with real spans (only re-export-generated
-    // exports have span 0..0) and no CJS exports
     let has_local_exports = module
         .exports
         .iter()
@@ -127,7 +111,6 @@ pub(in crate::analyze) fn is_barrel_with_reachable_sources(
         return false;
     }
 
-    // At least one re-export source must be reachable
     module.re_exports.iter().any(|re| {
         let source_idx = re.source_file.0 as usize;
         graph
@@ -141,7 +124,6 @@ pub(in crate::analyze) fn is_barrel_with_reachable_sources(
 mod tests {
     use super::*;
 
-    // Declaration file tests (Issue 4)
     #[test]
     fn declaration_file_dts() {
         assert!(is_declaration_file(std::path::Path::new("styled.d.ts")));
@@ -165,7 +147,6 @@ mod tests {
         assert!(!is_declaration_file(std::path::Path::new("styles.d.css")));
     }
 
-    // Config file tests
     #[test]
     fn config_file_known_patterns() {
         assert!(is_config_file(std::path::Path::new("webpack.config.js")));
@@ -191,10 +172,6 @@ mod tests {
             "src/webpack-plugin.js"
         )));
     }
-
-    // ---------------------------------------------------------------
-    // is_config_file edge cases
-    // ---------------------------------------------------------------
 
     #[test]
     fn config_file_testing_tool_configs() {
@@ -354,10 +331,6 @@ mod tests {
         )));
     }
 
-    // ---------------------------------------------------------------
-    // is_declaration_file edge cases
-    // ---------------------------------------------------------------
-
     /// Declaration files in deeply nested paths.
     #[test]
     fn declaration_file_nested_paths() {
@@ -383,10 +356,6 @@ mod tests {
     fn not_declaration_file_d_ts_in_middle() {
         assert!(!is_declaration_file(std::path::Path::new("my.d.ts.backup")));
     }
-
-    // ---------------------------------------------------------------
-    // is_barrel_with_reachable_sources tests
-    // ---------------------------------------------------------------
 
     use crate::discover::{DiscoveredFile, EntryPoint, EntryPointSource, FileId};
     use crate::extract::VisibilityTag;
@@ -458,7 +427,6 @@ mod tests {
             ("/src/utils.ts", false),
         ]);
         graph.modules[2].set_reachable(true);
-        // Add a re-export
         graph.modules[1].re_exports = vec![ReExportEdge {
             source_file: FileId(2),
             imported_name: "helper".to_string(),
@@ -466,7 +434,6 @@ mod tests {
             is_type_only: false,
             span: oxc_span::Span::default(),
         }];
-        // Add a local export with a real span (non-zero)
         graph.modules[1].exports = vec![ExportSymbol {
             name: crate::extract::ExportName::Named("localFn".to_string()),
             is_type_only: false,
@@ -508,7 +475,6 @@ mod tests {
             ("/src/utils.ts", false),
         ]);
         graph.modules[2].set_reachable(true);
-        // Only re-exports, no local exports, no CJS
         graph.modules[1].re_exports = vec![ReExportEdge {
             source_file: FileId(2),
             imported_name: "helper".to_string(),
@@ -516,7 +482,6 @@ mod tests {
             is_type_only: false,
             span: oxc_span::Span::default(),
         }];
-        // Only synthetic exports (span 0..0), which are from re-exports
         graph.modules[1].exports = vec![ExportSymbol {
             name: crate::extract::ExportName::Named("helper".to_string()),
             is_type_only: false,
@@ -537,7 +502,6 @@ mod tests {
             ("/src/index.ts", false),
             ("/src/utils.ts", false),
         ]);
-        // utils (source) is NOT reachable
         graph.modules[1].re_exports = vec![ReExportEdge {
             source_file: FileId(2),
             imported_name: "helper".to_string(),
@@ -559,13 +523,8 @@ mod tests {
             is_type_only: false,
             span: oxc_span::Span::default(),
         }];
-        // Should not panic, should return false
         assert!(!is_barrel_with_reachable_sources(&graph.modules[1], &graph));
     }
-
-    // ---------------------------------------------------------------
-    // is_config_file additional coverage
-    // ---------------------------------------------------------------
 
     #[test]
     fn config_file_dotfiles_with_rc() {

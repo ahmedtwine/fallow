@@ -3,7 +3,6 @@ use super::common::{create_config, fixture_path};
 /// Create a symlink, removing any existing entry (file, directory, or stale symlink) first.
 /// This makes symlink setup idempotent across repeated test runs.
 fn force_symlink(target: &std::path::Path, link: &std::path::Path) {
-    // Remove existing entry at the link path (regular dir, file, or broken symlink)
     if link.symlink_metadata().is_ok() {
         if link.is_dir() && !link.is_symlink() {
             let _ = std::fs::remove_dir_all(link);
@@ -35,14 +34,10 @@ fn workspace_patterns_yarn_format() {
     assert_eq!(patterns, vec!["packages/*"]);
 }
 
-// ── Workspace integration ──────────────────────────────────────
-
 #[test]
 fn workspace_project_discovers_workspace_packages() {
     let root = fixture_path("workspace-project");
 
-    // Set up node_modules symlinks for cross-workspace resolution (like npm/pnpm install would).
-    // Uses force_symlink to handle stale directories from prior runs.
     let nm = root.join("node_modules");
     let _ = std::fs::create_dir_all(nm.join("@workspace"));
     force_symlink(&root.join("packages/shared"), &nm.join("shared"));
@@ -51,8 +46,6 @@ fn workspace_project_discovers_workspace_packages() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Workspace discovery should find files across workspace packages
-    // orphan.ts should always be detected as unused since nothing imports it
     let unused_file_names: Vec<String> = results
         .unused_files
         .iter()
@@ -71,17 +64,12 @@ fn workspace_project_discovers_workspace_packages() {
         "orphan.ts should be detected as unused file, found: {unused_file_names:?}"
     );
 
-    // Cross-workspace resolution via node_modules symlinks:
-    // app imports `@workspace/utils/src/deep` which resolves through the symlink,
-    // making deep.ts reachable. If symlinks are broken, deep.ts would be unreachable.
     assert!(
         !unused_file_names.contains(&"deep.ts".to_string()),
         "deep.ts should NOT be unused (reachable via cross-workspace import through symlink), \
          but found in unused files: {unused_file_names:?}"
     );
 
-    // `unusedDeep` should be detected as unused export (deep.ts is reachable but
-    // only `deepHelper` is imported, not `unusedDeep`)
     let unused_export_names: Vec<String> = results
         .unused_exports
         .iter()
@@ -92,7 +80,6 @@ fn workspace_project_discovers_workspace_packages() {
         "unusedDeep should be detected as unused export, found: {unused_export_names:?}"
     );
 
-    // No unresolved imports — all cross-workspace imports should resolve
     assert!(
         results.unresolved_imports.is_empty(),
         "should have no unresolved imports, found: {:?}",
@@ -103,7 +90,6 @@ fn workspace_project_discovers_workspace_packages() {
             .collect::<Vec<_>>()
     );
 
-    // The analysis should have found issues across all workspace packages
     assert!(
         results.has_issues(),
         "workspace project should have issues detected"
@@ -169,8 +155,6 @@ fn non_public_packages_still_report_unused_class_and_enum_members() {
 
 #[test]
 fn project_state_stable_file_ids_by_path() {
-    // FileIds should be deterministic: sorted by path, not size.
-    // Running discovery twice on the same project must produce identical IDs.
     let root = fixture_path("workspace-project");
     let config = create_config(root);
 
@@ -183,7 +167,6 @@ fn project_state_stable_file_ids_by_path() {
         assert_eq!(a.path, b.path);
     }
 
-    // Files should be sorted by path (not by size)
     for window in files_a.windows(2) {
         assert!(
             window[0].path <= window[1].path,
@@ -204,13 +187,11 @@ fn project_state_workspace_queries() {
     let workspaces = discover_workspaces(&root);
     let project = fallow_core::project::ProjectState::new(files, workspaces);
 
-    // Should find all three workspace packages
     assert!(project.workspace_by_name("app").is_some());
     assert!(project.workspace_by_name("shared").is_some());
     assert!(project.workspace_by_name("@workspace/utils").is_some());
     assert!(project.workspace_by_name("nonexistent").is_none());
 
-    // Files should be assignable to workspaces
     let app_ws = project.workspace_by_name("app").unwrap();
     let app_files = project.files_in_workspace(app_ws);
     assert!(
@@ -218,7 +199,6 @@ fn project_state_workspace_queries() {
         "app workspace should have at least one file"
     );
 
-    // All app files should be under the app workspace root
     for fid in &app_files {
         if let Some(file) = project.file_by_id(*fid) {
             assert!(
@@ -231,14 +211,10 @@ fn project_state_workspace_queries() {
     }
 }
 
-// ── Workspace exports map resolution ───────────────────────────
-
 #[test]
 fn workspace_exports_map_resolves_subpath_imports() {
     let root = fixture_path("workspace-exports-map");
 
-    // Set up node_modules symlinks for cross-workspace resolution.
-    // Uses force_symlink to handle stale directories from prior runs.
     let nm = root.join("node_modules");
     let _ = std::fs::create_dir_all(nm.join("@workspace"));
     force_symlink(&root.join("packages/ui"), &nm.join("@workspace/ui"));
@@ -259,34 +235,26 @@ fn workspace_exports_map_resolves_subpath_imports() {
         })
         .collect();
 
-    // orphan.ts is not exported via exports map and not imported — should be unused
     assert!(
         unused_file_names.contains(&"orphan.ts".to_string()),
         "orphan.ts should be detected as unused file, found: {unused_file_names:?}"
     );
 
-    // utils.ts is imported via `@workspace/ui/utils` through exports map → should NOT be unused
     assert!(
         !unused_file_names.contains(&"utils.ts".to_string()),
         "utils.ts should be reachable via exports map subpath import, unused: {unused_file_names:?}"
     );
 
-    // helpers.ts (source) should be reachable via exports map pointing to dist/helpers.js
-    // fallow should map dist/helpers.js back to src/helpers.ts
     assert!(
         !unused_file_names.contains(&"helpers.ts".to_string()),
         "helpers.ts should be reachable via dist→src fallback from exports map, unused: {unused_file_names:?}"
     );
 
-    // internal.ts is imported by utils.ts, so it should be reachable
     assert!(
         !unused_file_names.contains(&"internal.ts".to_string()),
         "internal.ts should be reachable via import from utils.ts, unused: {unused_file_names:?}"
     );
 
-    // Unused exports on non-entry-point files should still be detected.
-    // internal.ts is NOT an entry point (not in exports map) but is imported
-    // by utils.ts — so its unused exports should be flagged.
     let unused_export_names: Vec<&str> = results
         .unused_exports
         .iter()
@@ -298,13 +266,11 @@ fn workspace_exports_map_resolves_subpath_imports() {
         "unusedInternal should be unused (internal.ts is not an entry point), found: {unused_export_names:?}"
     );
 
-    // Used exports should NOT be flagged
     assert!(
         !unused_export_names.contains(&"internalHelper"),
         "internalHelper should be used (imported by utils.ts)"
     );
 
-    // No unresolved imports — exports map subpaths should all resolve
     assert!(
         results.unresolved_imports.is_empty(),
         "should have no unresolved imports, found: {:?}",
@@ -454,14 +420,10 @@ fn workspace_package_without_exports_resolves_missing_dist_to_source() {
     );
 }
 
-// ── Workspace nested exports map ──────────────────────────────
-
 #[test]
 fn workspace_nested_exports_resolves_dist_to_source() {
     let root = fixture_path("workspace-nested-exports");
 
-    // Set up node_modules symlinks for cross-workspace resolution.
-    // Uses force_symlink to handle stale directories from prior runs.
     let nm = root.join("node_modules");
     let _ = std::fs::create_dir_all(nm.join("@workspace"));
     force_symlink(&root.join("packages/ui"), &nm.join("@workspace/ui"));
@@ -484,7 +446,6 @@ fn workspace_nested_exports_resolves_dist_to_source() {
         })
         .collect();
 
-    // Source files reachable via exports map dist→src fallback should NOT be unused
     assert!(
         !unused_file_names.contains(&"index.ts".to_string()),
         "index.ts should be reachable via exports map root entry, unused: {unused_file_names:?}"
@@ -500,21 +461,17 @@ fn workspace_nested_exports_resolves_dist_to_source() {
          fallback, unused: {unused_file_names:?}"
     );
 
-    // Unused exports should still be detected on reachable files
     let unused_export_names: Vec<&str> = results
         .unused_exports
         .iter()
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // unusedComponent is on index.ts which is the root entry point ("." in exports map),
-    // so its exports are treated as public API and not flagged as unused
     assert!(
         !unused_export_names.contains(&"unusedComponent"),
         "unusedComponent should NOT be flagged (index.ts is an entry point)"
     );
 
-    // Non-entry-point files resolved via dist→src fallback should still have unused exports flagged
     assert!(
         unused_export_names.contains(&"unusedUtil"),
         "unusedUtil should be unused (utils.ts export not imported by app), \
@@ -526,7 +483,6 @@ fn workspace_nested_exports_resolves_dist_to_source() {
          found: {unused_export_names:?}"
     );
 
-    // Used exports should NOT be flagged
     assert!(
         !unused_export_names.contains(&"Card"),
         "Card should be used (imported by app)"
@@ -540,7 +496,6 @@ fn workspace_nested_exports_resolves_dist_to_source() {
         "Button should be used (imported by app)"
     );
 
-    // No unresolved imports — nested exports map subpaths should all resolve
     assert!(
         results.unresolved_imports.is_empty(),
         "should have no unresolved imports, found: {:?}",
@@ -588,8 +543,6 @@ fn workspace_package_export_star_barrel_chain_marks_leaf_export_used() {
     );
 }
 
-// ── TypeScript project references ──────────────────────────────
-
 #[test]
 fn tsconfig_references_discovers_workspaces() {
     use fallow_config::discover_workspaces;
@@ -597,7 +550,6 @@ fn tsconfig_references_discovers_workspaces() {
     let root = fixture_path("tsconfig-references");
     let workspaces = discover_workspaces(&root);
 
-    // Should discover both referenced projects from tsconfig.json references
     assert!(
         workspaces.len() >= 2,
         "Expected at least 2 workspaces from tsconfig references, got: {workspaces:?}"
@@ -631,7 +583,6 @@ fn tsconfig_references_analysis_detects_unused() {
         })
         .collect();
 
-    // unused.ts in core and orphan.ts in ui should be detected as unused
     assert!(
         unused_file_names.contains(&"unused.ts".to_string()),
         "unused.ts should be detected as unused file: {unused_file_names:?}"
@@ -641,14 +592,11 @@ fn tsconfig_references_analysis_detects_unused() {
         "orphan.ts should be detected as unused file: {unused_file_names:?}"
     );
 
-    // index.ts files should NOT be unused (core/index.ts is imported by ui/index.ts)
     assert!(
         !unused_file_names.contains(&"index.ts".to_string()),
         "index.ts should not be unused: {unused_file_names:?}"
     );
 }
-
-// ── Shallow nested package fallback ─────────────────────────────
 
 #[test]
 fn shallow_nested_package_scripts_become_entry_points_without_workspace_config() {
@@ -684,8 +632,6 @@ fn shallow_nested_package_scripts_become_entry_points_without_workspace_config()
         "orphan.mjs should remain unused: {unused_file_names:?}"
     );
 }
-
-// ── Workspace package with tsconfig path-alias to unbuilt dist (issue #757) ──
 
 /// A monorepo analyzed pre-build, where a workspace package's tsconfig `paths`
 /// map a sibling-package specifier to `../*/dist/index.d.ts` (unbuilt output).
@@ -744,7 +690,6 @@ fn workspace_tsconfig_path_alias_to_unbuilt_dist_resolves_to_source() {
         "`@fix757/utils` should not surface as an unlisted dependency, unlisted: {unlisted:?}"
     );
 
-    // The aliased source files themselves must be reachable, not reported as unused.
     let unused_files: Vec<String> = results
         .unused_files
         .iter()

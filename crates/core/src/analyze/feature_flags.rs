@@ -36,7 +36,6 @@ pub fn collect_feature_flags(modules: &[ModuleInfo], graph: &ModuleGraph) -> Vec
         for flag_use in &module.flag_uses {
             let mut flag = flag_use_to_feature_flag(flag_use, node.path.clone());
 
-            // Resolve guard span byte offsets to line numbers
             if let (Some(start), Some(end)) = (flag_use.guard_span_start, flag_use.guard_span_end)
                 && !module.line_offsets.is_empty()
             {
@@ -73,7 +72,6 @@ pub fn correlate_with_dead_code(flags: &mut [FeatureFlag], results: &AnalysisRes
             continue;
         };
 
-        // Find unused exports in the same file within the guard span
         for export in &results.unused_exports {
             if export.export.path == flag.path
                 && export.export.line >= guard_start
@@ -84,7 +82,6 @@ pub fn correlate_with_dead_code(flags: &mut [FeatureFlag], results: &AnalysisRes
             }
         }
 
-        // Also check unused type exports
         for export in &results.unused_types {
             if export.export.path == flag.path
                 && export.export.line >= guard_start

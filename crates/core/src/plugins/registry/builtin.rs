@@ -43,7 +43,6 @@ use super::super::{
 /// Create all built-in plugin instances, categorized by domain.
 pub fn create_builtin_plugins() -> Vec<Box<dyn Plugin>> {
     vec![
-        // Frameworks
         Box::new(NextJsPlugin),
         Box::new(NuxtPlugin),
         Box::new(RemixPlugin),
@@ -83,7 +82,6 @@ pub fn create_builtin_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(MintlifyPlugin),
         Box::new(VelitePlugin),
         Box::new(EmberPlugin),
-        // Bundlers
         Box::new(VitePlugin),
         Box::new(WebpackPlugin),
         Box::new(RollupPlugin),
@@ -94,7 +92,6 @@ pub fn create_builtin_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(TsdownPlugin),
         Box::new(PkgUtilsPlugin),
         Box::new(ParcelPlugin),
-        // Testing
         Box::new(VitestPlugin),
         Box::new(JestPlugin),
         Box::new(PlaywrightPlugin),
@@ -109,7 +106,6 @@ pub fn create_builtin_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(KarmaPlugin),
         Box::new(CucumberPlugin),
         Box::new(WebdriverioPlugin),
-        // Linting & formatting
         Box::new(EslintPlugin),
         Box::new(BiomePlugin),
         Box::new(StylelintPlugin),
@@ -118,55 +114,43 @@ pub fn create_builtin_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(MarkdownlintPlugin),
         Box::new(CspellPlugin),
         Box::new(RemarkPlugin),
-        // Transpilation & language
         Box::new(TypeScriptPlugin),
         Box::new(BabelPlugin),
         Box::new(SwcPlugin),
-        // CSS
         Box::new(TailwindPlugin),
         Box::new(PostCssPlugin),
         Box::new(UnoCssPlugin),
         Box::new(PandaCssPlugin),
-        // Database & ORM
         Box::new(PrismaPlugin),
         Box::new(DrizzlePlugin),
         Box::new(KnexPlugin),
         Box::new(TypeormPlugin),
         Box::new(KyselyPlugin),
-        // Monorepo
         Box::new(TurborepoPlugin),
         Box::new(NxPlugin),
         Box::new(ChangesetsPlugin),
         Box::new(SyncpackPlugin),
-        // CI/CD & release
         Box::new(CommitlintPlugin),
         Box::new(CommitizenPlugin),
         Box::new(SemanticReleasePlugin),
         Box::new(DangerPlugin),
-        // Blockchain
         Box::new(HardhatPlugin),
-        // Deployment
         Box::new(VercelPlugin),
         Box::new(WranglerPlugin),
         Box::new(OpenNextCloudflarePlugin),
         Box::new(SentryPlugin),
-        // Git hooks
         Box::new(HuskyPlugin),
         Box::new(LintStagedPlugin),
         Box::new(LefthookPlugin),
         Box::new(SimpleGitHooksPlugin),
-        // Media & assets
         Box::new(SvgoPlugin),
         Box::new(SvgrPlugin),
-        // Code generation & docs
         Box::new(GraphqlCodegenPlugin),
         Box::new(TypedocPlugin),
         Box::new(OpenapiTsPlugin),
         Box::new(PlopPlugin),
-        // Coverage
         Box::new(C8Plugin),
         Box::new(NycPlugin),
-        // Other tools
         Box::new(MswPlugin),
         Box::new(OpenCodePlugin),
         Box::new(NodemonPlugin),
@@ -174,9 +158,7 @@ pub fn create_builtin_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(DependencyCruiserPlugin),
         Box::new(WuchalePlugin),
         Box::new(VarlockPlugin),
-        // Package managers
         Box::new(PnpmPlugin),
-        // Runtime
         Box::new(BunPlugin),
     ]
 }

@@ -181,11 +181,6 @@ pub fn parse_override_key(key: &str) -> Option<ParsedOverrideKey> {
         return None;
     }
 
-    // Split on the last `>`. pnpm parses single-depth parent matchers; multi-hop
-    // `a>b>c` is not officially documented but the resolver treats the rightmost
-    // segment as the target and everything left as the parent chain. We split
-    // on the LAST `>` so the parent side keeps any earlier `>` for future
-    // multi-hop support.
     let (parent_part, target_part) = if let Some(idx) = trimmed.rfind('>') {
         (Some(trimmed[..idx].trim()), trimmed[idx + 1..].trim())
     } else {
@@ -199,8 +194,6 @@ pub fn parse_override_key(key: &str) -> Option<ParsedOverrideKey> {
             let (pkg, selector) = split_pkg_and_selector(parent)?;
             (Some(pkg), selector)
         }
-        // `>target` (leading separator with empty parent) is malformed: the
-        // user clearly intended a parent chain but left the parent slot blank.
         Some(_) => return None,
         None => (None, None),
     };
@@ -253,9 +246,6 @@ pub fn is_valid_override_value(value: &str) -> bool {
     if trimmed.contains('\n') {
         return false;
     }
-    // pnpm accepts: semver ranges, `-` (removal), `$ref` (self-ref),
-    // `npm:alias@^1` (alias), `workspace:*`. We do not validate semver ranges
-    // here, only screen for obviously broken inputs.
     true
 }
 
@@ -389,8 +379,6 @@ fn build_package_json_line_index(source: &str) -> YamlLineIndex {
         match ch {
             '"' => {
                 in_string = true;
-                // Start collecting a new key candidate. We commit it only when
-                // followed by `:` at the appropriate depth.
                 collecting_key = true;
                 key_buf.clear();
             }
@@ -406,9 +394,6 @@ fn build_package_json_line_index(source: &str) -> YamlLineIndex {
             }
             ':' => {
                 if let Some(key) = last_key.take() {
-                    // Promote into a section if the key opens an object
-                    // immediately. We track section transitions by matching
-                    // the key name + current depth.
                     if pnpm_depth.is_none() && depth == 1 && key == "pnpm" {
                         pnpm_depth = Some(depth);
                     } else if in_overrides_depth.is_none()
@@ -420,7 +405,6 @@ fn build_package_json_line_index(source: &str) -> YamlLineIndex {
                     } else if let Some(d) = in_overrides_depth
                         && depth == d + 1
                     {
-                        // This is an override entry key at the right depth.
                         entries.push((key, current_line));
                     }
                 }

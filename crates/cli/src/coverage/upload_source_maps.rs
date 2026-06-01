@@ -946,9 +946,6 @@ mod tests {
 
     #[test]
     fn map_path_is_repo_root_relative_when_build_dir_is_a_subdirectory() {
-        // CI runs `upload-source-maps --dir dashboard/dist` from the repo root,
-        // so the repo root is the parent of `dashboard/dist`. mapPath must carry
-        // the full `dashboard/dist/...` prefix even though fileName is stripped.
         let repo_root = tempdir().expect("tempdir");
         let build_dir = repo_root.path().join("dashboard/dist");
         std::fs::create_dir_all(build_dir.join("assets")).expect("assets dir");
@@ -960,10 +957,7 @@ mod tests {
             collect_source_maps(repo_root.path(), &build_dir, &include, &exclude, true).unwrap();
 
         assert_eq!(maps.len(), 1);
-        // fileName is the stripped basename (storage identity), unchanged.
         assert_eq!(maps[0].file_name, "app-a1b2.js.map");
-        // mapPath carries the repo-relative path so the cloud can resolve the
-        // map's `sources[]` against `dashboard/dist/assets`.
         assert_eq!(
             maps[0].map_path.as_deref(),
             Some("dashboard/dist/assets/app-a1b2.js.map")

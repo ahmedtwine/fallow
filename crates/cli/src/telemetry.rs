@@ -194,9 +194,6 @@ pub fn run(command: TelemetryCommand, output: OutputFormat) -> ExitCode {
 
 pub fn record_workflow(record: &WorkflowRecord<'_>) {
     match effective_config().mode {
-        // Off is the default. Build no event and run no classification so the
-        // agent-detection env scan never runs speculatively while telemetry is
-        // disabled.
         EffectiveMode::Off | EffectiveMode::DisabledByAdmin => {}
         EffectiveMode::Inspect => print_event_to_stderr(&build_workflow_event(record)),
         EffectiveMode::On => upload_event_best_effort(build_workflow_event(record)),
@@ -675,9 +672,6 @@ fn classify_agent_source_from_env<I>(keys: I) -> AgentSource
 where
     I: IntoIterator<Item = OsString>,
 {
-    // Tokens are matched at a leading word boundary (start of the key, or
-    // immediately after `_`) so short, generic tokens like `ROO` / `ZED` do not
-    // false-match unrelated variables such as `CHROOT` or `AUTHORIZED`.
     const VENDORS: &[(&str, AgentSource)] = &[
         ("CODEX", AgentSource::Codex),
         ("CLAUDE", AgentSource::ClaudeCode),
@@ -905,8 +899,6 @@ mod tests {
 
     #[test]
     fn heuristic_does_not_match_token_mid_word() {
-        // `CHROOT` contains `ROO` but not at a leading word boundary, so it must
-        // not classify as Roo; `AUTHORIZED` likewise must not classify as Zed.
         assert_eq!(
             classify_agent_source_from_env([
                 OsString::from("CHROOT"),
@@ -961,17 +953,7 @@ mod tests {
         assert_eq!(loaded.schema_version, CONFIG_SCHEMA_VERSION);
     }
 
-    // --- Documentation drift guards ---------------------------------------
-    // These pin the in-repo canonical contract doc (docs/telemetry.md) to the
-    // code that is the real source of truth, so a new agent source or event
-    // field cannot ship without the doc being updated in the same change. The
-    // hosted fallow-docs pages and the fallow-skills copy are refreshed from
-    // this canonical doc; the fallow-cloud server keeps its own agreement test
-    // against the same enums. Run in the normal `cargo test` job (no new CI).
-
     fn read_telemetry_doc() -> Option<String> {
-        // From crates/cli to the workspace root. Absent in a packaged /
-        // out-of-tree context, in which case the guard is skipped.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/telemetry.md");
         std::fs::read_to_string(path).ok()
     }
@@ -1005,9 +987,6 @@ mod tests {
             AgentSource::OtherKnown,
             AgentSource::Unknown,
         ];
-        // Exhaustiveness guard: adding a new `AgentSource` variant makes this
-        // match non-exhaustive (compile error), forcing whoever adds it to
-        // extend the `all` list above and, via the assertion below, the docs.
         for &source in all {
             match source {
                 AgentSource::None
@@ -1028,8 +1007,6 @@ mod tests {
                 | AgentSource::Unknown => {}
             }
         }
-        // Wire names come from serde, so they cannot drift from the actual
-        // serialization even if the match arms were mislabeled.
         let canonical: BTreeSet<String> = all
             .iter()
             .map(|source| {

@@ -25,8 +25,6 @@ fn pkg_utils_build_configs_are_kept_reachable() {
 
     let unused_files = unused_file_paths(&results, &root);
 
-    // Root and nested build configs, discovered by @sanity/pkg-utils on a
-    // filename convention rather than imported, must not surface as unused.
     for kept in [
         "package.config.ts",
         "package.bundle.ts",
@@ -38,15 +36,11 @@ fn pkg_utils_build_configs_are_kept_reachable() {
         );
     }
 
-    // The plugin must not over-credit: a genuinely unreferenced source file
-    // still surfaces as unused.
     assert!(
         unused_files.iter().any(|unused| unused == "src/orphan.ts"),
         "unreferenced source files must still be reported, unused files: {unused_files:?}"
     );
 
-    // The build tool itself is invoked via a script binary, not imported from
-    // application code, so it must not be reported as an unused dependency.
     assert!(
         !results
             .unused_dev_dependencies
@@ -58,8 +52,6 @@ fn pkg_utils_build_configs_are_kept_reachable() {
 
 #[test]
 fn package_config_without_pkg_utils_dependency_stays_flagged() {
-    // Control: the gate is strict. A project that does not depend on
-    // @sanity/pkg-utils keeps reporting a stray package.config.ts as unused.
     let root = fixture_path("pkg-utils-no-dep");
     let config = create_config(root.clone());
     let results = fallow_core::analyze(&config).expect("analysis should succeed");

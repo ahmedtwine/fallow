@@ -12,35 +12,27 @@ fn lit_custom_element_class_exports_credited_through_decorator_and_define() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // Decorator-registered class.
     assert!(
         !unused_export_names.contains(&"MyElement"),
         "Lit @customElement-decorated class should be credited as side-effect-used, found unused exports: {unused_export_names:?}"
     );
-    // Native customElements.define-registered class.
     assert!(
         !unused_export_names.contains(&"OtherElement"),
         "customElements.define-registered class should be credited as side-effect-used, found: {unused_export_names:?}"
     );
-    // Class declared then exported then registered (order-independent).
     assert!(
         !unused_export_names.contains(&"SeparateElement"),
         "class registered after its export statement should still be credited, found: {unused_export_names:?}"
     );
-    // Member-call decorator form (`@decorators.customElement(...)`).
     assert!(
         !unused_export_names.contains(&"AliasedElement"),
         "namespace-aliased @customElement form should also be credited, found: {unused_export_names:?}"
     );
-    // Named import alias form (`import { customElement as ce }`).
     assert!(
         !unused_export_names.contains(&"NamedImportAliasedElement"),
         "named-import-aliased @customElement form should also be credited, found: {unused_export_names:?}"
     );
 
-    // Anonymous `export default @customElement(...) class extends LitElement {}`
-    // has no class identifier and unset local_name; the visitor flips the pending
-    // Default export directly during visit_class.
     let anonymous_default_unused = results.unused_exports.iter().any(|e| {
         e.export.path.ends_with("anonymous-default.ts") && e.export.export_name == "default"
     });
@@ -70,7 +62,6 @@ fn lit_lifecycle_methods_not_flagged_but_genuinely_unused_methods_are() {
         .map(|m| format!("{}.{}", m.member.parent_name, m.member.member_name))
         .collect();
 
-    // Lit lifecycle on LitElement subclass.
     assert!(
         !unused.contains(&"MyElement.render".to_string()),
         "render() on LitElement subclass should be plugin-allowlisted, found: {unused:?}"
@@ -79,7 +70,6 @@ fn lit_lifecycle_methods_not_flagged_but_genuinely_unused_methods_are() {
         !unused.contains(&"MyElement.connectedCallback".to_string()),
         "connectedCallback on LitElement should be allowlisted, found: {unused:?}"
     );
-    // Native lifecycle on HTMLElement subclass.
     assert!(
         !unused.contains(&"OtherElement.connectedCallback".to_string()),
         "connectedCallback on HTMLElement subclass should be allowlisted, found: {unused:?}"
@@ -88,7 +78,6 @@ fn lit_lifecycle_methods_not_flagged_but_genuinely_unused_methods_are() {
         !unused.contains(&"OtherElement.observedAttributes".to_string()),
         "observedAttributes on HTMLElement should be allowlisted, found: {unused:?}"
     );
-    // Genuinely unused helpers should still surface.
     assert!(
         unused.contains(&"MyElement.unusedHelper".to_string()),
         "non-lifecycle unused method on a LitElement should still be reported, found: {unused:?}"

@@ -33,15 +33,12 @@ define_plugin! {
     resolve_config(config_path, source, _root) {
         let mut result = PluginResult::default();
 
-        // import { defineConfig } from '@pandacss/dev';
-        // import pandaPreset from '@pandacss/preset-panda';
         let imports = config_parser::extract_imports(source, config_path);
         for imp in &imports {
             let dep = crate::resolve::extract_package_name(imp);
             result.referenced_dependencies.push(dep);
         }
 
-        // presets as strings: presets: ['@pandacss/preset-panda', '@park-ui/panda-preset']
         let preset_strings =
             config_parser::extract_config_shallow_strings(source, config_path, "presets");
         for preset in &preset_strings {

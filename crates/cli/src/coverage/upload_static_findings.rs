@@ -95,8 +95,7 @@ pub struct UploadStaticFindingsArgs {
     pub ignore_upload_errors: bool,
 }
 
-// Manual `Debug` so `tracing::debug!(?args)` / `dbg!(args)` / unwrap-on-Err
-// formatting cannot bleed the API key into stderr.
+// Manual `Debug` to keep the API key out of stderr.
 impl fmt::Debug for UploadStaticFindingsArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UploadStaticFindingsArgs")
@@ -154,10 +153,6 @@ impl UploadError {
             "error".red().bold()
         };
         eprintln!("{LOG_PREFIX}: {severity}: {body}");
-        // Validation, payload, and auth errors are always fatal; the user
-        // needs to fix their inputs or credentials. The
-        // --ignore-upload-errors opt-out only applies to transient transport
-        // and server failures.
         if soft_fail {
             eprintln!("  -> --ignore-upload-errors set, continuing with exit 0");
             return ExitCode::SUCCESS;
@@ -179,11 +174,6 @@ fn run_inner(args: &UploadStaticFindingsArgs, root: &Path) -> Result<(), UploadE
     let results = fallow_core::analyze(&config)
         .map_err(|err| UploadError::Validation(format!("analysis failed: {err}")))?;
     let findings = collect_findings(&config, &results);
-
-    // An empty finding set is a valid replace-by-SHA clearing of the prior set
-    // (the codebase is clean, or the prior upload was for a different commit).
-    // Unlike upload-inventory, do NOT reject an empty result; let it through so
-    // a newly-clean repo clears stale findings on the dashboard.
 
     if findings.len() > STATIC_FINDINGS_MAX {
         return Err(UploadError::PayloadTooLarge(format!(
@@ -218,8 +208,6 @@ fn run_inner(args: &UploadStaticFindingsArgs, root: &Path) -> Result<(), UploadE
         &payload,
     )
 }
-
-// ── Project ID resolution ────────────────────────────────────────────
 
 fn resolve_project_id(args: &UploadStaticFindingsArgs, root: &Path) -> Result<String, UploadError> {
     if let Some(explicit) = args.project_id.as_deref() {
@@ -285,13 +273,11 @@ fn git_origin_project_id(root: &Path) -> Option<String> {
 /// (`git@github.com:owner/repo(.git)?`), and `ssh://` / `git://` variants.
 fn parse_git_remote_to_project_id(url: &str) -> Option<String> {
     let stripped_suffix = url.trim().trim_end_matches(".git");
-    // Shape 1: `git@host:owner/repo`
     if let Some((_, path)) = stripped_suffix.split_once(':')
         && let Some(project_id) = take_last_two_segments(path)
     {
         return Some(project_id);
     }
-    // Shape 2: `scheme://host/owner/repo`
     if let Some(path_part) = stripped_suffix.split("://").nth(1)
         && let Some((_, tail)) = path_part.split_once('/')
         && let Some(project_id) = take_last_two_segments(tail)
@@ -310,8 +296,6 @@ fn take_last_two_segments(path: &str) -> Option<String> {
     let owner = parts.pop()?;
     Some(format!("{owner}/{repo}"))
 }
-
-// ── Git SHA resolution ───────────────────────────────────────────────
 
 fn resolve_git_sha(args: &UploadStaticFindingsArgs, root: &Path) -> Result<String, UploadError> {
     let sha = if let Some(explicit) = args.git_sha.as_deref() {
@@ -384,8 +368,6 @@ fn dirty_worktree(root: &Path) -> bool {
     output.stdout.iter().any(|b| !b.is_ascii_whitespace())
 }
 
-// ── Config + analysis ────────────────────────────────────────────────
-
 fn load_resolved_config(root: &Path) -> Result<ResolvedConfig, UploadError> {
     let user_config = match FallowConfig::find_and_load(root) {
         Ok(Some((config, _path))) => Some(config),
@@ -456,12 +438,8 @@ fn repo_relative_posix(config: &ResolvedConfig, path: &Path) -> String {
 }
 
 fn to_posix_string(path: &Path) -> String {
-    // Windows walker paths carry `\` separators; the server and the source-map
-    // resolver both key on POSIX slashes, so normalize before sending.
     path.to_string_lossy().replace('\\', "/")
 }
-
-// ── Payload + HTTP ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
 struct StaticFinding {
@@ -552,8 +530,6 @@ fn upload(
     payload: &StaticFindingsRequest<'_>,
 ) -> Result<(), UploadError> {
     let url = endpoint_url(endpoint_override, project_id);
-    // Informational progress output goes to stdout alongside the dry-run
-    // summary for symmetry. Only errors and warnings use stderr.
     println!(
         "{LOG_PREFIX}: uploading {} findings for {project_id} @ {}",
         format_count(payload.findings.len()),
@@ -588,8 +564,6 @@ fn upload(
         return Ok(());
     }
 
-    // Parse the body once so we can dispatch by the machine-readable `code`
-    // field and also render a human-friendly message.
     let body = response.read_to_string().unwrap_or_default();
     let envelope = parse_error_envelope(&body);
     let code = envelope.code();
@@ -638,8 +612,6 @@ fn format_count(n: usize) -> String {
     }
     s
 }
-
-// ── Dry-run output ───────────────────────────────────────────────────
 
 fn print_dry_run_summary(
     project_id: &str,
@@ -697,8 +669,6 @@ fn display_endpoint_url(override_endpoint: Option<&str>, project_id: &str) -> St
     );
     format!("{base}/v1/coverage/{project_id}/static-findings")
 }
-
-// ── Analysis adapter ─────────────────────────────────────────────────
 
 /// A minimal view over [`fallow_core::results::AnalysisResults`] that exposes
 /// only the two finding categories this command maps. Defined as a trait so
@@ -772,8 +742,6 @@ mod tests {
 
     #[test]
     fn upload_static_findings_args_debug_masks_api_key() {
-        // Future `tracing::debug!(?args)` or `dbg!(args)` calls must not leak
-        // the bearer token through stderr.
         let args = UploadStaticFindingsArgs {
             api_key: Some("fallow_live_secret_token_value".to_owned()),
             api_endpoint: Some("https://api.fallow.cloud".to_owned()),
@@ -876,7 +844,6 @@ mod tests {
         let findings = collect_findings(&config, &results);
         assert_eq!(findings.len(), 2);
 
-        // Sorted by file_path: "src/legacy/old.ts" < "src/utils/format.ts".
         let dead = &findings[0];
         assert_eq!(dead.kind, KIND_DEAD_FILE);
         assert_eq!(dead.file_path, "src/legacy/old.ts");
@@ -948,7 +915,6 @@ mod tests {
         let err = classify_upload_error(413, Some("payload_too_large"), "stub".to_owned())
             .expect_err("413 must error");
         assert!(matches!(err, UploadError::PayloadTooLarge(_)));
-        // Even without a body code, the status alone routes to PayloadTooLarge.
         let err = classify_upload_error(413, None, "stub".to_owned())
             .expect_err("413 must error without code");
         assert!(matches!(err, UploadError::PayloadTooLarge(_)));

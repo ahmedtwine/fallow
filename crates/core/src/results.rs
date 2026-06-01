@@ -1,4 +1,3 @@
-// Re-export all result types from fallow-types
 pub use fallow_types::output_dead_code::{
     BoundaryViolationFinding, CircularDependencyFinding, DuplicateExportFinding,
     EmptyCatalogGroupFinding, MisconfiguredDependencyOverrideFinding, PrivateTypeLeakFinding,

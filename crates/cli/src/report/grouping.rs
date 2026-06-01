@@ -24,10 +24,6 @@ pub enum OwnershipResolver {
     /// Group by workspace package (monorepo).
     Package(PackageResolver),
     /// Group by GitLab CODEOWNERS section name (`[Section]` headers).
-    ///
-    /// Distinct sections produce distinct groups even when they share the
-    /// same default owner. Rules that appear before any section header
-    /// fall into the `(no section)` bucket.
     Section(CodeOwners),
 }
 
@@ -165,9 +161,6 @@ pub fn group_analysis_results(
     resolver: &OwnershipResolver,
 ) -> Vec<ResultGroup> {
     let mut groups: FxHashMap<String, AnalysisResults> = FxHashMap::default();
-    // Section-mode: remember the default owners for each section key. Written
-    // once per key (the first path that lands there); all subsequent paths in
-    // the same section share the same defaults.
     let mut group_owners: FxHashMap<String, Vec<String>> = FxHashMap::default();
     let is_section_mode = matches!(resolver, OwnershipResolver::Section(_));
 
@@ -184,7 +177,6 @@ pub fn group_analysis_results(
         key
     };
 
-    // ── File-scoped issue types ─────────────────────────────────
     for item in &results.unused_files {
         groups
             .entry(key_for(&item.file.path))
@@ -235,7 +227,6 @@ pub fn group_analysis_results(
             .push(item.clone());
     }
 
-    // ── Dependency-scoped (use package.json path) ───────────────
     for item in &results.unused_dependencies {
         groups
             .entry(key_for(&item.dep.path))
@@ -272,7 +263,6 @@ pub fn group_analysis_results(
             .push(item.clone());
     }
 
-    // ── Multi-location types (use first location) ───────────────
     for item in &results.unlisted_dependencies {
         let key = item
             .dep
@@ -424,8 +414,6 @@ mod tests {
     use super::*;
     use crate::codeowners::CodeOwners;
 
-    // ── Helpers ────────────────────────────────────────────────────
-
     fn root() -> PathBuf {
         PathBuf::from("/root")
     }
@@ -463,16 +451,12 @@ mod tests {
         }
     }
 
-    // ── 1. Empty results ──────────────────────────────────────────
-
     #[test]
     fn empty_results_returns_empty_vec() {
         let results = AnalysisResults::default();
         let groups = group_analysis_results(&results, &root(), &OwnershipResolver::Directory);
         assert!(groups.is_empty());
     }
-
-    // ── 2. Single group ──────────────────────────────────────────
 
     #[test]
     fn single_group_all_same_directory() {
@@ -491,8 +475,6 @@ mod tests {
         assert_eq!(groups[0].results.unused_exports.len(), 1);
         assert_eq!(groups[0].results.total_issues(), 3);
     }
-
-    // ── 3. Multiple groups ───────────────────────────────────────
 
     #[test]
     fn multiple_groups_split_by_directory() {
@@ -514,20 +496,15 @@ mod tests {
         assert_eq!(lib_group.results.total_issues(), 1);
     }
 
-    // ── 4. Sort order: most issues first ─────────────────────────
-
     #[test]
     fn sort_order_descending_by_total_issues() {
         let mut results = AnalysisResults::default();
-        // lib: 1 issue
         results.unused_files.push(unused_file("/root/lib/a.ts"));
-        // src: 3 issues
         results.unused_files.push(unused_file("/root/src/a.ts"));
         results.unused_files.push(unused_file("/root/src/b.ts"));
         results
             .unused_exports
             .push(unused_export("/root/src/c.ts", "x"));
-        // test: 2 issues
         results.unused_files.push(unused_file("/root/test/a.ts"));
         results.unused_files.push(unused_file("/root/test/b.ts"));
 
@@ -551,19 +528,14 @@ mod tests {
         let groups = group_analysis_results(&results, &root(), &OwnershipResolver::Directory);
 
         assert_eq!(groups.len(), 2);
-        // Same issue count (1 each) -> alphabetical
         assert_eq!(groups[0].key, "alpha");
         assert_eq!(groups[1].key, "beta");
     }
 
-    // ── 5. Unowned always last ───────────────────────────────────
-
     #[test]
     fn unowned_sorts_last_regardless_of_count() {
         let mut results = AnalysisResults::default();
-        // src: 1 issue
         results.unused_files.push(unused_file("/root/src/a.ts"));
-        // unlisted dep with empty imported_from -> goes to (unowned)
         results
             .unlisted_dependencies
             .push(unlisted_dep("pkg-a", vec![]));
@@ -577,13 +549,10 @@ mod tests {
         let groups = group_analysis_results(&results, &root(), &OwnershipResolver::Directory);
 
         assert_eq!(groups.len(), 2);
-        // (unowned) has 3 issues vs src's 1, but must still be last
         assert_eq!(groups[0].key, "src");
         assert_eq!(groups[1].key, UNOWNED_LABEL);
         assert_eq!(groups[1].results.total_issues(), 3);
     }
-
-    // ── 6. Multi-location fallback ───────────────────────────────
 
     #[test]
     fn unlisted_dep_empty_imported_from_goes_to_unowned() {
@@ -614,8 +583,6 @@ mod tests {
         assert_eq!(groups[0].results.unlisted_dependencies.len(), 1);
     }
 
-    // ── 7. Directory mode ────────────────────────────────────────
-
     #[test]
     fn directory_mode_groups_by_first_path_component() {
         let mut results = AnalysisResults::default();
@@ -640,8 +607,6 @@ mod tests {
         assert_eq!(apps.results.total_issues(), 1);
     }
 
-    // ── 8. Owner mode ────────────────────────────────────────────
-
     #[test]
     fn owner_mode_groups_by_codeowners_owner() {
         let co = CodeOwners::parse("* @default\n/src/ @frontend\n").unwrap();
@@ -664,7 +629,6 @@ mod tests {
 
     #[test]
     fn owner_mode_unmatched_goes_to_unowned() {
-        // No catch-all rule -- files outside /src/ have no owner
         let co = CodeOwners::parse("/src/ @frontend\n").unwrap();
         let resolver = OwnershipResolver::Owner(co);
 
@@ -676,8 +640,6 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].key, UNOWNED_LABEL);
     }
-
-    // ── Boundary violations ──────────────────────────────────────
 
     #[test]
     fn boundary_violations_grouped_by_from_path() {
@@ -700,8 +662,6 @@ mod tests {
         assert_eq!(groups[0].key, "src");
         assert_eq!(groups[0].results.boundary_violations.len(), 1);
     }
-
-    // ── Circular dependencies ────────────────────────────────────
 
     #[test]
     fn circular_dep_empty_files_goes_to_unowned() {
@@ -748,8 +708,6 @@ mod tests {
         assert_eq!(groups[0].key, "src");
     }
 
-    // ── Duplicate exports ────────────────────────────────────────
-
     #[test]
     fn duplicate_exports_empty_locations_goes_to_unowned() {
         let mut results = AnalysisResults::default();
@@ -765,8 +723,6 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].key, UNOWNED_LABEL);
     }
-
-    // ── resolve_owner ────────────────────────────────────────────
 
     #[test]
     fn resolve_owner_returns_directory() {
@@ -785,8 +741,6 @@ mod tests {
         let owner = resolve_owner(Path::new("/root/src/file.ts"), &root(), &resolver);
         assert_eq!(owner, "@team");
     }
-
-    // ── mode_label ───────────────────────────────────────────────
 
     #[test]
     fn mode_label_owner() {
@@ -812,12 +766,8 @@ mod tests {
         assert_eq!(OwnershipResolver::Section(co).mode_label(), "section");
     }
 
-    // ── Section mode ────────────────────────────────────────────
-
     #[test]
     fn section_mode_groups_distinct_sections_with_shared_owners() {
-        // Issue #133 reproduction: billing and notifications share the lead
-        // owner but are separate sections, so they must produce 2 groups.
         let content = "\
             [billing] @core-reviewers @alice @bob\n\
             src/billing/\n\
@@ -920,8 +870,6 @@ mod tests {
         assert_eq!(groups[0].owners, None);
     }
 
-    // ── PackageResolver ─────────────────────────────────────────
-
     #[test]
     fn package_resolver_matches_longest_prefix() {
         let ws = vec![
@@ -937,7 +885,6 @@ mod tests {
             },
         ];
         let pr = PackageResolver::new(Path::new("/root"), &ws);
-        // A file in packages/ui/ should match the more specific workspace
         assert_eq!(
             pr.resolve(Path::new("packages/ui/Button.ts")),
             "packages/ui"
@@ -952,7 +899,6 @@ mod tests {
             is_internal_dependency: false,
         }];
         let pr = PackageResolver::new(Path::new("/root"), &ws);
-        // A file outside any workspace returns (root)
         assert_eq!(pr.resolve(Path::new("src/app.ts")), ROOT_PACKAGE_LABEL);
     }
 
@@ -994,8 +940,6 @@ mod tests {
         assert!(root_group.is_some());
     }
 
-    // ── resolve_with_rule ───────────────────────────────────────
-
     #[test]
     fn resolve_with_rule_directory_mode_no_rule() {
         let (key, rule) = OwnershipResolver::Directory.resolve_with_rule(Path::new("src/file.ts"));
@@ -1030,8 +974,6 @@ mod tests {
         assert_eq!(key, ROOT_PACKAGE_LABEL);
         assert!(rule.is_none());
     }
-
-    // ── Missing issue type groupings ────────────────────────────
 
     #[test]
     fn group_unused_optional_deps() {

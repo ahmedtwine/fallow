@@ -105,11 +105,6 @@ fn extract_jest_config(
         return;
     }
 
-    // Resolve the on-disk file shape into a (parse_source, parse_path) pair
-    // that the AST helpers can ingest. `package.json` is parsed via serde to
-    // pluck out the `"jest"` key, then re-serialised as a parenthesised
-    // expression so the helpers see the same shape they would for a
-    // standalone `jest.config.json`.
     let filename = config_path.file_name().and_then(|n| n.to_str());
     let (parse_source, parse_path_buf) = if filename == Some(PACKAGE_JSON_FILENAME) {
         let Some(jest_str) = extract_package_json_jest_value(source) else {
@@ -123,7 +118,6 @@ fn extract_jest_config(
     };
     let parse_path: &Path = &parse_path_buf;
 
-    // Extract import sources as referenced dependencies
     let imports = config_parser::extract_imports(&parse_source, parse_path);
     for imp in &imports {
         let dep = crate::resolve::extract_package_name(imp);
@@ -145,17 +139,10 @@ fn extract_jest_config(
             let Ok(child_source) = std::fs::read_to_string(&child_config) else {
                 continue;
             };
-            // Each child config carries its own <rootDir>: the child's
-            // own directory. Setup files are resolved against it.
             let child_root = child_config
                 .parent()
                 .map_or_else(|| root.to_path_buf(), Path::to_path_buf);
 
-            // Jest's `projects` semantics scope `testMatch` / `testRegex` /
-            // `replace_entry_patterns` to each child individually: a narrow
-            // pattern in one project must not replace the parent's broad
-            // defaults for sibling projects. Run each child into a scratch
-            // result and merge only the workspace-global fields back.
             let mut child_result = PluginResult::default();
             extract_jest_config(
                 &child_config,
@@ -180,9 +167,6 @@ fn extract_package_json_jest_value(source: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(source).ok()?;
     let jest_val = parsed.get("jest")?;
     if !jest_val.is_object() {
-        // `"jest": "./jest.config.js"` (string preset path) and other
-        // non-object shapes are not currently followed; only the inline
-        // object form participates in dependency / setup-file extraction.
         return None;
     }
     serde_json::to_string(jest_val).ok()
@@ -220,14 +204,12 @@ fn extract_jest_inline_projects(
         )
     };
 
-    // preset: every value is a referenced package.
     for value in read("preset") {
         result
             .referenced_dependencies
             .push(crate::resolve::extract_package_name(&value));
     }
 
-    // resolver: skip relative / absolute paths, credit bare package names.
     for value in read("resolver") {
         if value.starts_with('.') || value.starts_with('/') {
             continue;
@@ -237,7 +219,6 @@ fn extract_jest_inline_projects(
             .push(crate::resolve::extract_package_name(&value));
     }
 
-    // testRunner: filter builtin runner names.
     for value in read("testRunner") {
         if !matches!(
             value.as_str(),
@@ -249,7 +230,6 @@ fn extract_jest_inline_projects(
         }
     }
 
-    // runner: filter the default `jest-runner` name.
     for value in read("runner") {
         if value != "jest-runner" {
             result
@@ -258,9 +238,6 @@ fn extract_jest_inline_projects(
         }
     }
 
-    // testEnvironment: filter node / jsdom; otherwise just the bare value
-    // is credited. Jest accepts both the bare and `jest-environment-*`
-    // resolution forms; whichever the user wrote is what fallow records.
     for value in read("testEnvironment") {
         if !matches!(value.as_str(), "node" | "jsdom") {
             result
@@ -269,10 +246,6 @@ fn extract_jest_inline_projects(
         }
     }
 
-    // String-array (or single-string) setup file fields, made absolute
-    // against the parent <rootDir>. Inline ProjectConfigs share the parent
-    // config file's filesystem location so per-project rebasing does not
-    // apply.
     for key in [
         "setupFiles",
         "setupFilesAfterEnv",
@@ -392,7 +365,6 @@ fn resolve_project_pattern(entry: &str, config_path: &Path, root: &Path) -> Path
     if path.is_absolute() {
         return path.to_path_buf();
     }
-    // Bare `projects` entries resolve against the config file's parent.
     config_path.parent().unwrap_or(root).join(entry)
 }
 
@@ -403,7 +375,6 @@ fn extract_jest_setup_files(
     root: &Path,
     result: &mut PluginResult,
 ) {
-    // preset → referenced dependency (e.g., "ts-jest", "react-native")
     if let Some(preset) =
         config_parser::extract_config_string(parse_source, parse_path, &["preset"])
     {
@@ -429,9 +400,6 @@ fn extract_jest_setup_files(
         }
     }
 
-    // testMatch → entry patterns that replace defaults
-    // Jest treats testMatch as a full override of its default patterns,
-    // so when present the static ENTRY_PATTERNS should be dropped.
     let test_match =
         config_parser::extract_config_string_array(parse_source, parse_path, &["testMatch"]);
     if !test_match.is_empty() {
@@ -439,9 +407,6 @@ fn extract_jest_setup_files(
     }
     result.extend_entry_patterns(test_match);
 
-    // testRegex → convert to best-effort glob and replace defaults
-    // Jest's testRegex restricts which files are tests. Common pattern: "src/.*\\.test\\.ts$"
-    // Extract a directory prefix (if any) and generate a matching glob.
     if result.entry_patterns.is_empty()
         && let Some(regex) =
             config_parser::extract_config_string(parse_source, parse_path, &["testRegex"])
@@ -458,19 +423,16 @@ fn extract_jest_setup_files(
 /// - `"src/.*\\.test\\.ts$"` → `"src/**/*.test.ts"`
 /// - `".*\\.(test|spec)\\.tsx?$"` → stays as defaults (no fixed prefix)
 fn test_regex_to_glob(regex: &str) -> Option<String> {
-    // Extract a fixed directory prefix before the first regex metachar
     let meta_chars = ['.', '*', '+', '?', '(', '[', '|', '^', '$', '{', '\\'];
     let prefix_end = regex
         .find(|c: char| meta_chars.contains(&c))
         .unwrap_or(regex.len());
     let prefix = &regex[..prefix_end];
 
-    // Must have a non-empty directory prefix to be useful (otherwise same as defaults)
     if prefix.is_empty() || !prefix.contains('/') {
         return None;
     }
 
-    // Detect file extension from the regex suffix
     let ext = if regex.contains("tsx?") {
         "{ts,tsx}"
     } else if regex.contains("jsx?") {
@@ -483,7 +445,6 @@ fn test_regex_to_glob(regex: &str) -> Option<String> {
         "{ts,tsx,js,jsx}"
     };
 
-    // Detect test naming convention
     let name_pattern = if regex.contains("(test|spec)") || regex.contains("(spec|test)") {
         "*.{test,spec}"
     } else if regex.contains("\\.spec\\.") {
@@ -497,7 +458,6 @@ fn test_regex_to_glob(regex: &str) -> Option<String> {
 
 /// Extract referenced dependencies from Jest config (transform, reporters, environment, etc.).
 fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut PluginResult) {
-    // transform values → referenced dependencies
     let transform_values =
         config_parser::extract_config_shallow_strings(parse_source, parse_path, "transform");
     for val in &transform_values {
@@ -506,7 +466,6 @@ fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut
             .push(crate::resolve::extract_package_name(val));
     }
 
-    // reporters → referenced dependencies
     let reporters =
         config_parser::extract_config_shallow_strings(parse_source, parse_path, "reporters");
     for reporter in &reporters {
@@ -517,7 +476,6 @@ fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut
         }
     }
 
-    // testEnvironment → if not built-in, it's a referenced dependency
     if let Some(env) =
         config_parser::extract_config_string(parse_source, parse_path, &["testEnvironment"])
         && !matches!(env.as_str(), "node" | "jsdom")
@@ -528,7 +486,6 @@ fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut
         result.referenced_dependencies.push(env);
     }
 
-    // watchPlugins → referenced dependencies
     let watch_plugins =
         config_parser::extract_config_shallow_strings(parse_source, parse_path, "watchPlugins");
     for plugin in &watch_plugins {
@@ -537,7 +494,6 @@ fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut
             .push(crate::resolve::extract_package_name(plugin));
     }
 
-    // resolver → referenced dependency (only if it's a package, not a relative path)
     if let Some(resolver) =
         config_parser::extract_config_string(parse_source, parse_path, &["resolver"])
         && !resolver.starts_with('.')
@@ -548,7 +504,6 @@ fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut
             .push(crate::resolve::extract_package_name(&resolver));
     }
 
-    // snapshotSerializers → referenced dependencies
     let serializers = config_parser::extract_config_string_array(
         parse_source,
         parse_path,
@@ -560,7 +515,6 @@ fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut
             .push(crate::resolve::extract_package_name(s));
     }
 
-    // testRunner → referenced dependency (filter built-in runners)
     if let Some(runner) =
         config_parser::extract_config_string(parse_source, parse_path, &["testRunner"])
         && !matches!(
@@ -573,7 +527,6 @@ fn extract_jest_dependencies(parse_source: &str, parse_path: &Path, result: &mut
             .push(crate::resolve::extract_package_name(&runner));
     }
 
-    // runner → referenced dependency (process runner, not test runner)
     if let Some(runner) =
         config_parser::extract_config_string(parse_source, parse_path, &["runner"])
         && runner != "jest-runner"

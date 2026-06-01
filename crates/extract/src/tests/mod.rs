@@ -148,8 +148,6 @@ fn parse_source_to_module_strips_bom_defense_in_depth() {
 
     assert_eq!(info_plain.imports.len(), info_bom.imports.len());
     assert_eq!(info_plain.exports.len(), info_bom.exports.len());
-    // Compare byte spans on every export entry: identical post-strip source
-    // must produce identical spans.
     let plain_spans: Vec<(u32, u32)> = info_plain
         .exports
         .iter()
@@ -183,13 +181,8 @@ fn bom_stripped_before_hash_so_with_and_without_bom_yield_same_hash() {
         "post-strip hashes must match so the extraction cache hits regardless of BOM presence",
     );
 
-    // The `ModuleInfo.content_hash` field carried by `parse_source_to_module`
-    // is set by the caller; confirm the caller's invariant by hashing the
-    // same post-strip bytes we'd pass to the parser.
     let plain_info = parse_ts(plain);
     let bom_info = parse_ts(&bom);
-    // Both calls go through `parse_source_to_module`, which now strips BOM
-    // defense-in-depth. The exported byte spans + member layout must match.
     assert_eq!(
         plain_info.exports.len(),
         bom_info.exports.len(),
@@ -221,8 +214,6 @@ fn bom_stripped_before_line_offsets_so_line_numbers_align() {
         .find(|e| e.name.matches_str("first"))
         .expect("BOM-bearing source exports `first`");
 
-    // The byte spans must be identical (the BOM is stripped before parse),
-    // and the line/col mapping on the post-strip source produces (1, 0).
     let plain_offsets = compute_line_offsets(body);
     let bom_offsets = compute_line_offsets(crate::strip_bom(&with_bom));
     let plain_pos = byte_offset_to_line_col(&plain_offsets, plain_first.span.start);
@@ -276,9 +267,6 @@ fn glimmer_dotted_template_reference_emits_member_access() {
 
 #[test]
 fn glimmer_import_used_only_inside_template_is_not_flagged() {
-    // Regression for the original symptom: an import that is referenced ONLY
-    // inside the template block was previously surfaced as `unused-import`
-    // because the template body is blanked before the JS parse.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("counter.gts"),
@@ -290,14 +278,6 @@ fn glimmer_import_used_only_inside_template_is_not_flagged() {
 
     assert!(info.unused_import_bindings.is_empty());
 }
-
-// -- negative cases: confirm the scanner does NOT over-credit ------------
-//
-// The trio above only proves the credit path works. These tests fail the
-// suite if the scanner regresses into crediting bindings it shouldn't (or
-// if `info.unused_import_bindings` ever gets stubbed back to an empty set
-// by mistake): each one declares an import that is genuinely unreachable
-// and asserts it surfaces in `unused_import_bindings`.
 
 fn assert_unused(info: &ModuleInfo, expected: &[&str]) {
     let mut actual: Vec<&str> = info
@@ -329,9 +309,6 @@ fn glimmer_import_referenced_nowhere_is_flagged_unused() {
 
 #[test]
 fn glimmer_import_referenced_only_via_this_dot_in_template_is_flagged() {
-    // `this.greeting` reads a class property. Even when `greeting` happens
-    // to also be an imported binding name, the template scanner must not
-    // credit the import.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("app.gts"),
@@ -345,8 +322,6 @@ fn glimmer_import_referenced_only_via_this_dot_in_template_is_flagged() {
 
 #[test]
 fn glimmer_import_referenced_only_via_arg_in_template_is_flagged() {
-    // `@name` is a template argument, not a module-scope binding. An import
-    // named `name` is genuinely unused here.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("app.gts"),
@@ -360,10 +335,6 @@ fn glimmer_import_referenced_only_via_arg_in_template_is_flagged() {
 
 #[test]
 fn glimmer_import_shadowing_builtin_helper_is_flagged() {
-    // `each` is a Glimmer built-in helper keyword; the scanner must NEVER
-    // resolve it to an import binding, even if the user did `import { each }`.
-    // (Built-ins like `if` / `let` are reserved words and can't be import
-    // identifiers, so `each` is the realistic regression to lock in.)
     let info = parse_source_to_module(
         FileId(0),
         Path::new("app.gts"),
@@ -377,9 +348,6 @@ fn glimmer_import_shadowing_builtin_helper_is_flagged() {
 
 #[test]
 fn glimmer_import_shadowed_by_block_param_is_flagged() {
-    // `as |item|` introduces a template-scope local. References to `item`
-    // inside the block resolve to the local, NOT to the same-named import,
-    // so the import must surface as unused.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("app.gts"),
@@ -408,10 +376,6 @@ fn glimmer_mix_of_used_and_unused_imports_flags_only_the_unused() {
 
 #[test]
 fn glimmer_strict_mode_helper_imports_from_ember_helper_are_credited() {
-    // Strict-mode `.gts` requires `hash`, `array`, `concat`, `fn`, `mut`,
-    // `get` to be imported from `@ember/helper`; using them in `<template>`
-    // must keep the import credited. Regression for the case where these
-    // names were misclassified as ambient built-ins and never credited.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("form.gts"),
@@ -429,11 +393,6 @@ fn glimmer_strict_mode_helper_imports_from_ember_helper_are_credited() {
 
 #[test]
 fn glimmer_template_this_dot_member_emits_member_access() {
-    // Common pattern: a component class declares arrow-function fields
-    // whose ONLY call-site is `<Child @prop={{this.field}} />` in the
-    // surrounding `<template>` block. Without member-access emission for
-    // `this.field`, `unused-class-members` flags those fields as unused
-    // even though the template wires them into a child component.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("toolbar.gts"),
@@ -467,12 +426,6 @@ fn glimmer_template_this_dot_member_emits_member_access() {
 
 #[test]
 fn glimmer_template_this_dot_member_records_access_with_zero_imports() {
-    // Edge case the previous post-construction `apply_glimmer_template_usage`
-    // got wrong: a `.gts` file with NO module-scope imports but a
-    // `{{this.foo}}` template reference must still record the member access
-    // so unused-class-members tracking sees template-only `this.*` uses.
-    // The Angular-shaped fold-into-extractor path runs the scan even when
-    // imports are empty (only the binding-credit branch is a no-op).
     let info = parse_source_to_module(
         FileId(0),
         Path::new("no-imports.gts"),
@@ -499,13 +452,6 @@ fn glimmer_template_this_dot_member_records_access_with_zero_imports() {
 
 #[test]
 fn glimmer_file_with_two_class_components_credits_all_template_imports() {
-    // Glimmer allows multiple class components in one `.gts` file, each
-    // with its own class-body `<template>` block. Imports used by EITHER
-    // template must be credited, and `this.<member>` accesses from one
-    // class's template must still be recorded so unused-class-members can
-    // see them. The scanner doesn't know which class a `<template>` block
-    // belongs to (templates are accumulated file-wide), so the union of
-    // credited bindings is what we assert on.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("layout.gts"),
@@ -544,12 +490,6 @@ fn glimmer_file_with_two_class_components_credits_all_template_imports() {
 
 #[test]
 fn glimmer_file_with_two_template_only_components_credits_all_imports() {
-    // Top-level template-only components are a first-class Glimmer pattern:
-    // `const Foo = <template>...</template>;` defines a component without a
-    // backing class. A `.gts` file may export several such components and
-    // each can pull from distinct module-scope imports, so they must all be
-    // credited (the JS parser sees the template bodies as blank padding, so
-    // without the template scanner each import would surface as unused).
     let info = parse_source_to_module(
         FileId(0),
         Path::new("greetings.gts"),
@@ -571,9 +511,6 @@ fn glimmer_file_with_two_template_only_components_credits_all_imports() {
 
 #[test]
 fn glimmer_file_mixing_class_and_template_only_components_credits_all_imports() {
-    // Mixed shape: one class component and one top-level template-only
-    // component in the same file. Imports used by either should be
-    // credited regardless of which template-host shape consumes them.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("mixed.gts"),
@@ -593,10 +530,6 @@ fn glimmer_file_mixing_class_and_template_only_components_credits_all_imports() 
 
 #[test]
 fn glimmer_file_with_two_components_flags_only_genuinely_unused_imports() {
-    // Sanity guard against the multi-component path accidentally over-
-    // crediting: a third import that no template references must STILL
-    // surface as unused. Locks in that the union-of-templates scan does
-    // not silently credit every module-scope binding name.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("layout.gts"),
@@ -619,8 +552,6 @@ fn glimmer_file_with_two_components_flags_only_genuinely_unused_imports() {
 
 #[test]
 fn glimmer_file_without_template_still_flags_unused_imports() {
-    // Sanity: the scanner only ever ADDS credit; on a `.gts` file with no
-    // `<template>` block at all, an unused import must still surface.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("plain.gts"),

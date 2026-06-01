@@ -104,61 +104,38 @@ mod tests {
 
     #[test]
     fn leading_or_trailing_backtick_pads_with_spaces() {
-        // value starts with `: pad on left
         assert_eq!(format_inline_code("`a"), "`` `a ``");
-        // value ends with `: pad on right
         assert_eq!(format_inline_code("a`"), "`` a` ``");
-        // both ends
         assert_eq!(format_inline_code("`a`"), "`` `a` ``");
-        // pure backticks
         assert_eq!(format_inline_code("`"), "`` ` ``");
     }
 
     #[test]
     fn longest_run_wins_for_fence_length() {
-        // mixed runs; the longest is what determines the fence
         assert_eq!(format_inline_code("`a```b`"), "```` `a```b` ````");
     }
 
     #[test]
     fn command_link_injection_renders_as_inert_text() {
-        // The canonical injection probe from issue #480. The crafted
-        // export name renders verbatim inside a single-backtick code span
-        // because it contains no backticks; CommonMark does not interpret
-        // link syntax inside code spans.
         let crafted = "[click](command:vscode.open?evil)";
         let rendered = format_inline_code(crafted);
         assert_eq!(rendered, "`[click](command:vscode.open?evil)`");
-        // The `](` boundary that would close a link label and start a URL
-        // is now bracketed by backticks; no markdown renderer treats it
-        // as a link.
         assert!(rendered.starts_with('`') && rendered.ends_with('`'));
     }
 
     #[test]
     fn backtick_injection_via_breakout_is_neutralized() {
-        // Hostile identifier that contains a backtick: a naive
-        // `format!("`{}`", value)` would close the span and let the
-        // trailing `](command:foo)` render as a link. The escalating
-        // fence prevents this.
         let crafted = "evil`](command:foo)";
         let rendered = format_inline_code(crafted);
-        // Outer fence is two backticks (longest run inside is 1).
         assert_eq!(rendered, "``evil`](command:foo)``");
-        // The single inner backtick cannot close the surrounding fence,
-        // so the `](command:foo)` substring stays inside the code span.
         assert!(!rendered.contains("``](command:"));
     }
 
     #[test]
     fn multibyte_utf8_passes_through() {
-        // CJK identifier (legal in JS/TS).
         assert_eq!(format_inline_code("日本語"), "`日本語`");
-        // Cyrillic identifier (legal in JS/TS).
         assert_eq!(format_inline_code("Привет"), "`Привет`");
-        // Combining accents.
         assert_eq!(format_inline_code("café"), "`café`");
-        // Mixed: multibyte + backtick.
         assert_eq!(format_inline_code("日本`語"), "``日本`語``");
     }
 }

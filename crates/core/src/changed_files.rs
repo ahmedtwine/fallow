@@ -165,13 +165,6 @@ pub fn resolve_git_toplevel(cwd: &Path) -> Result<PathBuf, ChangedFilesError> {
     }
 
     let path = PathBuf::from(trimmed);
-    // `dunce::canonicalize` strips Windows `\\?\` verbatim prefix; without
-    // this, every changed file emitted by `git diff --name-only` got joined
-    // onto a verbatim-prefixed toplevel, and downstream `strip_prefix`
-    // comparisons against an `opts.root` that does NOT carry the verbatim
-    // prefix silently mismatched. The focus-filter then dropped EVERY
-    // finding on Windows, breaking `fallow audit` and `--changed-since`.
-    // On POSIX `dunce::canonicalize` is identical to `std::fs::canonicalize`.
     Ok(dunce::canonicalize(&path).unwrap_or(path))
 }
 
@@ -192,24 +185,6 @@ fn collect_git_paths(
         });
     }
 
-    // All callers use modes whose output is repository-root-relative
-    // (`git diff --name-only`, `git ls-files --full-name --others`). Joining
-    // against `toplevel` yields absolute paths that line up with what
-    // `analyze_project` emits when given a canonical workspace root, even if
-    // the LSP / CLI was invoked from a subdirectory.
-    //
-    // Windows-specific normalisation: `git diff --name-only` always emits
-    // forward-slashed paths (`src/legacy.ts`) regardless of OS. `PathBuf::join`
-    // on Windows appends with the native backslash separator without
-    // converting separators inside the appended segment, so the result is
-    // `C:\Users\...\Temp\test\src/legacy.ts` (mixed). File discovery via
-    // walkdir produces all-backslash paths. `FxHashSet::contains` compares
-    // bytes, not components, so the two forms mismatch and the focused
-    // duplicates / changed-since filters silently drop every finding.
-    // Convert forward slashes to backslashes inside the relative segment
-    // before joining so both sides land in native shape. On POSIX the
-    // segment is already in native form (forward slashes) so the conversion
-    // is a no-op.
     #[cfg(windows)]
     let normalise_segment = |line: &str| line.replace('/', "\\");
     #[cfg(not(windows))]
@@ -251,11 +226,6 @@ pub fn try_get_changed_files(
     root: &Path,
     git_ref: &str,
 ) -> Result<FxHashSet<PathBuf>, ChangedFilesError> {
-    // Validate the ref BEFORE resolving the toplevel so the security-relevant
-    // boundary check (rejects refs starting with `-`, etc.) runs even when
-    // `cwd` happens to not be a git repo. Otherwise an attacker-controlled
-    // `--changed-since=--upload-pack=evil` would leak through to
-    // `git rev-parse` instead of being rejected at validation.
     validate_git_ref(git_ref).map_err(ChangedFilesError::InvalidRef)?;
     let toplevel = resolve_git_toplevel(root)?;
     try_get_changed_files_with_toplevel(root, &toplevel, git_ref)
@@ -290,10 +260,6 @@ pub fn try_get_changed_files_with_toplevel(
         toplevel,
         &["diff", "--name-only", "HEAD"],
     )?);
-    // `--full-name` forces `ls-files` to emit repository-root-relative paths,
-    // matching `git diff`'s default. Without it, `ls-files` emits paths
-    // relative to cwd, which silently produces wrong joins when the caller
-    // invokes from a subdirectory.
     files.extend(collect_git_paths(
         cwd,
         toplevel,
@@ -369,7 +335,6 @@ pub fn filter_results_by_changed_files(
         .unresolved_imports
         .retain(|i| contains_normalized(&cf, &i.import.path));
 
-    // Unlisted deps: keep only if any importing file is changed
     results.unlisted_dependencies.retain(|d| {
         d.dep
             .imported_from
@@ -377,7 +342,6 @@ pub fn filter_results_by_changed_files(
             .any(|s| contains_normalized(&cf, &s.path))
     });
 
-    // Duplicate exports: filter locations to changed files, drop groups with < 2
     for dup in &mut results.duplicate_exports {
         dup.export
             .locations
@@ -387,30 +351,22 @@ pub fn filter_results_by_changed_files(
         .duplicate_exports
         .retain(|d| d.export.locations.len() >= 2);
 
-    // Circular deps: keep cycles where at least one file is changed
     results
         .circular_dependencies
         .retain(|c| c.cycle.files.iter().any(|f| contains_normalized(&cf, f)));
 
-    // Re-export cycles: same file-level treatment as circular deps; the
-    // cycle is file-scoped so any member changing counts as touching the
-    // cycle.
     results
         .re_export_cycles
         .retain(|c| c.cycle.files.iter().any(|f| contains_normalized(&cf, f)));
 
-    // Boundary violations: keep if the importing file changed
     results
         .boundary_violations
         .retain(|v| contains_normalized(&cf, &v.violation.from_path));
 
-    // Stale suppressions: keep if the file changed
     results
         .stale_suppressions
         .retain(|s| contains_normalized(&cf, &s.path));
 
-    // Unresolved catalog references: anchored at the consumer package.json,
-    // so keep only findings whose path is in the changed set.
     results
         .unresolved_catalog_references
         .retain(|r| contains_normalized(&cf, &r.reference.path));
@@ -418,9 +374,6 @@ pub fn filter_results_by_changed_files(
         .empty_catalog_groups
         .retain(|g| normalized_set_contains_path(&cf, &g.group.path));
 
-    // Unused / misconfigured dependency overrides: anchored at the declaring
-    // source file (pnpm-workspace.yaml or root package.json). Keep only
-    // findings whose source file is in the changed set.
     results
         .unused_dependency_overrides
         .retain(|o| contains_normalized(&cf, &o.entry.path));
@@ -581,7 +534,6 @@ mod tests {
 
     #[test]
     fn augment_git_failed_passthrough_for_other_errors() {
-        // Errors that aren't shallow-clone-related stay verbatim
         let stderr = "fatal: refusing to merge unrelated histories";
         let described = ChangedFilesError::GitFailed(stderr.to_owned()).describe();
         assert_eq!(described, stderr);
@@ -603,7 +555,6 @@ mod tests {
 
     #[test]
     fn try_get_changed_files_rejects_invalid_ref() {
-        // Validation runs before git invocation, so any path will do
         let err = try_get_changed_files(Path::new("/"), "--evil")
             .expect_err("leading-dash ref must be rejected");
         assert!(matches!(err, ChangedFilesError::InvalidRef(_)));
@@ -705,7 +656,6 @@ mod tests {
         let changed: FxHashSet<PathBuf> = FxHashSet::default();
         filter_results_by_changed_files(&mut results, &changed);
 
-        // Dependency-level issues survive even when no source files changed
         assert_eq!(results.unused_dependencies.len(), 1);
     }
 
@@ -767,7 +717,6 @@ mod tests {
             }));
 
         let mut changed: FxHashSet<PathBuf> = FxHashSet::default();
-        // only the imported file changed, not the importer
         changed.insert("/b.ts".into());
 
         filter_results_by_changed_files(&mut results, &changed);
@@ -840,7 +789,6 @@ mod tests {
 
         filter_duplication_by_changed_files(&mut report, &changed, Path::new(""));
         assert_eq!(report.clone_groups.len(), 1);
-        // stats recomputed from surviving groups
         assert_eq!(report.stats.clone_groups, 1);
         assert_eq!(report.stats.clone_instances, 2);
     }
@@ -932,15 +880,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Real git interactions (tempdir + git init). These exercise the
-    // path-resolution boundary between `git rev-parse --show-toplevel`,
-    // `git diff --name-only`, and `git ls-files --full-name --others` to
-    // catch regressions like issue #190 where the LSP workspace was a
-    // subdirectory of the git repo and changed-file paths were joined
-    // against the wrong base.
-    // -----------------------------------------------------------------------
-
     /// Initialize a temp git repo with a single committed file plus a tag
     /// at HEAD. Returns the canonical repo root.
     ///
@@ -1017,7 +956,6 @@ mod tests {
             changed.contains(&expected),
             "changed set should contain canonical {expected:?}; actual: {changed:?}"
         );
-        // Verify the bogus double-frontend path is NOT in the set
         let bogus = frontend.join("frontend/src/new.ts");
         assert!(
             !changed.contains(&bogus),
@@ -1074,7 +1012,6 @@ mod tests {
         run_git(&repo, &["add", "."]);
         run_git(&repo, &["commit", "--quiet", "-m", "add old"]);
         run_git(&repo, &["tag", "fallow-baseline-v2"]);
-        // Modify the tracked file (no commit, so diff-HEAD picks it up)
         std::fs::write(frontend.join("src/old.ts"), "export const x = 2;\n").unwrap();
 
         let changed = try_get_changed_files(&frontend, "fallow-baseline-v2").unwrap();
@@ -1100,11 +1037,6 @@ mod tests {
 
         let toplevel = resolve_git_toplevel(&frontend).unwrap();
         assert_eq!(toplevel, repo, "toplevel should equal canonical repo root");
-        // Use `dunce::canonicalize` rather than `std::fs::canonicalize` on
-        // the RHS so the assertion stays self-consistent on Windows.
-        // Production `resolve_git_toplevel` runs `dunce::canonicalize` (PR
-        // #566); `std::fs::canonicalize` on Windows would re-add the `\\?\`
-        // verbatim prefix and diverge from `toplevel`. POSIX is identical.
         assert_eq!(
             toplevel,
             dunce::canonicalize(&toplevel).unwrap(),

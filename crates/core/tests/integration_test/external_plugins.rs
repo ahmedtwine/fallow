@@ -61,19 +61,16 @@ fn external_plugin_entry_points_discovered() {
         })
         .collect();
 
-    // home.ts is a route file — external plugin marks src/routes/**/*.{ts,tsx} as entry points
     assert!(
         !unused_file_names.contains(&"home.ts".to_string()),
         "home.ts should be an entry point via external plugin, unused: {unused_file_names:?}"
     );
 
-    // setup.ts is always-used via external plugin
     assert!(
         !unused_file_names.contains(&"setup.ts".to_string()),
         "setup.ts should be always-used via external plugin, unused: {unused_file_names:?}"
     );
 
-    // orphan.ts is NOT covered by the plugin, should be unused
     assert!(
         unused_file_names.contains(&"orphan.ts".to_string()),
         "orphan.ts should be unused, found: {unused_file_names:?}"
@@ -87,7 +84,6 @@ fn plugin_entry_points_carry_correct_plugin_name() {
 
     let files = fallow_core::discover::discover_files(&config);
 
-    // Run plugins to get aggregated result
     let pkg = fallow_config::PackageJson::load(&root.join("package.json")).unwrap();
     let file_paths: Vec<PathBuf> = files.iter().map(|f| f.path.clone()).collect();
     let registry = fallow_core::plugins::PluginRegistry::new(
@@ -98,7 +94,6 @@ fn plugin_entry_points_carry_correct_plugin_name() {
     let entries =
         fallow_core::discover::discover_plugin_entry_points(&plugin_result, &config, &files);
 
-    // External plugin "my-framework" should attribute entry points with its name
     let home_entry = entries
         .iter()
         .find(|ep| ep.path.ends_with("home.ts"))
@@ -112,7 +107,6 @@ fn plugin_entry_points_carry_correct_plugin_name() {
         home_entry.source
     );
 
-    // setup.ts is always-used via the external plugin
     let setup_entry = entries
         .iter()
         .find(|ep| ep.path.ends_with("setup.ts"))
@@ -139,7 +133,6 @@ fn external_plugin_used_exports_respected() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // `default` and `loader` exports are marked as used by the plugin
     assert!(
         !unused_export_names.contains(&"default"),
         "default export should be used via external plugin used_exports"
@@ -149,7 +142,6 @@ fn external_plugin_used_exports_respected() {
         "loader export should be used via external plugin used_exports"
     );
 
-    // `unused` export in utils.ts (not an entry point) should be flagged
     assert!(
         unused_export_names.contains(&"unused"),
         "unused export in utils.ts should be flagged, found: {unused_export_names:?}"
@@ -168,7 +160,6 @@ fn external_plugin_tooling_dependencies_not_flagged() {
         .map(|d| d.dep.package_name.as_str())
         .collect();
 
-    // my-framework-cli is listed as tooling dependency in the external plugin
     assert!(
         !unused_dev_dep_names.contains(&"my-framework-cli"),
         "my-framework-cli should not be flagged (tooling dep), found: {unused_dev_dep_names:?}"
@@ -215,7 +206,6 @@ fn external_plugin_config_patterns_always_used() {
         })
         .collect();
 
-    // my-framework.config.ts is matched by config_patterns, should be always-used
     assert!(
         !unused_file_names.contains(&"my-framework.config.ts".to_string()),
         "my-framework.config.ts should be always-used via config_patterns, unused: {unused_file_names:?}"

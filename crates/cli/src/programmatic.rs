@@ -695,9 +695,6 @@ pub fn detect_duplication(options: &DuplicationOptions) -> ProgrammaticResult<se
             no_cache: resolved.no_cache,
             threads: resolved.threads,
             quiet: true,
-            // The programmatic API requires callers to provide concrete values
-            // (the public `DuplicationOptions` has no Optional scalars), so we
-            // forward each as an explicit override.
             mode: Some(options.mode.to_cli()),
             min_tokens: Some(options.min_tokens),
             min_lines: Some(options.min_lines),
@@ -722,8 +719,6 @@ pub fn detect_duplication(options: &DuplicationOptions) -> ProgrammaticResult<se
             explain_skipped: false,
             summary: false,
             group_by: None,
-            // The programmatic API returns structured JSON; performance panels go
-            // to stderr in human mode and are not part of the public contract.
             performance: false,
         };
         let result = crate::dupes::execute_dupes(&dupes_options)

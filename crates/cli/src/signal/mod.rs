@@ -114,8 +114,6 @@ fn platform_install() -> std::io::Result<()> {
 
 #[cfg(not(any(unix, windows)))]
 fn platform_install() -> std::io::Result<()> {
-    // No-op on unknown platforms; ScopedChild's Drop still cleans up
-    // normal early-return paths but signal-driven cleanup is unavailable.
     Ok(())
 }
 
@@ -160,9 +158,6 @@ mod tests {
 
     #[test]
     fn install_handlers_is_idempotent() {
-        // The first call may succeed or fail depending on test ordering
-        // (signal disposition is process-global), but the second call MUST
-        // be a no-op and return Ok.
         let _ = install_handlers();
         assert!(install_handlers().is_ok());
     }

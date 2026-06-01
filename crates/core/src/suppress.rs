@@ -3,10 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use fallow_config::{ResolvedConfig, RulesConfig, Severity};
 use rustc_hash::FxHashMap;
 
-// Re-export types from fallow-types
 pub use fallow_types::suppress::{IssueKind, Suppression, UnknownSuppressionKind};
 
-// Re-export parsing functions from fallow-extract
 pub use fallow_extract::suppress::parse_suppressions_from_source;
 
 use crate::discover::FileId;
@@ -84,7 +82,6 @@ fn severity_for_kind(rules: &RulesConfig, kind: IssueKind) -> Severity {
         IssueKind::UnresolvedCatalogReference => rules.unresolved_catalog_references,
         IssueKind::UnusedDependencyOverride => rules.unused_dependency_overrides,
         IssueKind::MisconfiguredDependencyOverride => rules.misconfigured_dependency_overrides,
-        // No corresponding rule. Short-circuited earlier via `NON_CORE_KINDS`.
         IssueKind::Complexity | IssueKind::CodeDuplication => Severity::Error,
     }
 }
@@ -95,12 +92,10 @@ fn severity_for_kind(rules: &RulesConfig, kind: IssueKind) -> Severity {
 /// consumed by core detectors). Without this exclusion, these suppressions
 /// would always appear stale since no core detector checks them.
 const NON_CORE_KINDS: &[IssueKind] = &[
-    // CLI-side: checked in health/flags/dupes commands, not in find_dead_code_full
     IssueKind::Complexity,
     IssueKind::CoverageGaps,
     IssueKind::FeatureFlag,
     IssueKind::CodeDuplication,
-    // Dep-level: not file-scoped, suppression path is via config ignoreDependencies
     IssueKind::UnusedDependency,
     IssueKind::UnusedDevDependency,
     IssueKind::UnlistedDependency,
@@ -111,9 +106,6 @@ const NON_CORE_KINDS: &[IssueKind] = &[
     IssueKind::UnresolvedCatalogReference,
     IssueKind::UnusedDependencyOverride,
     IssueKind::MisconfiguredDependencyOverride,
-    // Meta: stale-suppression itself is never consumed by any detector,
-    // so a `// fallow-ignore-next-line stale-suppression` comment would
-    // always appear stale. Exclude to prevent recursive confusion.
     IssueKind::StaleSuppression,
 ];
 
@@ -277,8 +269,6 @@ impl<'a> SuppressionContext<'a> {
         for (&file_id, supps) in &self.by_file {
             let used = &self.used[&file_id];
             let path = &graph.modules[file_id.0 as usize].path;
-            // Resolve rules once per file so per-file `overrides.rules`
-            // apply uniformly to all suppressions in this module.
             let file_rules = config.resolve_rules_for_path(path);
 
             for (i, s) in supps.iter().enumerate() {
@@ -286,20 +276,12 @@ impl<'a> SuppressionContext<'a> {
                     continue;
                 }
 
-                // Skip suppression kinds that are only checked in the CLI layer.
-                // These were never presented to the core detectors, so they
-                // appear unconsumed, but are not actually stale.
                 if let Some(kind) = s.kind
                     && NON_CORE_KINDS.contains(&kind)
                 {
                     continue;
                 }
 
-                // Skip suppressions whose target kind is disabled in the
-                // resolved rules for this file. Blanket suppressions
-                // (`s.kind == None`) are never skipped on this basis: the
-                // marker is not anchored to any specific dormant kind, so
-                // "nothing matched" still means genuinely stale.
                 if let Some(kind) = s.kind
                     && severity_for_kind(&file_rules, kind) == Severity::Off
                 {
@@ -322,10 +304,6 @@ impl<'a> SuppressionContext<'a> {
             }
         }
 
-        // Surface every unknown suppression token (typo, obsolete kind name, kind
-        // renamed in a newer fallow release) as a stale suppression. Without
-        // this, the entire marker would be silently discarded and the user
-        // would never learn the suppression was rejected. See issue #449.
         for (&file_id, unknowns) in &self.unknown_kinds {
             let path = &graph.modules[file_id.0 as usize].path;
             for u in *unknowns {
@@ -388,11 +366,9 @@ impl<'a> SuppressionContext<'a> {
 #[must_use]
 pub fn is_suppressed(suppressions: &[Suppression], line: u32, kind: IssueKind) -> bool {
     suppressions.iter().any(|s| {
-        // File-wide suppression
         if s.line == 0 {
             return s.kind.is_none() || s.kind == Some(kind);
         }
-        // Line-specific suppression
         s.line == line && (s.kind.is_none() || s.kind == Some(kind))
     })
 }
@@ -437,7 +413,6 @@ mod tests {
             severity_for_kind(&rules, IssueKind::BoundaryViolation),
             Severity::Off
         );
-        // PrivateTypeLeak defaults to Off across the project.
         assert_eq!(
             severity_for_kind(&rules, IssueKind::PrivateTypeLeak),
             Severity::Off
@@ -567,10 +542,7 @@ mod tests {
     fn parse_unknown_kind_surfaces_as_unknown() {
         let source = "// fallow-ignore-next-line typo-kind\nexport const foo = 1;\n";
         let parsed = parse_suppressions_from_source(source);
-        // No known kinds on the marker, so no suppression is recorded.
         assert!(parsed.suppressions.is_empty());
-        // The unknown token is preserved for downstream stale-suppression
-        // reporting (see issue #449).
         assert_eq!(parsed.unknown_kinds.len(), 1);
         assert_eq!(parsed.unknown_kinds[0].token, "typo-kind");
     }
@@ -642,7 +614,6 @@ mod tests {
         assert!(is_file_suppressed(&suppressions, IssueKind::UnusedFile));
         assert!(!is_file_suppressed(&suppressions, IssueKind::UnusedExport));
 
-        // Line-specific suppression should not count as file-wide
         let suppressions = vec![Suppression {
             line: 5,
             comment_line: 4,
@@ -665,11 +636,9 @@ mod tests {
         let suppressions = parse_suppressions(&parser_return.program.comments, source).suppressions;
         assert_eq!(suppressions.len(), 2);
 
-        // File-wide suppression
         assert_eq!(suppressions[0].line, 0);
         assert!(suppressions[0].kind.is_none());
 
-        // Next-line suppression with kind
         assert_eq!(suppressions[1].line, 3); // suppresses line 3 (export const foo)
         assert_eq!(suppressions[1].kind, Some(IssueKind::UnusedExport));
     }
@@ -716,11 +685,9 @@ mod tests {
                 kind: None, // blanket suppress on line 5
             },
         ];
-        // File-wide suppression only covers UnusedExport
         assert!(is_suppressed(&suppressions, 10, IssueKind::UnusedExport));
         assert!(!is_suppressed(&suppressions, 10, IssueKind::UnusedType));
 
-        // Line 5 blanket suppression covers everything on line 5
         assert!(is_suppressed(&suppressions, 5, IssueKind::UnusedType));
         assert!(is_suppressed(&suppressions, 5, IssueKind::UnusedExport));
     }
@@ -786,7 +753,6 @@ mod tests {
     /// being classified, preventing silent false-positive stale reports.
     #[test]
     fn all_issue_kinds_classified_for_stale_detection() {
-        // Kinds checked by core detectors via SuppressionContext
         let core_kinds = [
             IssueKind::UnusedFile,
             IssueKind::UnusedExport,
@@ -799,7 +765,6 @@ mod tests {
             IssueKind::BoundaryViolation,
         ];
 
-        // All variants that exist
         let all_kinds = [
             IssueKind::UnusedFile,
             IssueKind::UnusedExport,

@@ -1,5 +1,3 @@
-//! Step 5: Clone group extraction from LCP intervals.
-
 use super::FileData;
 
 /// A raw clone group before conversion to `CloneGroup`.
@@ -30,8 +28,6 @@ pub(super) fn extract_clone_groups(
         return vec![];
     }
 
-    // Stack-based LCP interval extraction.
-    // Each stack entry: (lcp_value, start_index_in_sa).
     let mut stack: Vec<(usize, usize)> = Vec::new();
     let mut groups: Vec<RawGroup> = Vec::new();
     let focus_prefix = focus_file_ids.map(|ids| build_focus_prefix(sa, file_of, ids));
@@ -52,10 +48,8 @@ pub(super) fn extract_clone_groups(
             start = top_start;
 
             if top_lcp >= min_tokens {
-                // The interval [start-1 .. i-1] shares a common prefix of
-                // length `top_lcp`.
                 let interval_begin = start - 1;
-                let interval_end = i; // exclusive
+                let interval_end = i;
                 if let Some(prefix) = focus_prefix.as_deref()
                     && !interval_has_focus(prefix, interval_begin, interval_end)
                 {
@@ -120,11 +114,10 @@ fn build_raw_group(
     for &pos in &sa[interval_begin..interval_end] {
         let fid = file_of[pos];
         if fid == usize::MAX {
-            continue; // sentinel position
+            continue;
         }
         let offset_in_file = pos - file_offsets[fid];
 
-        // Verify the clone doesn't extend beyond the file boundary.
         if offset_in_file + length > files[fid].hashed_tokens.len() {
             continue;
         }
@@ -136,8 +129,6 @@ fn build_raw_group(
         return None;
     }
 
-    // Remove overlapping instances within the same file.
-    // Sort by (file_id, offset) and remove overlaps.
     instances.sort_unstable();
     let mut deduped: Vec<(usize, usize)> = Vec::with_capacity(instances.len());
     for &(fid, offset) in &instances {
@@ -145,7 +136,7 @@ fn build_raw_group(
             && fid == last_fid
             && offset < last_offset + length
         {
-            continue; // overlapping within the same file
+            continue;
         }
         deduped.push((fid, offset));
     }

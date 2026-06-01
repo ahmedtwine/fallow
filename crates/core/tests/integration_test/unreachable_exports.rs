@@ -34,7 +34,6 @@ fn unreachable_mixed_exports_flags_unused_export() {
     let results = analyze_fixture("unreachable-mixed-exports");
     let unused_export_names = unused_export_names(&results);
 
-    // unusedHelper is exported but never imported by anyone — should be flagged
     assert!(
         unused_export_names.contains(&"unusedHelper"),
         "unusedHelper should be detected as unused export, found: {unused_export_names:?}"
@@ -46,8 +45,6 @@ fn unreachable_mixed_exports_flags_export_only_used_by_unreachable() {
     let results = analyze_fixture("unreachable-mixed-exports");
     let unused_export_names = unused_export_names(&results);
 
-    // usedHelper is imported by setup.ts, but setup.ts is also unreachable,
-    // so the reference shouldn't count — usedHelper should be flagged
     assert!(
         unused_export_names.contains(&"usedHelper"),
         "usedHelper (only referenced by unreachable module) should be flagged, found: {unused_export_names:?}"

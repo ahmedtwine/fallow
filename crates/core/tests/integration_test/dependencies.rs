@@ -4,8 +4,6 @@ use fallow_config::{FallowConfig, OutputFormat, RulesConfig};
 
 use super::common::{create_config, fixture_path};
 
-// ── Vitest __mocks__ virtual specifiers ───────────────────────
-
 #[test]
 fn vitest_mocks_specifiers_not_flagged_as_unlisted_dep() {
     let root = fixture_path("vitest-mocks-virtual");
@@ -24,14 +22,8 @@ fn vitest_mocks_specifiers_not_flagged_as_unlisted_dep() {
     );
 }
 
-// ── Vitest __mocks__ virtual specifiers in monorepo workspace ─────
-
 #[test]
 fn vitest_mocks_scoped_specifiers_not_flagged_in_workspace_monorepo() {
-    // Vitest is only in apps/mrv/package.json (workspace), not root package.json.
-    // The virtual_package_suffixes contributed by VitestPlugin must be merged from
-    // the workspace plugin result into the root aggregated result, otherwise
-    // @scope/__mocks__ specifiers are still flagged as unlisted dependencies.
     let root = fixture_path("vitest-mocks-workspace");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -53,8 +45,6 @@ fn vitest_mocks_scoped_specifiers_not_flagged_in_workspace_monorepo() {
         );
     }
 }
-
-// ── Unlisted dependencies integration ──────────────────────────
 
 #[test]
 fn unlisted_dependencies_detected() {
@@ -104,8 +94,6 @@ fn unlisted_re_export_dependency_reports_re_export_line() {
     assert_eq!(finding.dep.imported_from.len(), 1);
     assert_eq!(finding.dep.imported_from[0].line, 2);
 }
-
-// ── Unresolved imports integration ─────────────────────────────
 
 #[test]
 fn unresolved_imports_detected() {
@@ -203,8 +191,6 @@ export const main = () => [Icon, metadata, generated, local];
     );
 }
 
-// ── Unused devDependencies ─────────────────────────────────────
-
 #[test]
 fn unused_dev_dependency_detected() {
     let root = fixture_path("unused-dev-deps");
@@ -222,8 +208,6 @@ fn unused_dev_dependency_detected() {
         "my-custom-dev-tool should be detected as unused dev dependency, found: {unused_dev_dep_names:?}"
     );
 }
-
-// ── Unused optionalDependencies ───────────────────────────────
 
 #[test]
 fn unused_optional_dependency_detected() {
@@ -284,8 +268,6 @@ fn unused_workspace_dependency_reports_other_workspace_usage() {
         unlisted.dep.imported_from[0].path.display()
     );
 }
-
-// ── Peer dependencies ─────────────────────────────────────────
 
 #[test]
 fn peer_dependency_of_used_installed_package_is_not_unused() {
@@ -394,15 +376,12 @@ fn peer_dependency_of_parent_installed_package_is_not_unused() {
     );
 }
 
-// ── Package.json `imports` field (#subpath imports) ─────────
-
 #[test]
 fn subpath_imports_resolve_correctly() {
     let root = fixture_path("subpath-imports");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // #utils and #components/Button should resolve — no unresolved imports
     assert!(
         results.unresolved_imports.is_empty(),
         "# imports should resolve via package.json imports field, got unresolved: {:?}",
@@ -413,7 +392,6 @@ fn subpath_imports_resolve_correctly() {
             .collect::<Vec<_>>()
     );
 
-    // #utils and #components/Button should not be unlisted deps
     assert!(
         results.unlisted_dependencies.is_empty(),
         "# imports should not be reported as unlisted deps, got: {:?}",
@@ -424,7 +402,6 @@ fn subpath_imports_resolve_correctly() {
             .collect::<Vec<_>>()
     );
 
-    // The `unused` export in utils/index.ts should still be detected
     let unused_export_names: Vec<&str> = results
         .unused_exports
         .iter()
@@ -651,14 +628,8 @@ fn package_exports_array_fallback_resolves_self_package_source() {
     );
 }
 
-// ── Issue #124: ignorePatterns applied to workspace package.json discovery ──
-
 #[test]
 fn ignore_patterns_applied_to_workspace_package_json_for_unused_deps() {
-    // Issue #124: when `.fallowrc.json` excludes `**/dist/**`, fallow must also
-    // skip `packages/*/dist/package.json` (build artifacts from ng-packagr, tsc,
-    // Rollup, etc.) during unused-dependency scanning. Without the fix, every
-    // dep listed in the build-artifact package.json is reported as unused.
     let root = fixture_path("ignore-patterns-workspace-package-json");
     let config = FallowConfig {
         schema: None,
@@ -699,8 +670,6 @@ fn ignore_patterns_applied_to_workspace_package_json_for_unused_deps() {
 
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Every unused-dep finding whose path leads through a `dist/` directory is
-    // a false positive — that package.json should have been ignored entirely.
     let dist_findings: Vec<String> = results
         .unused_dependencies
         .iter()
@@ -717,9 +686,6 @@ fn ignore_patterns_applied_to_workspace_package_json_for_unused_deps() {
         "deps from dist/package.json must not be reported when dist/ is ignored: {dist_findings:?}"
     );
 
-    // `is-odd` is only declared in `packages/my-lib/package.json` and never
-    // imported — it should still be reported. This guards against a regression
-    // where the ignore check accidentally skips real workspace package.json files.
     let reported: Vec<&str> = results
         .unused_dependencies
         .iter()

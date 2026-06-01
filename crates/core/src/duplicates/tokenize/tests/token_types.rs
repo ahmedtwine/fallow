@@ -1,7 +1,5 @@
 use super::*;
 
-// ── token_types: point_span edge cases ───────────────────────
-
 #[test]
 fn point_span_at_zero() {
     let span = point_span(0);
@@ -23,8 +21,6 @@ fn point_span_near_u32_max() {
     assert_eq!(span.start, u32::MAX - 1);
     assert_eq!(span.end, u32::MAX);
 }
-
-// ── token_types: SourceToken construction ────────────────────
 
 #[test]
 fn source_token_construction_and_field_access() {
@@ -48,8 +44,6 @@ fn source_token_clone() {
     assert_eq!(cloned.span.end, token.span.end);
     assert!(matches!(&cloned.kind, TokenKind::Identifier(n) if n == "foo"));
 }
-
-// ── token_types: FileTokens construction ─────────────────────
 
 #[test]
 fn file_tokens_direct_construction() {
@@ -103,8 +97,6 @@ fn file_tokens_clone() {
     assert_eq!(cloned.source, "null");
     assert_eq!(cloned.line_count, 1);
 }
-
-// ── token_types: TokenKind variants ──────────────────────────
 
 #[test]
 fn token_kind_equality_and_hash() {

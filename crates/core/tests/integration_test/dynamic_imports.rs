@@ -1,7 +1,5 @@
 use super::common::{create_config, fixture_path};
 
-// ── Dynamic imports ────────────────────────────────────────────
-
 #[test]
 fn dynamic_import_makes_module_reachable() {
     let root = fixture_path("dynamic-imports");
@@ -21,13 +19,11 @@ fn dynamic_import_makes_module_reachable() {
         })
         .collect();
 
-    // lazy.ts is dynamically imported, so it should be reachable
     assert!(
         !unused_file_names.contains(&"lazy.ts".to_string()),
         "lazy.ts should be reachable via dynamic import, unused files: {unused_file_names:?}"
     );
 
-    // orphan.ts should still be unused
     assert!(
         unused_file_names.contains(&"orphan.ts".to_string()),
         "orphan.ts should be unused, found: {unused_file_names:?}"
@@ -147,19 +143,6 @@ fn vitest_vi_mock_makes_auto_mock_reachable() {
 
 #[test]
 fn vitest_vi_mock_factory_credits_target_and_skips_auto_mock_synthesis() {
-    // Issue #311: when vi.mock is called with a factory function, vitest
-    // does NOT consult the `__mocks__/<file>` sibling. Two failures must
-    // not happen:
-    //   1. The target file (`src/bar/foo.ts`) must NOT be flagged as
-    //      unused-file even though no other file imports it directly.
-    //   2. fallow must NOT synthesize the `__mocks__/<file>` import in
-    //      the factory case, since synthesizing would surface as a
-    //      spurious `unresolved-import` whenever the sibling does not
-    //      exist (the user did not write that path).
-    // The target is credited as side-effect reachability only: vi.mock needs
-    // the module path to exist, but the factory does not consume the original
-    // module exports. Unused exports in the target should therefore stay
-    // visible.
     let root = fixture_path("issue-311-vi-mock-factory-target");
     let config = create_config(root.clone());
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -221,14 +204,6 @@ fn vitest_vi_mock_factory_credits_target_and_skips_auto_mock_synthesis() {
 
 #[test]
 fn vitest_vi_mock_without_sibling_does_not_surface_unresolved_import() {
-    // Issue #378: `vi.mock('./foo')` without a `__mocks__/foo` sibling on disk
-    // must NOT produce an `unresolved-import` finding pointing at the
-    // synthesised `__mocks__/<file>` path. Vitest's auto-mock system works
-    // in-memory and does not require the sibling the way Jest does.
-    //
-    // The fixture exercises both shapes: a tsconfig path alias
-    // (`@/utils/exportElementAsPng`) and a relative specifier
-    // (`../utils/sibling`). Neither has a `__mocks__/` sibling on disk.
     let root = fixture_path("issue-378-vi-mock-no-sibling");
     let config = create_config(root.clone());
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -243,8 +218,6 @@ fn vitest_vi_mock_without_sibling_does_not_surface_unresolved_import() {
         "vi.mock auto-mock synthesis with no on-disk sibling must not surface as `unresolved-import`, got: {unresolved:?}"
     );
 
-    // Sanity: the real mock targets stay credited (not flagged unused) and
-    // the test file itself is reachable through normal test discovery.
     let unused_files: Vec<String> = results
         .unused_files
         .iter()
@@ -267,8 +240,6 @@ fn vitest_vi_mock_without_sibling_does_not_surface_unresolved_import() {
     );
 }
 
-// ── Dynamic import pattern resolution ──────────────────────────
-
 #[test]
 fn dynamic_import_pattern_makes_files_reachable() {
     let root = fixture_path("dynamic-import-patterns");
@@ -288,7 +259,6 @@ fn dynamic_import_pattern_makes_files_reachable() {
         })
         .collect();
 
-    // Locale files should be reachable via template literal pattern
     assert!(
         !unused_file_names.contains(&"en.ts".to_string()),
         "en.ts should be reachable via template literal import pattern, unused: {unused_file_names:?}"
@@ -298,7 +268,6 @@ fn dynamic_import_pattern_makes_files_reachable() {
         "fr.ts should be reachable via template literal import pattern, unused: {unused_file_names:?}"
     );
 
-    // Page files should be reachable via string concatenation pattern
     assert!(
         !unused_file_names.contains(&"home.ts".to_string()),
         "home.ts should be reachable via concat import pattern, unused: {unused_file_names:?}"
@@ -308,20 +277,16 @@ fn dynamic_import_pattern_makes_files_reachable() {
         "about.ts should be reachable via concat import pattern, unused: {unused_file_names:?}"
     );
 
-    // utils.ts should be reachable via static dynamic import
     assert!(
         !unused_file_names.contains(&"utils.ts".to_string()),
         "utils.ts should be reachable via static dynamic import"
     );
 
-    // orphan.ts should still be unused
     assert!(
         unused_file_names.contains(&"orphan.ts".to_string()),
         "orphan.ts should be detected as unused file, found: {unused_file_names:?}"
     );
 }
-
-// ── Vite import.meta.glob ──────────────────────────────────────
 
 #[test]
 fn vite_glob_makes_files_reachable() {
@@ -342,7 +307,6 @@ fn vite_glob_makes_files_reachable() {
         })
         .collect();
 
-    // Components matched by import.meta.glob('./components/*.ts') should be reachable
     assert!(
         !unused_file_names.contains(&"Button.ts".to_string()),
         "Button.ts should be reachable via import.meta.glob, unused: {unused_file_names:?}"
@@ -352,14 +316,11 @@ fn vite_glob_makes_files_reachable() {
         "Modal.ts should be reachable via import.meta.glob, unused: {unused_file_names:?}"
     );
 
-    // orphan.ts is outside components/, should be unused
     assert!(
         unused_file_names.contains(&"orphan.ts".to_string()),
         "orphan.ts should be unused (not matched by glob), found: {unused_file_names:?}"
     );
 }
-
-// ── Webpack require.context ────────────────────────────────────
 
 #[test]
 fn webpack_context_makes_files_reachable() {
@@ -380,7 +341,6 @@ fn webpack_context_makes_files_reachable() {
         })
         .collect();
 
-    // Icons matched by require.context('./icons', false) should be reachable
     assert!(
         !unused_file_names.contains(&"arrow.ts".to_string()),
         "arrow.ts should be reachable via require.context, unused: {unused_file_names:?}"
@@ -390,7 +350,6 @@ fn webpack_context_makes_files_reachable() {
         "star.ts should be reachable via require.context, unused: {unused_file_names:?}"
     );
 
-    // orphan.ts is outside icons/, should be unused
     assert!(
         unused_file_names.contains(&"orphan.ts".to_string()),
         "orphan.ts should be unused (not in icons/), found: {unused_file_names:?}"

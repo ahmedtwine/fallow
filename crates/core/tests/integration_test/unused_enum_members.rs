@@ -12,7 +12,6 @@ fn unused_enum_members_detected_by_access_pattern() {
         .map(|m| m.member.member_name.as_str())
         .collect();
 
-    // Color: only Red is accessed, Green and Blue should be unused
     assert!(
         !unused_enum_member_names.contains(&"Red"),
         "Red should NOT be unused (accessed via Color.Red)"
@@ -39,7 +38,6 @@ fn partially_used_enum_members() {
         .map(|m| m.member.member_name.as_str())
         .collect();
 
-    // HttpStatus: Ok and NotFound are accessed, InternalError and BadGateway are unused
     assert!(
         !unused_enum_member_names.contains(&"Ok"),
         "Ok should NOT be unused (accessed via HttpStatus.Ok)"
@@ -70,7 +68,6 @@ fn whole_object_use_suppresses_enum_members() {
         .map(|m| m.member.member_name.as_str())
         .collect();
 
-    // LogLevel is used via Object.values — all members should be considered used
     assert!(
         !unused_enum_member_names.contains(&"Debug"),
         "Debug should NOT be unused (Object.values), found: {unused_enum_member_names:?}"

@@ -22,10 +22,6 @@ pub struct CombinedOptions<'a> {
     pub fail_on_issues: bool,
     pub sarif_file: Option<&'a std::path::Path>,
     pub changed_since: Option<&'a str>,
-    // `diff_file` was removed: the combined pipeline (and every
-    // subsystem it dispatches) reads the parsed diff index from the
-    // process-wide cache in `crate::report::ci::diff_filter::shared_diff_index()`,
-    // populated by `main()`.
     pub baseline: Option<&'a std::path::Path>,
     pub save_baseline: Option<&'a std::path::Path>,
     pub production: bool,
@@ -77,8 +73,6 @@ pub fn run_combined(opts: &CombinedOptions<'_>) -> ExitCode {
     let mut dupes_result: Option<DupesResult> = None;
     let mut health_result: Option<HealthResult> = None;
 
-    // Build CheckOptions up front. References to `filters` and `trace_opts` need
-    // to outlive both the sequential and parallel branches below.
     let filters = IssueFilters::default();
     let trace_opts = TraceOptions {
         trace_export: None,
@@ -122,16 +116,6 @@ pub fn run_combined(opts: &CombinedOptions<'_>) -> ExitCode {
         None
     };
 
-    // When both check and dupes are requested, run them concurrently. They share
-    // no mutable state: each writes to a distinct cache subdir (parse-vN vs
-    // dupes-tokens-vN), each returns a buffered result printed centrally below,
-    // and each sorts its own outputs internally so rayon's work-stealing order
-    // does not leak into the rendered output.
-    //
-    // Trade-off: the opportunistic share_files_with_dupes path (which let dupes
-    // skip discover_files when health was also running and production flags
-    // matched) is forfeited here. That saved ~8ms warm; the parallel join saves
-    // ~100ms by overlapping the dupes suffix array with check's analyze pass.
     if let (Some(check_opts), true) = (check_opts.as_ref(), opts.run_dupes) {
         let (check_res, dupes_res) = rayon::join(
             || crate::check::execute_check(check_opts),
@@ -170,9 +154,6 @@ pub fn run_combined(opts: &CombinedOptions<'_>) -> ExitCode {
         report::print_performance(timings, opts.output);
     }
 
-    // Run health (complexity analysis)
-    // When check already ran, reuse its parsed modules (with complexity data) to avoid
-    // re-parsing all files. Saves ~1.9s on 21K-file projects like next.js.
     if opts.run_health {
         let health_opts = build_health_opts(opts);
         let check_production = opts.production_dead_code.unwrap_or(opts.production);
@@ -217,9 +198,6 @@ pub fn run_combined(opts: &CombinedOptions<'_>) -> ExitCode {
         health_result.as_ref(),
     );
 
-    // Best-effort: record this run into the local Impact store's whole-project
-    // track. No-op unless this is a genuine whole-project run (see the gate in
-    // `record_combined_impact`); never affects exit code or output.
     record_combined_impact(
         opts,
         check_result.as_ref(),
@@ -251,9 +229,6 @@ fn is_whole_project_run(opts: &CombinedOptions<'_>) -> bool {
         && opts.production_dead_code != Some(true)
         && opts.production_health != Some(true)
         && opts.production_dupes != Some(true);
-    // MAINTENANCE: any NEW scope-narrowing knob added to `CombinedOptions` (a new
-    // subset/filter/scope flag) must be disqualified here too, or it silently
-    // pollutes the whole-project trend with a non-whole-project denominator.
     all_analyses && no_scope_narrowing && no_diff_filter && no_production
 }
 
@@ -328,8 +303,6 @@ fn print_combined_report(
     health_result: Option<&HealthResult>,
     total_elapsed: std::time::Duration,
 ) -> Result<u8, ExitCode> {
-    // Build ownership resolver once for human/compact/markdown rendering.
-    // Structured formats (JSON/SARIF/CodeClimate) have their own envelope and skip grouping.
     let codeowners_cfg = check_result
         .map(|r| &r.config)
         .or_else(|| health_result.map(|r| &r.config))
@@ -434,7 +407,6 @@ fn print_human_sections(
     let mut max_exit: u8 = 0;
     let show_headers = matches!(opts.output, OutputFormat::Human) && !opts.quiet;
 
-    // Orientation header: vital signs + analysis scope + start-here nudge
     if show_headers {
         if let Some(result) = health_result {
             print_orientation_header(result, check_result, opts.root);
@@ -510,9 +482,6 @@ fn print_human_sections(
             opts.summary,
             !show_headers,
             false,
-            // Combined-mode orientation header already rendered the score /
-            // trend; suppress here to avoid the duplicate `Health score:` line
-            // (issue #557).
             true,
         );
         max_exit = max_exit.max(exit_code_to_u8(code));
@@ -530,7 +499,6 @@ fn handle_regression_and_summary(
     dupes_result: Option<&DupesResult>,
     health_result: Option<&HealthResult>,
 ) {
-    // Regression exit code (applies regardless of output format)
     if let Some(result) = check_result
         && let Some(ref outcome) = result.regression
     {
@@ -542,7 +510,6 @@ fn handle_regression_and_summary(
         }
     }
 
-    // Summary on failure
     if *max_exit > 0 && !quiet {
         print_failure_summary(root, check_result, dupes_result, health_result);
     }
@@ -584,13 +551,9 @@ fn print_failure_summary(
         }
     }
     if !parts.is_empty() {
-        // Repeat start-here nudge so it's visible at the bottom of scrolled output.
-        // Render workspace-relative paths (issue #547): bare basenames like
-        // `index.ts` are ambiguous in Nx / Angular / Rust-workspace layouts.
         let nudge = health_result
             .filter(|r| !r.report.targets.is_empty())
             .map(|r| {
-                // Prefer non-test/fixture target; skip nudge if all targets are noise
                 if let Some(top) = r.report.targets.iter().find(|t| !is_test_path(&t.path)) {
                     let name = report::format_display_path(&top.path, root);
                     format!(" \u{2014} start with {name}")
@@ -617,12 +580,6 @@ fn print_combined_json(
     explain: bool,
     config_fixable: bool,
 ) -> ExitCode {
-    // Build the envelope shell as a typed `CombinedOutput`, then convert
-    // to a `serde_json::Value` so the remaining sub-result post-processing
-    // (path stripping, action injection, regression / baseline /
-    // baseline_deltas insertion) can continue to run as `Value` mutations.
-    // The sub-result Options stay `None` here and the per-pass branches
-    // below splice the populated values in.
     let envelope = crate::output_envelope::CombinedOutput {
         schema_version: fallow_types::envelope::SchemaVersion(crate::report::SCHEMA_VERSION),
         version: fallow_types::envelope::ToolVersion(env!("CARGO_PKG_VERSION").to_string()),
@@ -766,7 +723,6 @@ fn print_combined_sarif(
         }
     }
 
-    // Duplication SARIF builder is pub(super) — serialize the report as a simple run
     if let Some(result) = dupes.filter(|r| !r.report.clone_groups.is_empty()) {
         let run = serde_json::json!({
             "tool": {
@@ -894,10 +850,6 @@ fn run_combined_dupes(
         no_cache: opts.no_cache,
         threads: opts.threads,
         quiet: opts.quiet,
-        // Combined mode has already resolved CLI overrides against
-        // `dupes_cfg`; pass each as an explicit `Some(...)` so
-        // `build_dupes_config` treats them as authoritative instead of
-        // re-merging with the toml values a second time.
         mode: Some(
             opts.dupes_mode
                 .unwrap_or_else(|| DupesMode::from(dupes_cfg.mode)),
@@ -925,9 +877,6 @@ fn run_combined_dupes(
         explain_skipped: opts.explain_skipped,
         summary: opts.summary,
         group_by: opts.group_by,
-        // Combined mode renders the bare-`fallow` pipeline panel which already
-        // shows the duplication stage; the standalone dupes panel is suppressed
-        // here to avoid double-printing.
         performance: false,
     };
 
@@ -1014,9 +963,6 @@ fn print_orientation_header(
     check: Option<&CheckResult>,
     root: &std::path::Path,
 ) {
-    // Health score + trend (combined-mode fix for issue #557). The helpers
-    // early-return when the score / trend is absent, so this is a no-op for
-    // bare `fallow` without `--score` or `--trend`.
     let mut score_lines: Vec<String> = Vec::new();
     report::render_health_score(&mut score_lines, &health.report);
     report::render_health_trend(&mut score_lines, &health.report);
@@ -1025,7 +971,6 @@ fn print_orientation_header(
         eprintln!("{line}");
     }
 
-    // Vital signs line (skip when trend table is active — it replaces vital signs)
     if let Some(ref vs) = health.report.vital_signs
         && health.report.health_trend.is_none()
     {
@@ -1081,8 +1026,6 @@ fn print_orientation_header(
             ));
         }
         if !parts.is_empty() {
-            // The score / trend block above already emits a trailing blank
-            // line; skip the leading separator here to avoid a double blank.
             if !rendered_score {
                 eprintln!();
             }
@@ -1095,7 +1038,6 @@ fn print_orientation_header(
         }
     }
 
-    // Analysis scope: file count + active plugins
     let files = health.report.summary.files_analyzed;
     let config = check.map_or(&health.config, |c| &c.config);
     let plugin_count = config.external_plugins.len();
@@ -1122,18 +1064,15 @@ fn print_orientation_header(
         eprintln!("{}", scope.dimmed());
     }
 
-    // Entry-point detection summary
     if let Some(result) = check {
         print_entry_point_summary(&result.results);
     }
 
-    // "Start here" nudge: point to top refactoring target
     if !health.report.targets.is_empty() {
         let target_count = health.report.targets.len();
         let total_issues = check.map_or(0, |c| c.results.total_issues());
 
         if total_issues > 500 {
-            // Scale-aware: suggest scoping instead of a specific file
             eprintln!(
                 "{}",
                 format!(
@@ -1142,36 +1081,31 @@ fn print_orientation_header(
                 )
                 .dimmed()
             );
+        } else if let Some(top) = health
+            .report
+            .targets
+            .iter()
+            .find(|t| !is_test_path(&t.path))
+        {
+            let file_name = report::format_display_path(&top.path, root);
+            eprintln!(
+                "{}",
+                format!(
+                    "  {target_count} refactoring target{} \u{2014} start with {file_name} ({})",
+                    if target_count == 1 { "" } else { "s" },
+                    top.category.label()
+                )
+                .dimmed()
+            );
         } else {
-            // Prefer non-test target; skip nudge if all targets are noise.
-            // Render workspace-relative paths (issue #547): bare basenames
-            // like `index.ts` are ambiguous in monorepo layouts.
-            if let Some(top) = health
-                .report
-                .targets
-                .iter()
-                .find(|t| !is_test_path(&t.path))
-            {
-                let file_name = report::format_display_path(&top.path, root);
-                eprintln!(
-                    "{}",
-                    format!(
-                        "  {target_count} refactoring target{} \u{2014} start with {file_name} ({})",
-                        if target_count == 1 { "" } else { "s" },
-                        top.category.label()
-                    )
-                    .dimmed()
-                );
-            } else {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "  {target_count} refactoring target{}",
-                        if target_count == 1 { "" } else { "s" },
-                    )
-                    .dimmed()
-                );
-            }
+            eprintln!(
+                "{}",
+                format!(
+                    "  {target_count} refactoring target{}",
+                    if target_count == 1 { "" } else { "s" },
+                )
+                .dimmed()
+            );
         }
     }
 }
@@ -1179,7 +1113,6 @@ fn print_orientation_header(
 /// Check if a path is a test, fixture, or generated file that shouldn't be
 /// recommended as a refactoring starting point.
 fn is_test_path(path: &std::path::Path) -> bool {
-    // Check directory components for test/fixture/example directories
     if path.components().any(|c| {
         let s = c.as_os_str().to_string_lossy();
         matches!(
@@ -1207,7 +1140,6 @@ fn is_test_path(path: &std::path::Path) -> bool {
     }) {
         return true;
     }
-    // Check file name patterns
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         if name.contains(".test.")
             || name.contains(".spec.")
@@ -1219,7 +1151,6 @@ fn is_test_path(path: &std::path::Path) -> bool {
         {
             return true;
         }
-        // Generated file heuristic: single letter + digits (a0.js, b1.mjs)
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if stem.len() <= 3
             && stem.starts_with(|c: char| c.is_ascii_lowercase())

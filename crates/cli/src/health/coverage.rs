@@ -67,10 +67,6 @@ const BINARY_SIGNING_VERIFY_KEY: [u8; 32] = [
     0x48, 0x7e, 0x6b, 0x46, 0x3c, 0x02, 0x9e, 0xd3, 0x06, 0xdf, 0x2f, 0x01, 0xb5, 0x63, 0x6b, 0x58,
 ];
 
-// Hard stop: `test-sidecar-key` ships the test pubkey instead of the real
-// binary-signing pubkey. A release build with this feature active would accept
-// stub sidecars signed by any party in possession of the seed. Debug builds
-// only.
 #[cfg(all(feature = "test-sidecar-key", not(debug_assertions)))]
 compile_error!(
     "feature `test-sidecar-key` must never be enabled in release builds; it swaps the sidecar binary-signing pubkey for a test keypair whose seed is public"
@@ -283,11 +279,6 @@ fn validate_license_status(
 }
 
 pub fn discover_sidecar(root: Option<&Path>) -> Result<PathBuf, String> {
-    // `FALLOW_COV_BIN` is an explicit override: if the user sets it, they
-    // expect fallow to either use that path or error. Silently falling
-    // through to auto-discovery when the path is missing / not a file
-    // contradicts the "explicit beats implicit" contract documented in
-    // `.claude/rules/cli-crate.md`.
     if let Some(path) = env_non_empty("FALLOW_COV_BIN") {
         let candidate = PathBuf::from(&path);
         if candidate.is_file() {
@@ -298,11 +289,6 @@ pub fn discover_sidecar(root: Option<&Path>) -> Result<PathBuf, String> {
         ));
     }
 
-    // `FALLOW_COV_BINARY_PATH` is the air-gap / pre-placed-binary override.
-    // Precedes project-local, canonical, and PATH lookup so users in
-    // enterprise / Docker / distro-packaged setups can point fallow straight
-    // at a specific binary without having it on PATH. Same explicit-beats-
-    // implicit semantics as FALLOW_COV_BIN: if it's set and invalid, error.
     if let Some(path) = env_non_empty("FALLOW_COV_BINARY_PATH") {
         let candidate = PathBuf::from(&path);
         if candidate.is_file() {
@@ -313,12 +299,6 @@ pub fn discover_sidecar(root: Option<&Path>) -> Result<PathBuf, String> {
         ));
     }
 
-    // Prefer the platform-specific package's real binary over the wrapper at
-    // `node_modules/.bin/fallow-cov`. The wrapper is a Node.js script that
-    // re-execs the platform binary; its path has no adjacent `.sig` file, so
-    // sig verification fails if we point at the wrapper. The real binary
-    // lives at `node_modules/@fallow-cli/fallow-cov-<platform>/fallow-cov`
-    // with its signature alongside.
     if let Some(root) = root
         && let Some(path) = find_platform_package_sidecar(root)
     {
@@ -436,8 +416,6 @@ fn find_scoped_platform_sidecar(fallow_cli_dir: &Path, binary_name: &str) -> Opt
         let Some(name_str) = name.to_str() else {
             continue;
         };
-        // Match only `fallow-cov-<platform>` subpackages, not the
-        // pure-wrapper `fallow-cov` package.
         if !name_str.starts_with("fallow-cov-") {
             continue;
         }
@@ -727,10 +705,6 @@ fn static_function(
         start_column: None,
         end_line: None,
         end_column: None,
-        // Content digest of the function's full-span source slice (from
-        // `FunctionComplexity.source_hash`). Carried on the wire so the sidecar
-        // can echo it back, letting runtime-coverage baselines survive line
-        // moves. Excluded from `stable_id`.
         source_hash,
         resolution: IdentityResolution::Unresolved,
         stable_id: function_identity_id(relative_posix, name, start_line),
@@ -769,9 +743,6 @@ fn build_request(
     coverage_sources: Vec<CoverageSource>,
     codeowners_path: Option<&str>,
 ) -> (Request, FunctionLocations) {
-    // Sidecar expects a single project_root for path relativization. When a
-    // single workspace is scoped, use it; otherwise fall back to the repo root
-    // so multi-workspace runs stay unambiguous.
     let project_root = match ws_roots {
         Some([only]) => only.as_path(),
         _ => root,
@@ -810,13 +781,6 @@ fn build_request(
         if module.complexity.is_empty() {
             continue;
         }
-        // Forward-slash repo-relative path. Used BOTH as the sidecar
-        // `StaticFile.path` AND as the `FunctionIdentity.file` / `stable_id`
-        // input, so the identity fallow produces here agrees with the
-        // static-inventory producer and the `coverage analyze` consumer (both
-        // hash the repo-relative path). Sidecar wire format uses forward
-        // slashes regardless of host OS so a Windows-hosted run interoperates
-        // with a sidecar on a different machine.
         let relative_posix = relative.to_string_lossy().replace('\\', "/");
         let functions = module
             .complexity
@@ -831,16 +795,6 @@ fn build_request(
                     static_signals,
                     istanbul_coverage,
                 );
-                // Export-level dead-code signals are reliable enough to mark
-                // unreferenced exports as statically unused. Internal-only
-                // functions still default to `true` until fallow grows an
-                // intra-file call graph; that avoids false `safe_to_delete`
-                // verdicts when a private helper is only called locally.
-                //
-                // Join real test evidence when available: Istanbul per-function
-                // hits first, then direct test-reachable export references as a
-                // conservative fallback. We intentionally do not infer "covered"
-                // for every function in a test-reachable file.
                 static_function(
                     &relative_posix,
                     &function.name,
@@ -856,8 +810,6 @@ fn build_request(
             })
             .collect();
         files.push(StaticFile {
-            // Matches the existing convention in `report::ci::diff_filter`
-            // and `crates/cli/src/health/mod.rs::relative_to_root`.
             path: relative_posix,
             functions,
         });
@@ -876,19 +828,9 @@ fn build_request(
                 min_invocations_for_hot: Some(options.min_invocations_hot),
                 min_observation_volume: options.min_observation_volume,
                 low_traffic_threshold: options.low_traffic_threshold,
-                // Trace count, period, and deployments come from the beacon side in
-                // Phase 3. Phase 2 reads a single coverage dump — the sidecar falls
-                // back to summing observed invocations when `trace_count` is None.
                 trace_count: None,
                 period_days: None,
                 deployments_seen: None,
-                // Window/instance hints feed `CaptureQuality` on the sidecar.
-                // In Phase 2 single-dump local mode all four of trace_count,
-                // period_days, deployments_seen, window_seconds, and
-                // instances_observed are None; the sidecar derives
-                // `CaptureQuality.instances_observed` from the count of
-                // distinct deployments it sees in the dump itself.
-                // Populated by the beacon transport in Phase 3.
                 window_seconds: None,
                 instances_observed: None,
             },
@@ -1756,26 +1698,12 @@ fn convert_response(
             if matches!(verdict, RuntimeCoverageVerdict::Active) {
                 return None;
             }
-            // Pull both the cross-surface join key and the line-move-immune
-            // content digest off the sidecar's FunctionIdentity in one move
-            // (`identity` is consumed; `None` for 0.5-shape responses).
             let (stable_id, source_hash) = finding.identity.map_or((None, None), |identity| {
                 (Some(identity.stable_id), identity.source_hash)
             });
-            // The sidecar backfills source_hash onto its finding identities
-            // from the static index the CLI sends (joined by stable_id), so the
-            // wire value is authoritative. It is None only for pre-#742
-            // sidecars; such a finding then degrades to stable_id / legacy-id
-            // baseline keying (no line-move tolerance for that finding).
             Some(RuntimeCoverageFinding {
                 id: finding.id,
-                // Cross-surface join key from the sidecar's FunctionIdentity
-                // when present; `None` for 0.5-shape responses (legacy
-                // fallback). Baseline keying prefers this over `id`.
                 stable_id,
-                // Content digest from the sidecar's FunctionIdentity (the
-                // sidecar backfills it from the static index); stable across
-                // line moves so baselines suppress after a pure line shift.
                 source_hash,
                 path: PathBuf::from(finding.file),
                 function: finding.function,
@@ -1813,16 +1741,9 @@ fn convert_response(
             path: PathBuf::from(entry.file),
             function: entry.function,
             line: entry.line,
-            // 0.4-shape sidecars omit end_line; protocol's serde default is
-            // 0. The line-overlap filter folds 0 into a single-line range,
-            // so we forward the value as-is rather than synthesizing
-            // `entry.line` here (preserves the "we don't know" signal).
             end_line: entry.end_line,
             invocations: entry.invocations,
             percentile: entry.percentile,
-            // Actions on hot paths are reserved for future protocol versions
-            // (e.g., a "review-on-change" suggestion). The sidecar protocol
-            // at 0.5 does not emit per-hot-path actions, so leave empty.
             actions: Vec::new(),
         })
         .collect::<Vec<_>>();
@@ -1949,10 +1870,6 @@ const fn map_risk_band(risk_band: RiskBand) -> RuntimeCoverageRiskBand {
     match risk_band {
         RiskBand::Low => RuntimeCoverageRiskBand::Low,
         RiskBand::High => RuntimeCoverageRiskBand::High,
-        // Medium, plus the forward-compat `Unknown` sentinel (protocol 0.7.0):
-        // a sidecar on a newer protocol emitted a risk band this CLI has not
-        // seen yet. Map it to the neutral middle rather than dropping the
-        // entry; fallow's own output enum carries only Low/Medium/High.
         RiskBand::Medium | RiskBand::Unknown => RuntimeCoverageRiskBand::Medium,
     }
 }
@@ -2093,15 +2010,9 @@ mod tests {
 
     #[test]
     fn binary_signing_verify_key_is_32_bytes() {
-        // Ed25519 public keys are always 32 bytes. Guards against accidental
-        // byte-array edits that would silently break verification.
         assert_eq!(BINARY_SIGNING_VERIFY_KEY.len(), 32);
     }
 
-    // Hard-fail gate for the release process. Asserts the constant is not the
-    // all-zeros placeholder that shipped in the Phase 2.5 A' commit. Now runs
-    // by default (no `#[ignore]`) so any accidental revert to the placeholder
-    // would break `cargo test` immediately.
     #[test]
     fn binary_signing_verify_key_must_not_be_placeholder() {
         assert_ne!(
@@ -2110,17 +2021,8 @@ mod tests {
         );
     }
 
-    // Structural invariant: the runtime-coverage analysis path must not
-    // perform any network I/O. Enterprise / air-gapped buyers depend on this.
-    // The gate for Phase 2 step 4 of the roadmap is explicitly "integration
-    // test asserting zero network calls during analysis"; this source-level
-    // assertion is the fastest regression guard for that contract. The sibling
-    // integration tests in `crates/cli/tests/runtime_coverage_tests.rs`
-    // exercise the full spawn pipeline with a signed stub sidecar.
     #[test]
     fn runtime_coverage_module_has_no_network_code() {
-        // Scan only the non-test portion of the file; the FORBIDDEN list below
-        // would otherwise match its own entries.
         let full = include_str!("coverage.rs");
         let analysis_source = full.split("#[cfg(test)]").next().unwrap_or(full);
         const FORBIDDEN: &[&str] = &[
@@ -2318,12 +2220,6 @@ mod tests {
             .unwrap_or_else(|err| panic!("failed to clean temp dir {}: {err}", root.display()));
     }
 
-    // Regression test for the Phase 2.5 smoke-test finding: when both the
-    // `@fallow-cli/fallow-cov-<platform>/fallow-cov` real binary and the
-    // `node_modules/.bin/fallow-cov` Node wrapper exist (the usual layout
-    // after `npm install @fallow-cli/fallow-cov`), discovery must prefer
-    // the platform package's real binary. The wrapper has no adjacent
-    // `.sig` file, so pointing at it breaks signature verification.
     #[test]
     fn discovers_platform_package_sidecar_before_bin_wrapper() {
         let root = make_temp_dir("sidecar-platform-pkg");
@@ -2425,9 +2321,6 @@ mod tests {
     #[test]
     fn discovers_pnpm_store_platform_sidecar_before_bin_wrapper() {
         let root = make_temp_dir("sidecar-pnpm-store");
-        // pnpm with `node-linker=isolated` extracts platform packages into
-        // `.pnpm/<scope+name>@<version>_<peer-hash>/...`; the peer-hash
-        // suffix must not break the `@fallow-cli+fallow-cov-` prefix match.
         let platform_dir = root
             .join("node_modules")
             .join(".pnpm")
@@ -2567,10 +2460,6 @@ mod tests {
 
     #[test]
     fn static_function_round_trips() {
-        // Pins the `static_function` serde round-trip shape. If a future
-        // protocol revision adds a required-without-default field to
-        // StaticFunction, this fails in CI rather than the `.expect()`
-        // panicking in the paid runtime-coverage path.
         let sf = static_function(
             "src/render.tsx",
             "render",
@@ -2589,9 +2478,7 @@ mod tests {
         assert_eq!(value["end_line"], 50);
         assert_eq!(value["identity"]["resolution"], "unresolved");
         assert_eq!(value["identity"]["stable_id"], "fallow:fn:cb4482d6aef7c79a");
-        // source_hash is carried on the wire so the sidecar can echo it back.
         assert_eq!(value["identity"]["source_hash"], "0123456789abcdef");
-        // Columns are deliberately absent on the health path (Unresolved).
         assert!(value["identity"].get("start_column").is_none());
     }
 

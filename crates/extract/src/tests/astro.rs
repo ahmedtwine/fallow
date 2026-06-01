@@ -94,8 +94,6 @@ export { default as Layout } from '../layouts/Layout.astro';
 
 #[test]
 fn astro_template_script_src_followed() {
-    // Issue #295: <script src="..."> in the template body should produce
-    // an import edge so the referenced file stays reachable.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("Page.astro"),
@@ -146,8 +144,6 @@ fn astro_template_script_src_has_source_span() {
 
 #[test]
 fn astro_template_inline_script_imports_followed() {
-    // Issue #295: ESM imports inside inline <script> blocks should be
-    // followed so their targets stay reachable.
     let info = parse_source_to_module(
         FileId(0),
         Path::new("Page.astro"),

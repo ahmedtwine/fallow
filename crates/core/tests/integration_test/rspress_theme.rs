@@ -40,8 +40,6 @@ fn rspress_theme_virtual_module_is_not_unlisted_or_unresolved() {
         "`@theme/Layout` should not be reported as unresolved, found: {unresolved:?}"
     );
 
-    // Non-vacuous control: a genuinely-missing bare package MUST still report,
-    // proving dependency detection actually ran on this fixture.
     assert!(
         unlisted.contains(&"definitely-missing-pkg"),
         "a real missing dependency must still report as unlisted, found: {unlisted:?}"

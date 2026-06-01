@@ -20,7 +20,6 @@ pub(in crate::report) fn print_export_trace_human(trace: &ExportTrace) {
     );
     eprintln!();
 
-    // File status
     let reachable = if trace.file_reachable {
         "reachable".green()
     } else {

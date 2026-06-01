@@ -108,9 +108,6 @@ pub struct SfcScript {
 
 /// Extract all `<script>` blocks from a Vue/Svelte SFC source string.
 pub fn extract_sfc_scripts(source: &str) -> Vec<SfcScript> {
-    // Build HTML comment ranges to filter out <script> blocks inside comments.
-    // Using ranges instead of source replacement avoids corrupting script body content
-    // (e.g., string literals containing "<!--" would be destroyed by replacement).
     let comment_ranges: Vec<(usize, usize)> = HTML_COMMENT_RE
         .find_iter(source)
         .map(|m| (m.start(), m.end()))
@@ -298,8 +295,6 @@ fn sfc_kind(path: &Path) -> SfcKind {
 }
 
 fn empty_sfc_module(file_id: FileId, source: &str, content_hash: u64) -> ModuleInfo {
-    // For SFC files, use string scanning for suppression comments since script block
-    // byte offsets don't correspond to the original file positions.
     let parsed = crate::suppress::parse_suppressions_from_source(source);
 
     ModuleInfo {
@@ -351,24 +346,9 @@ fn merge_script_into_module(
     extractor.visit_program(&parser_return.program);
     let extraction = ExtractionResult::contiguous(&script.body, script.byte_offset);
     extractor.remap_spans_with(|span| extraction.remap_span(span));
-    // Resolve typed destructure bindings (`let { resultState }: Props = $props()`)
-    // into `binding_target_names` BEFORE the template-visible read below, so the
-    // template scanner credits `resultState.pin(...)` member access in markup.
-    // `merge_into` calls this again, but the pending list is drained here so the
-    // second call is a no-op. See issue #752.
     extractor.resolve_typed_destructure_bindings();
 
-    // The script-tag `generic="..."` (Vue) / `generics="..."` (Svelte)
-    // constraint lives on the tag, not in the script body. Imports referenced
-    // only inside it would be classified as unused without this augmentation.
-    // Append a synthetic `type _<...> = unknown;` declaration so oxc_semantic
-    // sees those references and routes the bindings into `type_referenced`.
     let augmented_body = build_generic_attr_probe_source(script);
-    // Vue/Svelte still credit template-visible imports via the post-hoc
-    // `apply_template_usage` retain pass below, so pass an empty skip-set
-    // here. (Folding the template scan in at this layer the way `.gts` /
-    // `.gjs` does is future work; see `crates/extract/src/parse.rs::
-    // collect_glimmer_template_into_extractor` for the target shape.)
     let empty_template_used = rustc_hash::FxHashSet::default();
     let binding_usage = if let Some(augmented) = augmented_body.as_deref() {
         let augmented_return =
@@ -444,8 +424,6 @@ fn translate_script_complexity(
 }
 
 fn add_script_src_import(module: &mut ModuleInfo, source: &str, source_span: Option<Span>) {
-    // Normalize bare filenames (e.g., `<script src="logic.ts">`) so the
-    // resolver treats them as file-relative references, not npm packages.
     let span = source_span.unwrap_or_default();
     module.imports.push(ImportInfo {
         source: normalize_asset_url(source),
@@ -472,10 +450,6 @@ fn style_lang_is_css_like(lang: Option<&str>) -> bool {
 }
 
 fn merge_style_into_module(style: &SfcStyle, combined: &mut ModuleInfo) {
-    // <style src="./theme.scss"> is symmetric to <script src="...">: seed the
-    // referenced file as a side-effect import. The resolver still applies SCSS
-    // partial / include-path / node_modules fallbacks because `from_style` is
-    // set on the import.
     if let Some(src) = &style.src {
         let span = style.src_span.unwrap_or_default();
         combined.imports.push(ImportInfo {
@@ -549,12 +523,6 @@ fn apply_template_usage(
     template_visible_bound_targets: &FxHashMap<String, String>,
     combined: &mut ModuleInfo,
 ) {
-    // The scan must run even when there are no imports or bound targets: a Nuxt
-    // page may reference only convention auto-imported components (`<Card001 />`)
-    // with no `import` statement, and those unmatched tags are captured for
-    // graph-build-time auto-import resolution. With empty imports the
-    // used-bindings / member-access / whole-object outputs stay empty, so the
-    // only added work is collecting unresolved tag names. See issue #704.
     let template_usage = collect_template_usage_with_bound_targets(
         kind,
         source,
@@ -585,13 +553,9 @@ fn is_template_visible_script(kind: SfcKind, script: &SfcScript) -> bool {
     }
 }
 
-// SFC tests exercise regex-based HTML string extraction — no unsafe code,
-// no Miri-specific value. Oxc parser tests are additionally ~1000x slower.
 #[cfg(all(test, not(miri)))]
 mod tests {
     use super::*;
-
-    // ── is_sfc_file ──────────────────────────────────────────────
 
     #[test]
     fn is_sfc_file_vue() {
@@ -617,8 +581,6 @@ mod tests {
     fn is_sfc_file_rejects_astro() {
         assert!(!is_sfc_file(Path::new("Layout.astro")));
     }
-
-    // ── extract_sfc_scripts: single script block ─────────────────
 
     #[test]
     fn single_plain_script() {
@@ -654,8 +616,6 @@ mod tests {
         assert!(scripts[0].is_jsx);
     }
 
-    // ── Multiple script blocks ───────────────────────────────────
-
     #[test]
     fn two_script_blocks() {
         let source = r#"
@@ -672,8 +632,6 @@ const count = 0;
         assert!(scripts[1].body.contains("count"));
     }
 
-    // ── <script setup> ───────────────────────────────────────────
-
     #[test]
     fn script_setup_extracted() {
         let scripts =
@@ -682,8 +640,6 @@ const count = 0;
         assert!(scripts[0].body.contains("import"));
         assert!(scripts[0].is_typescript);
     }
-
-    // ── <script src="..."> external script ───────────────────────
 
     #[test]
     fn script_src_detected() {
@@ -699,8 +655,6 @@ const count = 0;
         assert_eq!(scripts.len(), 1);
         assert!(scripts[0].src.is_none());
     }
-
-    // ── HTML comment filtering ───────────────────────────────────
 
     #[test]
     fn script_inside_html_comment_filtered() {
@@ -728,7 +682,6 @@ const count = 0;
 
     #[test]
     fn string_containing_comment_markers_not_corrupted() {
-        // A string in the script body containing <!-- should not cause filtering issues
         let source = r#"
 <script setup lang="ts">
 const marker = "<!-- not a comment -->";
@@ -739,8 +692,6 @@ import { ref } from 'vue';
         assert_eq!(scripts.len(), 1);
         assert!(scripts[0].body.contains("import"));
     }
-
-    // ── Generic attributes with > in quoted values ───────────────
 
     #[test]
     fn generic_attr_with_angle_bracket() {
@@ -759,8 +710,6 @@ import { ref } from 'vue';
         assert_eq!(scripts[0].body, "const x = 1;");
     }
 
-    // ── lang attribute with single quotes ────────────────────────
-
     #[test]
     fn lang_single_quoted() {
         let scripts = extract_sfc_scripts("<script lang='ts'>const x = 1;</script>");
@@ -768,16 +717,12 @@ import { ref } from 'vue';
         assert!(scripts[0].is_typescript);
     }
 
-    // ── Case-insensitive matching ────────────────────────────────
-
     #[test]
     fn uppercase_script_tag() {
         let scripts = extract_sfc_scripts(r#"<SCRIPT lang="ts">const x = 1;</SCRIPT>"#);
         assert_eq!(scripts.len(), 1);
         assert!(scripts[0].is_typescript);
     }
-
-    // ── Edge cases ───────────────────────────────────────────────
 
     #[test]
     fn no_script_block() {
@@ -804,7 +749,6 @@ import { ref } from 'vue';
         let source = r#"<template><div/></template><script lang="ts">code</script>"#;
         let scripts = extract_sfc_scripts(source);
         assert_eq!(scripts.len(), 1);
-        // The byte_offset should point to where "code" starts in the source
         let offset = scripts[0].byte_offset;
         assert_eq!(&source[offset..offset + 4], "code");
     }
@@ -819,8 +763,6 @@ import { ref } from 'vue';
         assert!(scripts[0].src.is_none());
     }
 
-    // ── Full parse tests (Oxc parser ~1000x slower under Miri) ──
-
     #[test]
     fn multiple_script_blocks_exports_combined() {
         let source = r#"
@@ -833,21 +775,17 @@ const count = ref(0);
 </script>
 "#;
         let info = parse_sfc_to_module(FileId(0), Path::new("Dual.vue"), source, 0, false);
-        // The non-setup block exports `version`
         assert!(
             info.exports
                 .iter()
                 .any(|e| matches!(&e.name, crate::ExportName::Named(n) if n == "version")),
             "export from <script> block should be extracted"
         );
-        // The setup block imports `ref` from 'vue'
         assert!(
             info.imports.iter().any(|i| i.source == "vue"),
             "import from <script setup> block should be extracted"
         );
     }
-
-    // ── lang="tsx" detection ────────────────────────────────────
 
     #[test]
     fn lang_tsx_detected_as_typescript_jsx() {
@@ -857,8 +795,6 @@ const count = ref(0);
         assert!(scripts[0].is_typescript, "lang=tsx should be typescript");
         assert!(scripts[0].is_jsx, "lang=tsx should be jsx");
     }
-
-    // ── HTML comment filtering of script blocks ─────────────────
 
     #[test]
     fn multiline_html_comment_filters_all_script_blocks_inside() {
@@ -874,8 +810,6 @@ const count = ref(0);
         assert_eq!(scripts.len(), 1);
         assert!(scripts[0].body.contains("good"));
     }
-
-    // ── <script src="..."> generates side-effect import ─────────
 
     #[test]
     fn script_src_generates_side_effect_import() {
@@ -894,8 +828,6 @@ const count = ref(0);
             "script src should generate a side-effect import"
         );
     }
-
-    // ── Additional coverage ─────────────────────────────────────
 
     #[test]
     fn parse_sfc_no_script_returns_empty_module() {
@@ -976,7 +908,6 @@ export const foo = 1;
 <script setup lang="ts">const b = 2;</script>"#;
         let scripts = extract_sfc_scripts(source);
         assert_eq!(scripts.len(), 2);
-        // Both scripts should have valid byte offsets
         let offset0 = scripts[0].byte_offset;
         let offset1 = scripts[1].byte_offset;
         assert_eq!(
@@ -991,15 +922,12 @@ export const foo = 1;
 
     #[test]
     fn script_with_src_and_lang() {
-        // src + lang should both be detected
         let scripts = extract_sfc_scripts(r#"<script src="./logic.ts" lang="tsx"></script>"#);
         assert_eq!(scripts.len(), 1);
         assert_eq!(scripts[0].src.as_deref(), Some("./logic.ts"));
         assert!(scripts[0].is_typescript);
         assert!(scripts[0].is_jsx);
     }
-
-    // ── extract_sfc_styles (issue #195 Case B) ──
 
     #[test]
     fn extract_style_block_lang_scss() {
@@ -1107,7 +1035,6 @@ export const foo = 1;
 
     #[test]
     fn parse_sfc_skips_unsupported_style_lang_body_but_keeps_src() {
-        // <style lang="postcss"> body is NOT scanned (custom directives); src is still seeded.
         let info = parse_sfc_to_module(
             FileId(0),
             Path::new("Baz.vue"),

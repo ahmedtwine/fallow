@@ -133,10 +133,6 @@ pub fn build_compact_lines(results: &AnalysisResults, root: &Path) -> Vec<String
             fallow_core::results::ReExportCycleKind::SelfLoop => " (self-loop)",
             fallow_core::results::ReExportCycleKind::MultiNode => "",
         };
-        // Re-export cycles are file-scoped; no useful line/col anchor (the
-        // diagnostic spans the whole file). Match `unlisted-dep:` /
-        // `duplicate-export:` shape (no line/col) rather than inventing a
-        // misleading `:1:0:` placeholder (cli-output-reviewer panel catch).
         lines.push(format!(
             "re-export-cycle:{}:{}{}",
             first_file,
@@ -868,10 +864,8 @@ mod tests {
         let results = sample_results(&root);
         let lines = build_compact_lines(&results, &root);
 
-        // 16 issue types, one of each
         assert_eq!(lines.len(), 16);
 
-        // Verify ordering matches output order
         assert!(lines[0].starts_with("unused-file:"));
         assert!(lines[1].starts_with("unused-export:"));
         assert!(lines[2].starts_with("unused-type:"));
@@ -902,8 +896,6 @@ mod tests {
         let lines = build_compact_lines(&results, &root);
         assert_eq!(lines[0], "unused-file:src/deep/nested/file.ts");
     }
-
-    // ── Re-export variants ──
 
     #[test]
     fn compact_re_export_tagged_correctly() {
@@ -948,8 +940,6 @@ mod tests {
         );
     }
 
-    // ── Unused optional dependency ──
-
     #[test]
     fn compact_unused_optional_dep_format() {
         let root = PathBuf::from("/project");
@@ -969,8 +959,6 @@ mod tests {
         let lines = build_compact_lines(&results, &root);
         assert_eq!(lines[0], "unused-optionaldep:fsevents");
     }
-
-    // ── Circular dependency ──
 
     #[test]
     fn compact_circular_dependency_format() {
@@ -993,7 +981,6 @@ mod tests {
         assert!(lines[0].starts_with("circular-dependency:src/a.ts:3:"));
         assert!(lines[0].contains("src/a.ts"));
         assert!(lines[0].contains("src/b.ts"));
-        // Chain should close the cycle: a -> b -> a
         assert!(lines[0].contains("\u{2192}"));
     }
 
@@ -1018,14 +1005,11 @@ mod tests {
             ));
 
         let lines = build_compact_lines(&results, &root);
-        // Chain: a -> b -> c -> a
         let chain_part = lines[0].split(':').next_back().unwrap();
         let parts: Vec<&str> = chain_part.split(" \u{2192} ").collect();
         assert_eq!(parts.len(), 4);
         assert_eq!(parts[0], parts[3]); // first == last (cycle closes)
     }
-
-    // ── Type-only dependency ──
 
     #[test]
     fn compact_type_only_dep_format() {
@@ -1044,8 +1028,6 @@ mod tests {
         let lines = build_compact_lines(&results, &root);
         assert_eq!(lines[0], "type-only-dep:zod");
     }
-
-    // ── Multiple items of same type ──
 
     #[test]
     fn compact_multiple_unused_files() {
@@ -1067,8 +1049,6 @@ mod tests {
         assert_eq!(lines[0], "unused-file:src/a.ts");
         assert_eq!(lines[1], "unused-file:src/b.ts");
     }
-
-    // ── Output ordering matches issue types ──
 
     #[test]
     fn compact_ordering_optional_dep_between_devdep_and_enum() {
@@ -1111,8 +1091,6 @@ mod tests {
         assert!(lines[1].starts_with("unused-optionaldep:"));
         assert!(lines[2].starts_with("unused-enum-member:"));
     }
-
-    // ── Path outside root ──
 
     #[test]
     fn compact_path_outside_root_preserved() {

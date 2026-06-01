@@ -37,17 +37,10 @@ use std::ops::Not;
 use crate::external_plugin::ExternalPluginDef;
 use crate::workspace::WorkspaceConfig;
 
-/// Controls whether exports referenced only inside their defining file are
-/// reported as unused exports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum IgnoreExportsUsedInFileConfig {
-    /// `true` suppresses both value and type exports that are referenced in
-    /// their defining file. `false` preserves the default cross-file behavior.
     Bool(bool),
-    /// Knip-compatible fine-grained form. Fallow groups type aliases and
-    /// interfaces under `unused_types`, so either field enables type-export
-    /// suppression for same-file references.
     ByKind(IgnoreExportsUsedInFileByKind),
 }
 
@@ -70,7 +63,6 @@ impl From<IgnoreExportsUsedInFileByKind> for IgnoreExportsUsedInFileConfig {
 }
 
 impl IgnoreExportsUsedInFileConfig {
-    /// Whether this option can suppress at least one kind of export.
     #[must_use]
     pub const fn is_enabled(self) -> bool {
         match self {
@@ -79,7 +71,6 @@ impl IgnoreExportsUsedInFileConfig {
         }
     }
 
-    /// Whether same-file references should suppress this export kind.
     #[must_use]
     pub const fn suppresses(self, is_type_only: bool) -> bool {
         match self {
@@ -89,348 +80,155 @@ impl IgnoreExportsUsedInFileConfig {
     }
 }
 
-/// Knip-compatible `ignoreExportsUsedInFile` object form.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IgnoreExportsUsedInFileByKind {
-    /// Suppress same-file references for exported type aliases.
     #[serde(default, rename = "type")]
     pub type_: bool,
-    /// Suppress same-file references for exported interfaces.
     #[serde(default)]
     pub interface: bool,
 }
 
-/// Auto-fix behavior settings.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FixConfig {
-    /// Auto-fix behavior for pnpm catalog edits.
     #[serde(default)]
     pub catalog: CatalogFixConfig,
 }
 
-/// Auto-fix behavior for pnpm catalog entries.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogFixConfig {
-    /// Whether removing an unused catalog entry also removes the contiguous
-    /// YAML comment block immediately above it.
     #[serde(default)]
     pub delete_preceding_comments: CatalogPrecedingCommentPolicy,
 }
 
-/// Policy for deleting comments immediately above removed catalog entries.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogPrecedingCommentPolicy {
-    /// Delete the comment block when it is separated from previous siblings by
-    /// a blank line, or when it directly follows the parent catalog header.
     #[default]
     Auto,
-    /// Always delete the contiguous comment block immediately above the entry.
     Always,
-    /// Never delete leading comments; leave them in place as orphan comments.
     Never,
 }
 
-/// User-facing configuration loaded from `.fallowrc.json`, `.fallowrc.jsonc`, `fallow.toml`, or `.fallow.toml`.
-///
-/// # Examples
-///
-/// ```
-/// use fallow_config::FallowConfig;
-///
-/// // Default config has sensible defaults
-/// let config = FallowConfig::default();
-/// assert!(config.entry.is_empty());
-/// assert!(!config.production);
-///
-/// // Deserialize from JSON
-/// let config: FallowConfig = serde_json::from_str(r#"{
-///     "entry": ["src/main.ts"],
-///     "production": true
-/// }"#).unwrap();
-/// assert_eq!(config.entry, vec!["src/main.ts"]);
-/// assert!(config.production);
-/// ```
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FallowConfig {
-    /// JSON Schema reference (ignored during deserialization).
     #[serde(rename = "$schema", default, skip_serializing)]
     pub schema: Option<String>,
 
-    /// Base config files to extend from.
-    ///
-    /// Supports three resolution strategies:
-    /// - **Relative paths**: `"./base.json"` — resolved relative to the config file.
-    /// - **npm packages**: `"npm:@co/config"` — resolved by walking up `node_modules/`.
-    ///   Package resolution checks `package.json` `exports`/`main` first, then falls back
-    ///   to standard config file names. Subpaths are supported (e.g., `npm:@co/config/strict.json`).
-    /// - **HTTPS URLs**: `"https://example.com/fallow-base.json"` — fetched remotely.
-    ///   Only HTTPS is supported (no plain HTTP). URL-sourced configs may extend other
-    ///   URLs or `npm:` packages, but not relative paths. Only JSON/JSONC format is
-    ///   supported for remote configs. Timeout is configurable via
-    ///   `FALLOW_EXTENDS_TIMEOUT_SECS` (default: 5s).
-    ///
-    /// Base configs are loaded first, then this config's values override them.
-    /// Later entries in the array override earlier ones.
-    ///
-    /// **Note:** `npm:` resolution uses `node_modules/` directory walk-up and is
-    /// incompatible with Yarn Plug'n'Play (PnP), which has no `node_modules/`.
-    /// URL extends fetch on every run (no caching). For reliable CI, prefer `npm:`
-    /// for private or critical configs.
     #[serde(default, skip_serializing)]
     pub extends: Vec<String>,
 
-    /// Additional entry point glob patterns.
     #[serde(default)]
     pub entry: Vec<String>,
 
-    /// Glob patterns to ignore from analysis.
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
 
-    /// Custom framework definitions (inline plugin definitions).
     #[serde(default)]
     pub framework: Vec<ExternalPluginDef>,
 
-    /// Workspace overrides.
     #[serde(default)]
     pub workspaces: Option<WorkspaceConfig>,
 
-    /// Dependencies to ignore (always considered used and always considered available).
-    ///
-    /// Listed dependencies are excluded from both unused dependency and unlisted
-    /// dependency detection. Useful for runtime-provided packages like `bun:sqlite`
-    /// or implicitly available dependencies.
     #[serde(default)]
     pub ignore_dependencies: Vec<String>,
 
-    /// Import specifier glob patterns whose `unresolved-import` findings are
-    /// expected and should be suppressed.
-    ///
-    /// Matching is against the raw import specifier string, not a filesystem
-    /// path. Exact specifiers and subpaths must be listed separately when both
-    /// should be ignored, for example `["@example/icons", "@example/icons/**"]`.
-    /// Broad patterns such as `"**"` can hide real missing modules, so keep
-    /// this list focused on generated or runtime-provided specifiers.
     #[serde(default)]
     pub ignore_unresolved_imports: Vec<String>,
 
-    /// Export ignore rules.
     #[serde(default)]
     pub ignore_exports: Vec<IgnoreExportRule>,
 
-    /// Rules for suppressing `unresolved-catalog-reference` findings.
-    ///
-    /// Each rule matches by package name, optionally scoped to a specific
-    /// catalog and/or consumer `package.json` glob. Useful for staged catalog
-    /// migrations where the catalog edit lands separately from the consumer
-    /// edit, and for library-internal placeholder packages whose target
-    /// catalog isn't ready yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignore_catalog_references: Vec<IgnoreCatalogReferenceRule>,
 
-    /// Rules for suppressing `unused-dependency-override` and
-    /// `misconfigured-dependency-override` findings.
-    ///
-    /// Each rule matches by override target package, optionally scoped to the
-    /// declaring source file (`pnpm-workspace.yaml` or `package.json`). Useful
-    /// for overrides targeting purely-transitive packages (CVE-fix pattern)
-    /// where the conservative static algorithm would otherwise cry wolf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignore_dependency_overrides: Vec<IgnoreDependencyOverrideRule>,
 
-    /// Suppress unused-export findings when the exported symbol is referenced
-    /// inside the file that declares it. This mirrors Knip's
-    /// `ignoreExportsUsedInFile` option while still reporting exports that have
-    /// no references at all.
     #[serde(default)]
     pub ignore_exports_used_in_file: IgnoreExportsUsedInFileConfig,
 
-    /// Decorators that fallow should NOT treat as evidence of reflective use.
-    /// Members carrying only these decorators are checked for usage as if they
-    /// were undecorated. Members carrying any decorator NOT in this list stay
-    /// skipped (frameworks like NestJS, Angular, TypeORM rely on reflection so
-    /// the conservative default is to keep skipping).
-    ///
-    /// Matching rule: entries containing `.` (e.g. `"decorators.log"`) match
-    /// the full dotted path of a decorator. Bare entries (e.g. `"step"` or
-    /// `"decorators"`) match the leftmost segment; a bare `"decorators"` entry
-    /// thus collapses every `@decorators.*` decorator. Both `"@step"` and
-    /// `"step"` round-trip equivalently (a leading `@` is stripped before
-    /// matching).
-    ///
-    /// Entries that never match a decorator in the analyzed codebase produce
-    /// a one-time warning at end of run, mirroring the existing
-    /// `usedClassMembers` warn-on-unmatched-pattern behavior. See issue #471.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignore_decorators: Vec<String>,
 
-    /// Class member method/property rules that should never be flagged as
-    /// unused. Supports plain member names for global suppression and scoped
-    /// objects with `extends` / `implements` constraints for framework-invoked
-    /// methods that should only be suppressed on matching classes.
     #[serde(default)]
     pub used_class_members: Vec<UsedClassMemberRule>,
 
-    /// Duplication detection settings.
     #[serde(default)]
     pub duplicates: DuplicatesConfig,
 
-    /// Complexity health metrics settings.
     #[serde(default)]
     pub health: HealthConfig,
 
-    /// Per-issue-type severity rules.
     #[serde(default)]
     pub rules: RulesConfig,
 
-    /// Architecture boundary enforcement configuration.
     #[serde(default)]
     pub boundaries: BoundaryConfig,
 
-    /// Feature flag detection configuration.
     #[serde(default)]
     pub flags: FlagsConfig,
 
-    /// Auto-fix behavior settings.
     #[serde(default)]
     pub fix: FixConfig,
 
-    /// Module resolver configuration (custom conditions, etc.).
     #[serde(default)]
     pub resolve: ResolveConfig,
 
-    /// Production mode: exclude test/dev files, only start/build scripts.
-    ///
-    /// Accepts the legacy boolean form (`true` applies to all analyses) or a
-    /// per-analysis object (`{ "deadCode": false, "health": true, "dupes": false }`).
     #[serde(default)]
     pub production: ProductionConfig,
 
-    /// Paths to external plugin files or directories containing plugin files.
-    ///
-    /// Supports TOML, JSON, and JSONC formats.
-    ///
-    /// In addition to these explicit paths, fallow automatically discovers:
-    /// - `*.toml`, `*.json`, `*.jsonc` files in `.fallow/plugins/`
-    /// - `fallow-plugin-*.{toml,json,jsonc}` files in the project root
     #[serde(default)]
     pub plugins: Vec<String>,
 
-    /// Glob patterns for files that are dynamically loaded at runtime
-    /// (plugin directories, locale files, etc.). These files are treated as
-    /// always-used and will never be flagged as unused.
     #[serde(default)]
     pub dynamically_loaded: Vec<String>,
 
-    /// Per-file rule overrides matching oxlint's overrides pattern.
     #[serde(default)]
     pub overrides: Vec<ConfigOverride>,
 
-    /// Path to a CODEOWNERS file for `--group-by owner`.
-    ///
-    /// When unset, fallow auto-probes `CODEOWNERS`, `.github/CODEOWNERS`,
-    /// `.gitlab/CODEOWNERS`, and `docs/CODEOWNERS`. Set this to use a
-    /// non-standard location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codeowners: Option<String>,
 
-    /// Workspace package name patterns that are public libraries.
-    /// Exported API surface from these packages is not flagged as unused.
     #[serde(default)]
     pub public_packages: Vec<String>,
 
-    /// Regression detection baseline embedded in config.
-    /// Stores issue counts from a known-good state for CI regression checks.
-    /// Populated by `--save-regression-baseline` (no path), read by `--fail-on-regression`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression: Option<RegressionConfig>,
 
-    /// Audit command baseline paths (one per analysis: dead-code, health, dupes).
-    ///
-    /// `fallow audit` runs three analyses and each has its own baseline format.
-    /// Paths in this section are resolved relative to the project root. CLI flags
-    /// (`--dead-code-baseline`, `--health-baseline`, `--dupes-baseline`) override
-    /// these values when provided.
     #[serde(default, skip_serializing_if = "AuditConfig::is_empty")]
     pub audit: AuditConfig,
 
-    /// Mark this config as sealed: `extends` paths must be file-relative and
-    /// resolve within this config's own directory. `npm:` and `https:` extends
-    /// are rejected. Useful for library publishers and monorepo sub-packages
-    /// that want to guarantee their config is self-contained and not subject
-    /// to ancestor configs being injected via `extends`.
-    ///
-    /// Discovery is unaffected (first-match-wins already stops the directory
-    /// walk at the nearest config). This only constrains `extends`.
     #[serde(default)]
     pub sealed: bool,
 
-    /// Report unused exports in entry files instead of auto-marking them as
-    /// used. Catches typos in framework exports (e.g. `meatdata` instead of
-    /// `metadata`). The CLI flag `--include-entry-exports` (global) overrides
-    /// this when set; otherwise the config value is used.
     #[serde(default)]
     pub include_entry_exports: bool,
 
-    /// Resolve framework convention auto-imports (Nuxt components) as real
-    /// module-graph edges, and stop treating the covered convention directories
-    /// as always-used entry points.
-    ///
-    /// When `false` (default), auto-import edges are still synthesized additively
-    /// (so a component's default export consumed via a `<Card />` template tag is
-    /// credited under `includeEntryExports`), but the convention directories stay
-    /// registered as entry points, so genuinely-unreferenced components are never
-    /// reported as `unused-file`.
-    ///
-    /// When `true`, the Nuxt plugin drops its component entry patterns
-    /// (`components/**`, `app/components/**`) so an unreferenced component is
-    /// reported as `unused-file`. This is opt-in because non-flat projects
-    /// (custom `prefix` / `pathPrefix` / `dirs` in `nuxt.config`, dynamic
-    /// `<component :is>`, `@nuxt/content` MDC) are not fully modeled yet and could
-    /// produce false positives. As a guard, if `nuxt.config` declares a
-    /// `components:` key the entry patterns are kept regardless. Composable and
-    /// util entry patterns are unaffected until convention resolution covers
-    /// them. See issue #704.
     #[serde(default)]
     pub auto_imports: bool,
 
-    /// Incremental cache tuning. Today the only knob is `maxSizeMb`, which
-    /// caps the on-disk cache and triggers LRU eviction during save. See
-    /// [`CacheConfig`].
     #[serde(default, skip_serializing_if = "CacheConfig::is_default")]
     pub cache: CacheConfig,
 }
 
-/// Incremental cache configuration.
-///
-/// Today only `maxSizeMb` is exposed. The env var `FALLOW_CACHE_MAX_SIZE`
-/// (also in MB) wins over this field when both are set. The default cap is
-/// 256 MB; values are interpreted as whole megabytes.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CacheConfig {
-    /// Maximum on-disk cache size in megabytes. When the serialized cache
-    /// exceeds 80% of this cap during save, the oldest entries are evicted
-    /// down to 60% of the cap. Default: 256 MB.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_size_mb: Option<u32>,
 }
 
 impl CacheConfig {
-    /// Whether the config carries no overrides (used to suppress serialization
-    /// of the `cache` field when the user has not customized it).
     #[must_use]
     pub fn is_default(&self) -> bool {
         self.max_size_mb.is_none()
     }
 }
 
-/// Analysis-specific production-mode selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProductionAnalysis {
     DeadCode,
@@ -438,13 +236,10 @@ pub enum ProductionAnalysis {
     Dupes,
 }
 
-/// Production-mode defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ProductionConfig {
-    /// Legacy/global form: `production = true` or `"production": true`.
     Global(bool),
-    /// Per-analysis form.
     PerAnalysis(PerAnalysisProductionConfig),
 }
 
@@ -534,57 +329,34 @@ impl ProductionConfig {
     }
 }
 
-/// Per-analysis production-mode defaults.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct PerAnalysisProductionConfig {
-    /// Production mode for dead-code analysis.
     pub dead_code: bool,
-    /// Production mode for health analysis.
     pub health: bool,
-    /// Production mode for duplication analysis.
     pub dupes: bool,
 }
 
-/// Per-analysis baseline paths for the `audit` command.
-///
-/// Each field points to a baseline file produced by the corresponding
-/// subcommand (`fallow dead-code --save-baseline`, `fallow health --save-baseline`,
-/// `fallow dupes --save-baseline`). `audit` passes each baseline through to its
-/// underlying analysis; baseline-matched issues are excluded from the verdict.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditConfig {
-    /// Which findings should make `fallow audit` fail.
     #[serde(default, skip_serializing_if = "AuditGate::is_default")]
     pub gate: AuditGate,
 
-    /// Path to the dead-code baseline (produced by `fallow dead-code --save-baseline`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dead_code_baseline: Option<String>,
 
-    /// Path to the health baseline (produced by `fallow health --save-baseline`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health_baseline: Option<String>,
 
-    /// Path to the duplication baseline (produced by `fallow dupes --save-baseline`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dupes_baseline: Option<String>,
 
-    /// Maximum age (in days since last reuse or fresh create) of a persistent
-    /// reusable base-snapshot worktree cache entry. Older entries are removed
-    /// at the top of the next `fallow audit` invocation. The env var
-    /// `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS` wins over this field. Unset on both
-    /// sides defaults to 30 days. Setting either source to `0` disables the
-    /// sweep entirely (escape hatch for CI runners that prune caches
-    /// out-of-band). Invalid env var values (non-integer, negative) silently
-    /// fall back to this field / default rather than failing the audit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_max_age_days: Option<u32>,
 }
 
 impl AuditConfig {
-    /// True when all baseline paths are unset.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.gate.is_default()
@@ -595,14 +367,11 @@ impl AuditConfig {
     }
 }
 
-/// Gating mode for `fallow audit`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuditGate {
-    /// Only findings introduced by the current changeset affect the verdict.
     #[default]
     NewOnly,
-    /// All findings in changed files affect the verdict.
     All,
 }
 
@@ -613,21 +382,13 @@ impl AuditGate {
     }
 }
 
-/// Regression baseline counts, embedded in the config file.
-///
-/// When `--fail-on-regression` is used without `--regression-baseline <PATH>`,
-/// fallow reads the baseline from this config section.
-/// When `--save-regression-baseline` is used without a path argument,
-/// fallow writes the baseline into the config file.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegressionConfig {
-    /// Dead code issue counts baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<RegressionBaseline>,
 }
 
-/// Per-type issue counts for regression comparison.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegressionBaseline {
@@ -670,8 +431,6 @@ pub struct RegressionBaseline {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── Default trait ───────────────────────────────────────────────
 
     #[test]
     fn default_config_has_empty_collections() {
@@ -718,8 +477,6 @@ mod tests {
         assert_eq!(config.health.max_cyclomatic, 20);
         assert_eq!(config.health.max_cognitive, 15);
     }
-
-    // ── JSON deserialization ────────────────────────────────────────
 
     #[test]
     fn deserialize_empty_json_object() {
@@ -862,8 +619,6 @@ mod tests {
             ]
         );
     }
-
-    // ── TOML deserialization ────────────────────────────────────────
 
     #[test]
     fn deserialize_toml_minimal() {
@@ -1023,8 +778,6 @@ usedClassMembers = [
         assert!(result.is_err(), "unknown fields should be rejected");
     }
 
-    // ── Serialization roundtrip ─────────────────────────────────────
-
     #[test]
     fn json_serialize_roundtrip() {
         let config = FallowConfig {
@@ -1045,7 +798,6 @@ usedClassMembers = [
             ..FallowConfig::default()
         };
         let json = serde_json::to_string(&config).unwrap();
-        // $schema has skip_serializing, should not appear in output
         assert!(
             !json.contains("$schema"),
             "schema field should be skipped in serialization"
@@ -1064,8 +816,6 @@ usedClassMembers = [
             "extends field should be skipped in serialization"
         );
     }
-
-    // ── RegressionConfig / RegressionBaseline ──────────────────────
 
     #[test]
     fn regression_config_deserialize_json() {
@@ -1086,7 +836,6 @@ usedClassMembers = [
         assert_eq!(baseline.unused_files, 10);
         assert_eq!(baseline.unused_exports, 5);
         assert_eq!(baseline.circular_dependencies, 2);
-        // Unset fields default to 0
         assert_eq!(baseline.unused_types, 0);
         assert_eq!(baseline.boundary_violations, 0);
     }
@@ -1163,8 +912,6 @@ usedClassMembers = [
         );
     }
 
-    // ── JSON config with overrides and boundaries ──────────────────
-
     #[test]
     fn deserialize_json_with_overrides() {
         let json = r#"{
@@ -1199,8 +946,6 @@ usedClassMembers = [
         assert_eq!(config.boundaries.preset, Some(BoundaryPreset::Layered));
     }
 
-    // ── TOML with regression config ────────────────────────────────
-
     #[test]
     fn deserialize_toml_with_regression_baseline() {
         let toml_str = r"
@@ -1215,8 +960,6 @@ unusedExports = 15
         assert_eq!(baseline.unused_files, 10);
         assert_eq!(baseline.unused_exports, 15);
     }
-
-    // ── TOML with multiple overrides ───────────────────────────────
 
     #[test]
     fn deserialize_toml_with_overrides() {
@@ -1242,15 +985,11 @@ unused-files = "off"
         assert_eq!(config.overrides[1].rules.unused_files, Some(Severity::Off));
     }
 
-    // ── Default regression config ──────────────────────────────────
-
     #[test]
     fn regression_config_default_is_none_baseline() {
         let config = RegressionConfig::default();
         assert!(config.baseline.is_none());
     }
-
-    // ── Config with multiple ignore export rules ───────────────────
 
     #[test]
     fn deserialize_json_multiple_ignore_export_rules() {
@@ -1265,8 +1004,6 @@ unused-files = "off"
         assert_eq!(config.ignore_exports.len(), 3);
         assert_eq!(config.ignore_exports[2].exports, vec!["default"]);
     }
-
-    // ── Public packages ───────────────────────────────────────────
 
     #[test]
     fn deserialize_json_public_packages_camel_case() {

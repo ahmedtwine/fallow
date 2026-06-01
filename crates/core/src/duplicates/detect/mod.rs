@@ -104,14 +104,9 @@ impl CloneDetector {
             })
             .collect();
 
-        // Compute total stats.
         let total_files = files.len();
         let total_lines: usize = files.iter().map(|f| f.file_tokens.line_count).sum();
         let total_tokens: usize = files.iter().map(|f| f.hashed_tokens.len()).sum();
-        // See shingle_filter::filter_to_focus_candidates for the rationale:
-        // normalise both sides through `dunce::simplified` so the Windows
-        // verbatim-vs-non-verbatim prefix mismatch does not silently mark
-        // every file as non-focus.
         let focus_file_ids = focus_files.map(|focus| {
             let normalized: rustc_hash::FxHashSet<std::path::PathBuf> = focus
                 .iter()
@@ -133,7 +128,6 @@ impl CloneDetector {
             "clone detection input"
         );
 
-        // Step 1: Rank reduction — map u64 hashes to consecutive u32 ranks.
         let t0 = std::time::Instant::now();
         let ranked_files = ranking::rank_reduce(&files);
         let rank_time = t0.elapsed();
@@ -149,7 +143,6 @@ impl CloneDetector {
             "step1_rank_reduce"
         );
 
-        // Step 2: Concatenate with sentinels.
         let t0 = std::time::Instant::now();
         let (text, file_of, file_offsets) =
             concatenation::concatenate_with_sentinels(&ranked_files);
@@ -164,7 +157,6 @@ impl CloneDetector {
             return empty_report(total_files);
         }
 
-        // Step 3: Build suffix array.
         let t0 = std::time::Instant::now();
         let sa = suffix_array::build_suffix_array(&text);
         let sa_time = t0.elapsed();
@@ -174,13 +166,11 @@ impl CloneDetector {
             "step3_suffix_array"
         );
 
-        // Step 4: Build LCP array (Kasai's algorithm, sentinel-aware).
         let t0 = std::time::Instant::now();
         let lcp_arr = lcp::build_lcp(&text, &sa);
         let lcp_time = t0.elapsed();
         tracing::debug!(elapsed_us = lcp_time.as_micros(), "step4_lcp_array");
 
-        // Step 5: Extract clone groups from LCP intervals.
         let t0 = std::time::Instant::now();
         let raw_groups = extraction::extract_clone_groups(
             &sa,
@@ -198,7 +188,6 @@ impl CloneDetector {
             "step5_extract_groups"
         );
 
-        // Step 6: Build CloneGroup structs with line info, apply filters.
         let t0 = std::time::Instant::now();
         let clone_groups =
             filtering::build_groups(raw_groups, &files, self.min_lines, self.skip_local);
@@ -209,7 +198,6 @@ impl CloneDetector {
             "step6_build_groups"
         );
 
-        // Step 7: Compute stats.
         let t0 = std::time::Instant::now();
         let stats =
             statistics::compute_stats(&clone_groups, total_files, total_lines, total_tokens);

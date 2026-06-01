@@ -102,7 +102,6 @@ pub fn collect_angular_template_refs(source: &str) -> AngularTemplateRefs {
     let mut index = 0;
 
     while index < bytes.len() {
-        // {{ expression }} interpolation
         if index + 1 < bytes.len() && bytes[index] == b'{' && bytes[index + 1] == b'{' {
             let Some((expr, next_index)) = scan_curly_section(source, index, 2, 2) else {
                 break;
@@ -112,7 +111,6 @@ pub fn collect_angular_template_refs(source: &str) -> AngularTemplateRefs {
             continue;
         }
 
-        // @if/@for/@switch/@case/@else/@empty — Angular 17+ control flow
         if bytes[index] == b'@'
             && let Some(next_index) = handle_control_flow(source, index, &mut scopes, &mut refs)
         {
@@ -120,7 +118,6 @@ pub fn collect_angular_template_refs(source: &str) -> AngularTemplateRefs {
             continue;
         }
 
-        // Closing control flow blocks — pop scope
         if bytes[index] == b'}' {
             if scopes.len() > 1 {
                 scopes.pop();
@@ -129,14 +126,12 @@ pub fn collect_angular_template_refs(source: &str) -> AngularTemplateRefs {
             continue;
         }
 
-        // HTML tags with bindings
         if bytes[index] == b'<' {
             if let Some((tag, next_index)) = scan_html_tag(source, index) {
                 process_tag(tag, &mut scopes, &mut refs);
                 index = next_index;
                 continue;
             }
-            // Bare `<` in text content (e.g., "count < 10") — skip and continue scanning.
             index += 1;
             continue;
         }
@@ -158,18 +153,11 @@ fn handle_control_flow(
 ) -> Option<usize> {
     let rest = &source[start + 1..]; // skip '@'
 
-    // Match keyword
     let keyword_end = rest.find(|c: char| !c.is_ascii_alphabetic())?;
     let keyword = &rest[..keyword_end];
 
     match keyword {
         "if" => {
-            // @if (expression) { ... }
-            // @if (expression; as alias) { ... } binds the truthy result to a
-            // template-local. The `;`-separated tail must be split off before
-            // parsing the condition: oxc rejects `;` inside `void (...)`, so the
-            // whole content would otherwise fail to parse and the condition's
-            // refs would be lost (false-positive unused-class-member, issue #308).
             let after_keyword = &source[start + 1 + keyword_end..];
             let paren_start = after_keyword.find('(')?;
             let paren_content_start = start + 1 + keyword_end + paren_start;
@@ -177,22 +165,15 @@ fn handle_control_flow(
             let (cond_expr, alias_name) = parse_if_condition_and_alias(paren_content);
             let locals = current_locals(scopes);
             collect_expression_refs(cond_expr.trim(), &locals, refs);
-            // Bind the alias as a block-scoped local so `{{ alias }}` inside the
-            // body doesn't surface as an unresolved identifier (which would
-            // falsely credit any class member with the same name).
             let mut scope_locals = Vec::new();
             if let Some(alias) = alias_name {
                 scope_locals.push(alias.to_string());
             }
             scopes.push(scope_locals);
-            // Search for opening brace AFTER the closing paren, not from the opening paren.
-            // Otherwise expressions containing `{` (object literals, template literals)
-            // would cause the scanner to land mid-expression.
             let brace_pos = source[after_paren..].find('{')?;
             Some(after_paren + brace_pos + 1)
         }
         "switch" | "case" => {
-            // @switch (expression) { ... } / @case (value) { ... }
             let after_keyword = &source[start + 1 + keyword_end..];
             let paren_start = after_keyword.find('(')?;
             let paren_content_start = start + 1 + keyword_end + paren_start;
@@ -204,7 +185,6 @@ fn handle_control_flow(
             Some(after_paren + brace_pos + 1)
         }
         "for" => {
-            // @for (item of expression; track expression) { ... }
             let after_keyword = &source[start + 1 + keyword_end..];
             let paren_start = after_keyword.find('(')?;
             let paren_content_start = start + 1 + keyword_end + paren_start;
@@ -212,14 +192,12 @@ fn handle_control_flow(
 
             let mut locals_for_scope = Vec::new();
 
-            // Split on ';' to separate "item of expr" from "track expr"
             let parts: Vec<&str> = paren_content.split(';').collect();
             if let Some(first_part) = parts.first()
                 && let Some(caps) = CONTROL_FOR_RE.captures(first_part.trim())
             {
                 let binding = caps.get(1).map_or("", |m| m.as_str());
                 locals_for_scope.push(binding.to_string());
-                // Also add $index, $first, $last, $even, $odd, $count as implicit locals
                 for implicit in &["$index", "$first", "$last", "$even", "$odd", "$count"] {
                     locals_for_scope.push((*implicit).to_string());
                 }
@@ -228,7 +206,6 @@ fn handle_control_flow(
                 collect_expression_refs(iterable, &current, refs);
             }
 
-            // Handle "track expr" part
             for part in parts.iter().skip(1) {
                 let part = part.trim();
                 if let Some(track_expr) = part.strip_prefix("track") {
@@ -243,9 +220,6 @@ fn handle_control_flow(
             Some(after_paren + brace_pos + 1)
         }
         "defer" => {
-            // @defer (when condition) { ... }
-            // @defer (on viewport; when isReady) { ... }
-            // @defer (prefetch when shouldPrefetch) { ... }
             let after_keyword = &source[start + 1 + keyword_end..];
             let trimmed = after_keyword.trim_start();
             let offset = after_keyword.len() - trimmed.len();
@@ -255,10 +229,8 @@ fn handle_control_flow(
                 let paren_content_start = abs_after_keyword;
                 let (paren_content, after_paren) = scan_parenthesized(source, paren_content_start)?;
                 let locals = current_locals(scopes);
-                // Extract `when <expr>` clauses from semicolon-separated parts
                 for part in paren_content.split(';') {
                     let part = part.trim();
-                    // Match "when expr", "prefetch when expr", "hydrate when expr"
                     if let Some(pos) = part.find("when") {
                         let after_when = &part[pos + 4..];
                         let expr = after_when.trim();
@@ -271,7 +243,6 @@ fn handle_control_flow(
                 let brace_pos = source[after_paren..].find('{')?;
                 Some(after_paren + brace_pos + 1)
             } else {
-                // @defer { ... } with no parenthesized condition
                 scopes.push(Vec::new());
                 let rest_from = start + 1 + keyword_end;
                 let brace_pos = source[rest_from..].find('{')?;
@@ -279,40 +250,32 @@ fn handle_control_flow(
             }
         }
         "let" => {
-            // @let varName = expression;
-            // Introduces a template-local variable; no block scope.
             let after_keyword = &source[start + 1 + keyword_end..];
             let trimmed = after_keyword.trim_start();
             let offset = after_keyword.len() - trimmed.len();
 
-            // Find the variable name (first identifier after whitespace)
             let name_end = trimmed.find(|c: char| !c.is_ascii_alphanumeric() && c != '_')?;
             let var_name = &trimmed[..name_end];
 
-            // Find '=' after the name
             let rest_after_name = &trimmed[name_end..];
             let eq_pos = rest_after_name.find('=')?;
             let expr_start = eq_pos + 1;
             let expr_rest = &rest_after_name[expr_start..];
 
-            // Find ';' that terminates the @let statement
             let semi_pos = expr_rest.find(';')?;
             let expr = expr_rest[..semi_pos].trim();
 
             let locals = current_locals(scopes);
             collect_expression_refs(expr, &locals, refs);
 
-            // Add the variable to the current scope (not a new scope)
             if let Some(scope) = scopes.last_mut() {
                 scope.push(var_name.to_string());
             }
 
-            // Return index after the ';'
             let abs_semi = start + 1 + keyword_end + offset + name_end + expr_start + semi_pos + 1;
             Some(abs_semi)
         }
         "else" => {
-            // @else { ... } or @else if (condition) { ... }
             let rest_from = start + 1 + keyword_end;
             let after_else = source[rest_from..].trim_start();
             let trimmed_offset = source[rest_from..].len() - after_else.len();
@@ -323,7 +286,6 @@ fn handle_control_flow(
                     .get(2)
                     .is_some_and(|b| b.is_ascii_alphanumeric())
             {
-                // @else if (condition) { ... } — scan the condition
                 let if_keyword_end = rest_from + trimmed_offset + 2;
                 let after_if = &source[if_keyword_end..];
                 let paren_start = after_if.find('(')?;
@@ -340,7 +302,6 @@ fn handle_control_flow(
                 Some(rest_from + brace_pos + 1)
             }
         }
-        // @empty, @default, @placeholder, @loading, @error — no expression
         "empty" | "default" | "placeholder" | "loading" | "error" => {
             scopes.push(Vec::new());
             let rest_from = start + 1 + keyword_end;
@@ -362,12 +323,7 @@ fn parse_if_condition_and_alias(content: &str) -> (&str, Option<&str>) {
     };
     let cond = &content[..semi_pos];
     let rest = content[semi_pos + 1..].trim_start();
-    // Match `as` followed by ANY whitespace (space, tab, newline) before the
-    // alias token. Angular formatters wrap long conditions and can produce
-    // `; as\n  alias`, so a literal `"as "` prefix is not enough.
     let Some(after_as) = rest.strip_prefix("as").and_then(|tail| {
-        // The character immediately after `as` must be whitespace, otherwise
-        // `as` was a prefix of some other identifier (e.g. `aspect`).
         let first = tail.chars().next()?;
         if first.is_whitespace() {
             Some(tail.trim_start())
@@ -375,8 +331,6 @@ fn parse_if_condition_and_alias(content: &str) -> (&str, Option<&str>) {
             None
         }
     }) else {
-        // Unrecognized continuation (e.g. unexpected keyword); still strip the
-        // condition so the parser doesn't choke on the `;`.
         return (cond, None);
     };
     let alias = after_as
@@ -441,7 +395,6 @@ fn scan_parenthesized(source: &str, start: usize) -> Option<(&str, usize)> {
         }
     }
     if depth == 0 {
-        // i points at the closing ')'; content is between start+1..i
         Some((&source[start + 1..i], i + 1))
     } else {
         None
@@ -461,54 +414,42 @@ fn process_tag(tag: &str, scopes: &mut [Vec<String>], refs: &mut AngularTemplate
             continue;
         }
 
-        // [prop]="expression" — property binding
-        // [attr.x]="expression" — attribute binding
-        // [class.x]="expression" — class binding
-        // [style.x]="expression" — style binding
         if attr_name.starts_with('[') && !attr_name.starts_with("[(") {
             collect_expression_refs(attr_value, &locals, refs);
             continue;
         }
 
-        // (event)="statement" — event binding
         if attr_name.starts_with('(') {
             collect_statement_refs(attr_value, &locals, refs);
             continue;
         }
 
-        // [(prop)]="expression" — two-way binding (banana-in-a-box)
         if attr_name.starts_with("[(") {
             collect_expression_refs(attr_value, &locals, refs);
             continue;
         }
 
-        // *ngIf="expression" — structural directive
         if attr_name == "*ngIf" || attr_name == "*ngShow" || attr_name == "*ngSwitch" {
-            // Strip '; else/then' clauses and parse the condition
             let expr = attr_value.split(';').next().unwrap_or(attr_value).trim();
             collect_expression_refs(expr, &locals, refs);
             continue;
         }
 
-        // *ngFor="let item of items; trackBy: fn" — structural directive
         if attr_name == "*ngFor" {
             handle_ng_for(attr_value, &locals, scopes, refs);
             continue;
         }
 
-        // Other structural directives (*ngSwitchCase, etc.)
         if attr_name.starts_with('*') {
             collect_expression_refs(attr_value, &locals, refs);
             continue;
         }
 
-        // bind-prop="expression" — alternative property binding syntax
         if attr_name.starts_with("bind-") {
             collect_expression_refs(attr_value, &locals, refs);
             continue;
         }
 
-        // on-event="statement" — alternative event binding syntax
         if attr_name.starts_with("on-") {
             collect_statement_refs(attr_value, &locals, refs);
         }
@@ -523,7 +464,6 @@ fn handle_ng_for(
     scopes: &mut [Vec<String>],
     refs: &mut AngularTemplateRefs,
 ) {
-    // Split on ';' to separate clauses
     let clauses: Vec<&str> = value.split(';').collect();
 
     let mut ng_for_locals = locals.to_vec();
@@ -532,7 +472,6 @@ fn handle_ng_for(
     for clause in &clauses {
         let clause = clause.trim();
 
-        // "let item of items" — main iteration
         if let Some(caps) = NG_FOR_OF_RE.captures(clause) {
             let binding = caps.get(1).map_or("", |m| m.as_str());
             ng_for_locals.push(binding.to_string());
@@ -542,7 +481,6 @@ fn handle_ng_for(
             continue;
         }
 
-        // "let i = index" — local variable alias
         if let Some(rest) = clause.strip_prefix("let ") {
             if let Some(eq_pos) = rest.find('=') {
                 let name = rest[..eq_pos].trim();
@@ -552,16 +490,11 @@ fn handle_ng_for(
             continue;
         }
 
-        // "trackBy: trackByFn" — track function reference
         if let Some(rest) = clause.strip_prefix("trackBy:") {
             collect_expression_refs(rest.trim(), &ng_for_locals, refs);
         }
     }
 
-    // Add *ngFor bindings to the current scope so that subsequent template
-    // expressions (e.g., {{ item }}) within this element see them as locals.
-    // Imprecise (flat scan cannot track element closing tags) but conservative:
-    // extra locals only suppress refs, preventing false positives.
     if let Some(scope) = scopes.last_mut() {
         scope.extend(new_scope_locals);
     }
@@ -581,7 +514,6 @@ fn collect_expression_refs(expr: &str, locals: &[String], refs: &mut AngularTemp
         refs.add_member_access(access);
     }
 
-    // Pipe names are also references (to Angular pipe classes)
     for pipe_name in pipe_names {
         if !pipe_name.is_empty() {
             refs.identifiers.insert(pipe_name.to_string());
@@ -632,7 +564,6 @@ fn split_pipes(expr: &str) -> (&str, Vec<&str>) {
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth = depth.saturating_sub(1),
             b'|' if depth == 0 => {
-                // Distinguish pipe `|` from logical OR `||`
                 let prev_is_pipe = i > 0 && bytes[i - 1] == b'|';
                 let next_is_pipe = i + 1 < bytes.len() && bytes[i + 1] == b'|';
                 if !prev_is_pipe && !next_is_pipe {
@@ -653,7 +584,6 @@ fn split_pipes(expr: &str) -> (&str, Vec<&str>) {
     for (j, &pos) in pipe_positions.iter().enumerate() {
         let end = pipe_positions.get(j + 1).copied().unwrap_or(expr.len());
         let pipe_part = expr[pos + 1..end].trim();
-        // Pipe name is the identifier before the first ':' (pipe arguments)
         let name = pipe_part.split(':').next().unwrap_or("").trim();
         if !name.is_empty() {
             pipes.push(name);
@@ -805,29 +735,22 @@ mod tests {
         assert!(refs.contains("onButtonClick"));
         assert!(refs.contains("addItem"));
         assert!(refs.contains("items"));
-        // 'item' is a local from @for, should not appear
         assert!(!refs.contains("item"));
     }
 
     #[test]
     fn bare_less_than_in_text_does_not_abort_scanner() {
-        // A bare `<` in text content (e.g., "count < 10") should not cause the
-        // scanner to abort. Refs after the bare `<` must still be collected.
         let refs = collect_angular_template_refs("count < 10\n<p>{{ title() }}</p>");
         assert!(refs.contains("title"), "refs after bare < should be found");
     }
 
     #[test]
     fn control_flow_with_object_literal_in_expression() {
-        // The `{` in the object literal inside the @if condition should not be
-        // confused with the block-opening `{`.
         let refs =
             collect_angular_template_refs(r"@if (config.enabled) { <span>{{ label }}</span> }");
         assert!(refs.contains("config"));
         assert!(refs.contains("label"));
     }
-
-    // ── @defer ──────────────────────────────────────────────────
 
     #[test]
     fn defer_when_extracts_refs() {
@@ -872,8 +795,6 @@ mod tests {
         assert!(refs.contains("label"));
     }
 
-    // ── @let ───────────────────────────────────────────────────
-
     #[test]
     fn let_extracts_expression_refs() {
         let refs = collect_angular_template_refs(
@@ -882,7 +803,6 @@ mod tests {
         );
         assert!(refs.contains("firstName"));
         assert!(refs.contains("lastName"));
-        // fullName is a local introduced by @let, not a component member
         assert!(!refs.contains("fullName"));
     }
 
@@ -906,8 +826,6 @@ mod tests {
         assert!(refs.contains("date"));
         assert!(!refs.contains("formatted"));
     }
-
-    // ── split_pipes ─────────────────────────────────────────────
 
     #[test]
     fn split_pipes_no_pipe() {
@@ -950,8 +868,6 @@ mod tests {
         assert_eq!(expr, "fn(a | b)");
         assert!(pipes.is_empty());
     }
-
-    // ── Member-access chains (issue #174) ───────────────────────
 
     #[test]
     fn interpolation_extracts_member_access_chain() {
@@ -1022,8 +938,6 @@ mod tests {
 
     #[test]
     fn local_binding_does_not_emit_member_chain() {
-        // `item` is a local from *ngFor; `item.name` should NOT emit a chain
-        // because `item` is not an unresolved top-level identifier.
         let refs =
             collect_angular_template_refs(r#"<li *ngFor="let item of items">{{ item.name }}</li>"#);
         assert!(refs.identifiers.contains("items"));
@@ -1034,8 +948,6 @@ mod tests {
             refs.member_accesses
         );
     }
-
-    // ── @if alias clause (issue #308) ───────────────────────────
 
     #[test]
     fn parse_if_alias_no_semicolon_returns_full_condition() {
@@ -1074,7 +986,6 @@ mod tests {
 
     #[test]
     fn parse_if_alias_handles_newline_after_as() {
-        // Angular formatters wrap long conditions across lines.
         let (cond, alias) = parse_if_condition_and_alias("svc.compute();\n  as\n  result");
         assert_eq!(cond.trim(), "svc.compute()");
         assert_eq!(alias, Some("result"));
@@ -1089,7 +1000,6 @@ mod tests {
 
     #[test]
     fn parse_if_alias_does_not_match_as_prefixed_identifier() {
-        // `aspect` starts with `as` but is not the alias keyword.
         let (cond, alias) = parse_if_condition_and_alias("cond; aspect");
         assert_eq!(cond, "cond");
         assert_eq!(alias, None);
@@ -1097,8 +1007,6 @@ mod tests {
 
     #[test]
     fn at_if_with_alias_extracts_condition_refs() {
-        // Regression for issue #308: `withAlias()` was lost because
-        // `void (withAlias(); as aliased)` fails to parse.
         let refs = collect_angular_template_refs(
             r"@if (withAlias(); as aliased) { <p>{{ aliased }}</p> }",
         );
@@ -1134,8 +1042,6 @@ mod tests {
 
     #[test]
     fn at_if_alias_does_not_leak_outside_block() {
-        // The alias is a block-local; references to the same name in a sibling
-        // block (or outside any @if) must still surface as identifiers.
         let refs = collect_angular_template_refs(
             r"@if (a(); as result) { <p>{{ result }}</p> } <p>{{ result }}</p>",
         );
@@ -1149,8 +1055,6 @@ mod tests {
 
     #[test]
     fn at_if_alias_with_object_literal_in_condition() {
-        // `cond` here happens to mention an inline object literal; the `;` and
-        // `as alias` parsing must still be correctly anchored at top-level.
         let refs = collect_angular_template_refs(
             r"@if (build({ key: value }); as built) { <p>{{ built }}</p> }",
         );

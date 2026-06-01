@@ -21,9 +21,6 @@ fn unused_file_paths(
 
 #[test]
 fn issue_758_root_dangerfile_is_credited_without_danger_dependency() {
-    // Danger is commonly run from CI without `danger` declared in package.json.
-    // The dangerfile's presence must activate the plugin so it is not flagged
-    // as an unused file.
     let root = fixture_path("issue-758-danger-no-dep");
     let config = create_config(root.clone());
     let results = fallow_core::analyze(&config).expect("analysis should succeed");

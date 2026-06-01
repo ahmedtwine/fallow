@@ -110,7 +110,6 @@ mod tests {
 
         let hashed = normalize_and_hash(&tokens, DetectionMode::Strict);
         assert_eq!(hashed.len(), 2);
-        // Different identifiers should have different hashes in strict mode
         assert_ne!(hashed[0].hash, hashed[1].hash);
     }
 
@@ -123,7 +122,6 @@ mod tests {
 
         let hashed = normalize_and_hash(&tokens, DetectionMode::Semantic);
         assert_eq!(hashed.len(), 2);
-        // Different identifiers should have the SAME hash in semantic mode
         assert_eq!(hashed[0].hash, hashed[1].hash);
     }
 
@@ -219,14 +217,11 @@ mod tests {
         assert_ne!(hashed[0].hash, hashed[1].hash);
     }
 
-    // ── Literal token type tests ─────────────────────────────────
-
     #[test]
     fn null_literal_has_stable_hash() {
         let tokens = vec![make_token(TokenKind::NullLiteral)];
         let h1 = normalize_and_hash(&tokens, DetectionMode::Strict);
         let h2 = normalize_and_hash(&tokens, DetectionMode::Semantic);
-        // NullLiteral has no value to normalize, so hash should be same across modes
         assert_eq!(h1[0].hash, h2[0].hash);
     }
 
@@ -261,13 +256,11 @@ mod tests {
 
     #[test]
     fn mild_mode_equivalent_to_strict() {
-        // Mild mode is equivalent to Strict for AST-based tokenization (both preserve all values)
         let id_tokens = vec![
             make_token(TokenKind::Identifier("foo".to_string())),
             make_token(TokenKind::Identifier("bar".to_string())),
         ];
         let hashed = normalize_and_hash(&id_tokens, DetectionMode::Mild);
-        // Identifiers preserved in Mild mode
         assert_ne!(hashed[0].hash, hashed[1].hash);
 
         let str_tokens = vec![
@@ -275,7 +268,6 @@ mod tests {
             make_token(TokenKind::StringLiteral("world".to_string())),
         ];
         let hashed = normalize_and_hash(&str_tokens, DetectionMode::Mild);
-        // Strings preserved in Mild mode (same as Strict)
         assert_ne!(hashed[0].hash, hashed[1].hash);
 
         let num_tokens = vec![
@@ -283,7 +275,6 @@ mod tests {
             make_token(TokenKind::NumericLiteral("99".to_string())),
         ];
         let hashed = normalize_and_hash(&num_tokens, DetectionMode::Mild);
-        // Numbers preserved in Mild mode
         assert_ne!(hashed[0].hash, hashed[1].hash);
     }
 
@@ -306,7 +297,6 @@ mod tests {
 
     #[test]
     fn different_token_kinds_produce_distinct_hashes() {
-        // All distinct token kinds with same inner value where applicable
         let tokens = vec![
             make_token(TokenKind::Keyword(KeywordType::Const)),
             make_token(TokenKind::Identifier("x".to_string())),
@@ -320,7 +310,6 @@ mod tests {
             make_token(TokenKind::Punctuation(PunctuationType::OpenParen)),
         ];
         let hashed = normalize_and_hash(&tokens, DetectionMode::Strict);
-        // Each pair should have distinct hashes (different kind discriminant byte)
         for i in 0..hashed.len() {
             for j in (i + 1)..hashed.len() {
                 assert_ne!(
@@ -331,11 +320,8 @@ mod tests {
         }
     }
 
-    // ── Configurable normalization tests ──────────────────────────
-
     #[test]
     fn resolved_strict_with_ignore_identifiers_override() {
-        // Strict mode normally preserves identifiers, but override blinds them
         let norm = ResolvedNormalization {
             ignore_identifiers: true,
             ignore_string_values: false,
@@ -348,7 +334,6 @@ mod tests {
 
         let hashed = normalize_and_hash_resolved(&tokens, norm);
         assert_eq!(hashed.len(), 2);
-        // Identifiers should be blinded
         assert_eq!(hashed[0].hash, hashed[1].hash);
     }
 
@@ -386,7 +371,6 @@ mod tests {
 
     #[test]
     fn resolved_semantic_with_preserve_identifiers_override() {
-        // Semantic mode normally blinds identifiers, but override preserves them
         let norm = ResolvedNormalization {
             ignore_identifiers: false,
             ignore_string_values: true,
@@ -398,7 +382,6 @@ mod tests {
         ];
 
         let hashed = normalize_and_hash_resolved(&tokens, norm);
-        // Identifiers should be preserved (different hashes)
         assert_ne!(hashed[0].hash, hashed[1].hash);
     }
 
@@ -406,21 +389,18 @@ mod tests {
     fn resolved_normalization_from_mode_defaults() {
         use fallow_config::NormalizationConfig;
 
-        // Strict mode defaults: preserve everything
         let norm =
             ResolvedNormalization::resolve(DetectionMode::Strict, &NormalizationConfig::default());
         assert!(!norm.ignore_identifiers);
         assert!(!norm.ignore_string_values);
         assert!(!norm.ignore_numeric_values);
 
-        // Weak mode defaults: blind strings only
         let norm =
             ResolvedNormalization::resolve(DetectionMode::Weak, &NormalizationConfig::default());
         assert!(!norm.ignore_identifiers);
         assert!(norm.ignore_string_values);
         assert!(!norm.ignore_numeric_values);
 
-        // Semantic mode defaults: blind all
         let norm = ResolvedNormalization::resolve(
             DetectionMode::Semantic,
             &NormalizationConfig::default(),
@@ -434,16 +414,15 @@ mod tests {
     fn resolved_normalization_overrides_mode_defaults() {
         use fallow_config::NormalizationConfig;
 
-        // Strict mode with explicit override to blind identifiers
         let overrides = NormalizationConfig {
             ignore_identifiers: Some(true),
-            ignore_string_values: None, // Use mode default (false)
+            ignore_string_values: None,
             ignore_numeric_values: None,
         };
         let norm = ResolvedNormalization::resolve(DetectionMode::Strict, &overrides);
-        assert!(norm.ignore_identifiers); // Overridden
-        assert!(!norm.ignore_string_values); // Mode default
-        assert!(!norm.ignore_numeric_values); // Mode default
+        assert!(norm.ignore_identifiers);
+        assert!(!norm.ignore_string_values);
+        assert!(!norm.ignore_numeric_values);
     }
 
     mod proptests {
@@ -506,8 +485,6 @@ mod tests {
             ) {
                 let token = make_token(kind);
                 let first = normalize_and_hash_resolved(std::slice::from_ref(&token), norm);
-                // The hash is computed directly from the token kind + normalization flags.
-                // Running it again on the same input must yield the same hash.
                 let second = normalize_and_hash_resolved(&[token], norm);
                 prop_assert_eq!(first.len(), second.len());
                 for (a, b) in first.iter().zip(second.iter()) {

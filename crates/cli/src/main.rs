@@ -54,8 +54,6 @@ use list::ListOptions;
 pub use runtime_support::{AnalysisKind, GroupBy};
 pub(crate) use runtime_support::{build_ownership_resolver, load_config, load_config_for_analysis};
 
-// ── CLI definition ───────────────────────────────────────────────
-
 const TOP_LEVEL_HELP_TEMPLATE: &str =
     "{about-with-newline}\n{usage-heading} {usage}{after-help}\n\nOptions:\n{options}";
 
@@ -148,35 +146,15 @@ struct Cli {
     #[arg(long, visible_alias = "base", global = true)]
     changed_since: Option<String>,
 
-    /// Path to a unified diff (e.g. `git diff --unified=0 main...HEAD`) used
-    /// for line-level scoping of every finding. When supplied, only findings
-    /// whose source line falls inside an added hunk for that file are
-    /// reported; project-level findings (unused deps, catalog entries,
-    /// dependency overrides) bypass the filter because they anchor at fixed
-    /// `package.json` / `pnpm-workspace.yaml` lines a PR rarely touches.
-    /// Pass `-` to read the diff from stdin (e.g. `gh pr diff | fallow
-    /// audit --diff-file -`); `--diff-stdin` is a verbose alias for the same
-    /// behavior. Falls back to `FALLOW_DIFF_FILE` when the flag is omitted,
-    /// so CI scripts that already export the env var keep working
-    /// unchanged. When both `--diff-file` and `--changed-since` are set,
-    /// the diff filter wins for line-level filtering and `--changed-since`
-    /// still governs file discovery; fallow logs a one-line stderr note so
-    /// the precedence is visible in CI logs.
-    ///
-    /// Examples:
-    ///
-    ///   fallow audit --diff-file pr.diff
-    ///
-    ///   gh pr diff | fallow audit --diff-file -
-    ///
-    ///   git diff main...HEAD | fallow check --diff-stdin
+    /// Unified diff for line-level scoping.
+    /// Use `-` to read from stdin. Project-level findings still bypass this
+    /// filter. When both this and `--changed-since` are set, the diff filter
+    /// wins for finding scope while `--changed-since` still drives file discovery.
     #[arg(long = "diff-file", value_name = "PATH", global = true)]
     diff_file: Option<PathBuf>,
 
-    /// Read the unified diff from stdin instead of a file. Equivalent to
-    /// `--diff-file -`. Mutually exclusive with a non-stdin `--diff-file`
-    /// value; fails fast if both forms are supplied. Useful for piping
-    /// `gh pr diff` or `git diff` directly into fallow without a tempfile.
+    /// Read the unified diff from stdin.
+    /// Equivalent to `--diff-file -`.
     #[arg(long = "diff-stdin", global = true)]
     diff_stdin: bool,
 
@@ -213,34 +191,18 @@ struct Cli {
     #[arg(long = "production-dupes")]
     production_dupes: bool,
 
-    /// Scope output to one or more workspaces. Accepts exact package names, globs
-    /// (matched against the package name AND the workspace path relative to the repo
-    /// root), and `!`-prefixed negations. Values can be comma-separated or repeated.
-    /// The full cross-workspace graph is still built; only issues are filtered.
-    ///
-    /// Examples:
-    ///   -w web,admin
-    ///   -w 'apps/*'
-    ///   -w 'apps/*,!apps/legacy'
-    ///
-    /// Use single quotes around patterns with `!` or glob chars. In bash,
-    /// unquoted `!` triggers history expansion and double quotes are not enough.
+    /// Scope output to selected workspaces.
+    /// Accepts exact names, glob patterns, and `!`-prefixed negations.
+    /// Values can be comma-separated or repeated.
     #[arg(short, long, global = true, value_delimiter = ',')]
     workspace: Option<Vec<String>>,
 
-    /// Scope output to workspaces containing any file changed since the given git ref.
-    /// Auto-derives the set of touched packages in a monorepo so CI jobs don't have
-    /// to maintain a hand-written workspace list. Git is required; a missing ref or
-    /// non-git directory is a hard error, so failure is visible instead of quietly
-    /// widening back to the full monorepo. Mutually exclusive with --workspace.
-    ///
-    /// Example:
-    ///   fallow --changed-workspaces origin/main
+    /// Scope output to workspaces touched since the given git ref.
+    /// Git is required. Mutually exclusive with `--workspace`.
     #[arg(long, global = true, value_name = "REF")]
     changed_workspaces: Option<String>,
 
-    /// Group output by owner (.github/CODEOWNERS) or by directory (no CODEOWNERS needed).
-    /// Partitions all issues into labeled sections for team-level triage and dashboards.
+    /// Group output by owner or by directory.
     #[arg(long, global = true)]
     group_by: Option<GroupBy>,
 
@@ -249,13 +211,10 @@ struct Cli {
     performance: bool,
 
     /// Include metric definitions and rule descriptions in output.
-    /// JSON: adds a `_meta` object with docs URLs, metric ranges, and interpretations.
-    /// Always enabled for MCP server responses.
     #[arg(long, global = true)]
     explain: bool,
 
-    /// Show a per-pattern breakdown for default duplicates ignores.
-    /// Human and markdown output only; machine formats suppress the note.
+    /// Show a per-pattern breakdown for default duplicate ignores.
     #[arg(long, global = true)]
     explain_skipped: bool,
 
@@ -276,25 +235,18 @@ struct Cli {
     sarif_file: Option<PathBuf>,
 
     /// Fail if issue count increased beyond tolerance compared to a regression baseline.
-    /// Use --save-regression-baseline to create a baseline first, then
-    /// --fail-on-regression on subsequent runs to detect regressions.
     #[arg(long, global = true)]
     fail_on_regression: bool,
 
     /// Allowed issue count increase before a regression is flagged.
-    /// Use "N%" for percentage (e.g., "2%") or "N" for absolute count (e.g., "5").
-    /// Default: "0" (any increase fails). Only used with --fail-on-regression.
     #[arg(long, global = true, value_name = "TOLERANCE", default_value = "0")]
     tolerance: String,
 
-    /// Path to the regression baseline file for --fail-on-regression.
-    /// Default: .fallow/regression-baseline.json
+    /// Path to the regression baseline file.
     #[arg(long, global = true, value_name = "PATH")]
     regression_baseline: Option<PathBuf>,
 
     /// Save the current issue counts as a regression baseline.
-    /// Without a path: writes into the config file (.fallowrc.json / .fallowrc.jsonc / fallow.toml).
-    /// With a path: writes a standalone JSON file.
     #[expect(
         clippy::option_option,
         reason = "clap pattern: None=not passed, Some(None)=flag only (write to config), Some(Some(path))=write to file"
@@ -302,11 +254,11 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
     save_regression_baseline: Option<Option<String>>,
 
-    /// Run only specific analyses when no subcommand is given (comma-separated: dead-code,dupes,health)
+    /// Run only specific analyses when no subcommand is given.
     #[arg(long, value_delimiter = ',')]
     only: Vec<AnalysisKind>,
 
-    /// Skip specific analyses when no subcommand is given (comma-separated: dead-code,dupes,health)
+    /// Skip specific analyses when no subcommand is given.
     #[arg(long, value_delimiter = ',')]
     skip: Vec<AnalysisKind>,
 
@@ -318,13 +270,11 @@ struct Cli {
     #[arg(long = "dupes-threshold", global = true)]
     dupes_threshold: Option<f64>,
 
-    /// Compute health score (0-100 with letter grade) in combined mode.
-    /// Use with `--trend` to show score deltas in PR comments.
+    /// Compute health score in combined mode.
     #[arg(long)]
     score: bool,
 
-    /// Compare current health metrics against the most recent saved snapshot
-    /// and show per-metric deltas. Implies --score.
+    /// Compare current health metrics against the most recent saved snapshot.
     #[arg(long)]
     trend: bool,
 
@@ -338,9 +288,6 @@ struct Cli {
     save_snapshot: Option<Option<String>>,
 
     /// Report unused exports in entry files instead of auto-marking them as used.
-    /// Catches typos in framework exports (e.g., `meatdata` instead of `metadata`).
-    /// Also configurable via `includeEntryExports: true` in the config file; the
-    /// CLI flag wins when set.
     #[arg(long, global = true)]
     include_entry_exports: bool,
 }
@@ -843,7 +790,7 @@ enum Command {
     /// Purpose-built for reviewing AI-generated code and PR quality gates.
     /// Combines dead-code + complexity + duplication scoped to changed files
     /// and returns a verdict (pass/warn/fail).
-    /// Auto-detects the base branch if --changed-since/--base is not set.
+    /// Auto-detects the base branch when `--changed-since`/`--base` is unset.
     /// By default, only findings introduced by the changeset affect the verdict;
     /// inherited findings are reported with new-vs-inherited attribution and
     /// individual JSON findings include `introduced: true/false`. Use
@@ -1654,10 +1601,6 @@ impl From<AuditGateArg> for fallow_config::AuditGate {
     }
 }
 
-// See `error.rs` — `emit_error` is re-exported via `use error::emit_error`.
-
-// ── Environment variable helpers ─────────────────────────────────
-
 /// Parse `--min-occurrences` and reject values below 2. A single occurrence
 /// is not a duplicate; silently clamping would diverge from the config-file
 /// validator, which also rejects `< 2`.
@@ -1733,8 +1676,6 @@ fn resolve_audit_baseline_path(
     }
 }
 
-// ── Format resolution ─────────────────────────────────────────────
-
 struct FormatConfig {
     output: fallow_config::OutputFormat,
     quiet: bool,
@@ -1742,9 +1683,6 @@ struct FormatConfig {
 }
 
 fn resolve_format(cli: &Cli) -> FormatConfig {
-    // Resolve output format: CLI flag > FALLOW_FORMAT env var > default ("human").
-    // clap sets the default to "human", so we only override with the env var
-    // when the user did NOT explicitly pass --format on the CLI.
     let cli_format_was_explicit = std::env::args()
         .any(|a| a == "--format" || a == "--output" || a.starts_with("--format=") || a == "-f");
     let format: Format = if cli_format_was_explicit {
@@ -1753,7 +1691,6 @@ fn resolve_format(cli: &Cli) -> FormatConfig {
         format_from_env().unwrap_or(cli.format)
     };
 
-    // Resolve quiet: CLI --quiet flag > FALLOW_QUIET env var > false
     let quiet = cli.quiet || quiet_from_env();
 
     FormatConfig {
@@ -1762,8 +1699,6 @@ fn resolve_format(cli: &Cli) -> FormatConfig {
         cli_format_was_explicit,
     }
 }
-
-// ── Tracing setup ─────────────────────────────────────────────────
 
 /// Build the tracing filter for the CLI.
 ///
@@ -1799,13 +1734,10 @@ fn setup_tracing() {
         .init();
 }
 
-// ── Input validation ──────────────────────────────────────────────
-
 fn validate_inputs(
     cli: &Cli,
     output: fallow_config::OutputFormat,
 ) -> Result<(PathBuf, usize), ExitCode> {
-    // Validate control characters in key string inputs
     if let Some(ref config_path) = cli.config
         && let Some(s) = config_path.to_str()
         && let Err(e) = validate::validate_no_control_chars(s, "--config")
@@ -1830,9 +1762,6 @@ fn validate_inputs(
         return Err(emit_error(&e, 2, output));
     }
 
-    // --workspace and --changed-workspaces are mutually exclusive: one is an
-    // explicit list of packages, the other is git-derived. Mixing them has no
-    // coherent intersection semantics, so reject early with a targeted message.
     if cli.workspace.is_some() && cli.changed_workspaces.is_some() {
         return Err(emit_error(
             "--workspace and --changed-workspaces are mutually exclusive. \
@@ -1843,7 +1772,6 @@ fn validate_inputs(
         ));
     }
 
-    // Validate and resolve root
     let raw_root = cli
         .root
         .clone()
@@ -1855,7 +1783,6 @@ fn validate_inputs(
         }
     };
 
-    // Validate --changed-since early
     if let Some(ref git_ref) = cli.changed_since
         && let Err(e) = validate::validate_git_ref(git_ref)
     {
@@ -1906,8 +1833,6 @@ fn apply_ci_defaults(
         (output, quiet, fail_on_issues)
     }
 }
-
-// ── Helpers ──────────────────────────────────────────────────────
 
 struct DispatchContext<'a> {
     cli: &'a Cli,
@@ -2055,8 +1980,6 @@ fn resolve_production_modes(
     })
 }
 
-// ── Main ─────────────────────────────────────────────────────────
-
 /// Test-only helper invoked when `FALLOW_TEST_SIGNAL_HELPER=1` is set.
 /// Spawns `sleep 30` via the `ScopedChild` registry so the child is
 /// tracked by the signal handler, prints the child PID to stdout, then
@@ -2095,14 +2018,6 @@ fn signal_test_helper() -> ExitCode {
     let _ = writeln!(lock, "{pid}");
     let _ = lock.flush();
     drop(lock);
-    // The wait returns when the signal handler kills the inner sleep;
-    // after that, sleep extra so the signal-handler thread has time to
-    // call `std::process::exit(128 + signum)` before this helper
-    // returns ExitCode::SUCCESS. Without the trailing sleep the main
-    // thread races the listener and sometimes wins, producing exit 0
-    // instead of the expected 130/143. In graceful mode the handler
-    // does NOT exit, so the helper exits 0 normally and the trailing
-    // sleep is a no-op-by-deadline.
     let _ = child.wait_with_output();
     if std::env::var_os("FALLOW_TEST_SIGNAL_HELPER_GRACEFUL").is_some() {
         return ExitCode::SUCCESS;
@@ -2113,16 +2028,10 @@ fn signal_test_helper() -> ExitCode {
 
 #[cfg(not(unix))]
 fn signal_test_helper() -> ExitCode {
-    // Windows test path goes through a different helper; integration
-    // tests are #[cfg(unix)]-gated.
     ExitCode::from(2)
 }
 
 fn main() -> ExitCode {
-    // Install the SIGINT/SIGTERM (Unix) / SetConsoleCtrlHandler (Windows)
-    // handlers before any subprocess is spawned. Non-fatal: a failure here
-    // just means signal-driven child cleanup is unavailable for this run.
-    // Cross-ref: crates/cli/src/signal/mod.rs and issue #477.
     if let Err(err) = signal::install_handlers() {
         use std::io::Write as _;
         let stderr = std::io::stderr();
@@ -2130,51 +2039,22 @@ fn main() -> ExitCode {
         let _ = writeln!(lock, "fallow: failed to install signal handlers: {err}");
     }
 
-    // Route the `git log --numstat` subprocess in fallow-core's churn
-    // analyzer through the signal registry. Core stays cli-independent;
-    // the spawn-hook is a function-pointer install at startup.
     fallow_core::churn::set_spawn_hook(signal::scoped_child::output);
 
-    // Route the `git rev-parse` / `git diff` / `git ls-files`
-    // subprocesses in fallow-core's changed-files module the same way.
-    // These are short-running individually but they ARE spawned mid-
-    // analysis during `--changed-since` + watch sessions; without this
-    // hook a SIGINT during watch leaves them running.
     fallow_core::changed_files::set_spawn_hook(signal::scoped_child::output);
 
-    // Test-only helper subcommand for integration testing the signal
-    // handlers (see crates/cli/tests/signal_tests.rs). Gated on an env
-    // var so it does not pollute the public CLI surface; not visible in
-    // --help, not parsed by clap. The helper spawns `sleep 30` via the
-    // ScopedChild registry, prints the child PID to stdout, then blocks
-    // until SIGINT/SIGTERM reaches our signal handler. Integration tests
-    // read the PID and send a signal to the parent; the signal handler
-    // kills the child and exits 130/143.
     if std::env::var_os("FALLOW_TEST_SIGNAL_HELPER").is_some() {
         return signal_test_helper();
     }
 
     let mut cli = Cli::parse();
 
-    // Auto-suffix the sticky-comment marker with the workspace name when
-    // running scoped to a single workspace package and the user did not pin
-    // an explicit comment id. Parallel per-workspace jobs would otherwise
-    // edit the same `<!-- fallow-id: fallow-results -->` marker on the same
-    // PR/MR and race each other's bodies. Setting `FALLOW_WORKSPACE` here is
-    // read by `report::ci::pr_comment::sticky_marker_id` at render time.
-    // Auto-suffix the sticky-comment marker with a stable identifier derived
-    // from the --workspace selection, so parallel monorepo jobs don't race
-    // each other on the same PR/MR. One workspace: name as-is. N>1: hash
-    // the sorted joined list into a short hex suffix so two jobs running
-    // `--workspace web,admin` and `--workspace api,worker` end up with
-    // distinct markers (`fallow-results-w-<hex>`).
     if let Some(workspaces) = cli.workspace.as_ref()
         && !workspaces.is_empty()
     {
         report::ci::pr_comment::set_workspace_marker_from_list(workspaces);
     }
 
-    // Handle schema commands before tracing setup (no side effects)
     if matches!(cli.command, Some(Command::Schema)) {
         return schema::run_schema();
     }
@@ -2202,18 +2082,6 @@ fn main() -> ExitCode {
         cli_format_was_explicit,
     } = fmt;
 
-    // Resolve `--diff-file` / `--diff-stdin` / `$FALLOW_DIFF_FILE` into a
-    // single `DiffSource`, then load + parse it once for the lifetime of
-    // the process so combined runs (`fallow` with no subcommand) do not
-    // re-read stdin or re-parse the same file three times across check,
-    // dupes, and health. The result populates `diff_filter::SHARED_DIFF`,
-    // which every finding-level filter queries at filter time.
-    //
-    // Precedence: when both `--diff-file` (or the env-var equivalent) and
-    // `--changed-since` are set, the diff filter wins for line-level
-    // filtering and `--changed-since` still governs file discovery. Log
-    // the precedence so it is visible in CI logs without breaking the
-    // existing GitHub Action / GitLab CI scripts that set both today.
     let diff_source = match report::ci::diff_filter::resolve_diff_source(
         cli.diff_file.as_deref(),
         cli.diff_stdin,
@@ -2229,13 +2097,6 @@ fn main() -> ExitCode {
              one of them to disable this combination."
         );
     }
-    // The empty-parse warning inside `init_shared_diff` is gated on `quiet`,
-    // but a misconfigured `--diff-file` (typo, wrong path, non-unified file)
-    // silently produces a zero-finding run that looks identical to a clean
-    // pass. Always pass `false` for the quiet gate when the source is
-    // explicitly set so CI users see the warning even with `--quiet`/`--ci`;
-    // env-var fallback paths respect the user's quiet preference so a
-    // `FALLOW_DIFF_FILE` set elsewhere does not spam logs.
     let suppress_warnings = quiet
         && matches!(
             diff_source,
@@ -2243,7 +2104,6 @@ fn main() -> ExitCode {
         );
     let _ = report::ci::diff_filter::init_shared_diff(diff_source.as_ref(), suppress_warnings);
 
-    // Validate --ci/--fail-on-issues/--sarif-file are not used with irrelevant commands
     if (cli.ci || cli.fail_on_issues || cli.sarif_file.is_some())
         && matches!(
             cli.command,
@@ -2273,7 +2133,6 @@ fn main() -> ExitCode {
         );
     }
 
-    // Validate --only/--skip are not used with a subcommand
     if (!cli.only.is_empty() || !cli.skip.is_empty()) && cli.command.is_some() {
         return emit_error(
             "--only and --skip can only be used without a subcommand",
@@ -2294,13 +2153,11 @@ fn main() -> ExitCode {
         return emit_error("--only and --skip are mutually exclusive", 2, output);
     }
 
-    // Parse regression tolerance
     let tolerance = match regression::Tolerance::parse(&cli.tolerance) {
         Ok(t) => t,
         Err(e) => return emit_error(&format!("invalid --tolerance: {e}"), 2, output),
     };
 
-    // Resolve save-regression-baseline target
     let save_regression_file: Option<std::path::PathBuf> =
         cli.save_regression_baseline.as_ref().and_then(|opt| {
             opt.as_ref()
@@ -2543,12 +2400,6 @@ fn dispatch_subcommand(command: Command, dispatch: &DispatchContext<'_>) -> Exit
         },
         Command::Config { path } => config::run_config(root, cli.config.as_deref(), path, output),
         Command::Workspaces => {
-            // Equivalent to `fallow list --workspaces` with every other
-            // section toggled off. Implemented as a dedicated subcommand
-            // (instead of a clap alias on `List`) because aliases keep the
-            // surrounding flags at their defaults, which means `fallow
-            // workspaces` would otherwise trip `should_show_all` and emit
-            // the full `list` view alongside workspace data.
             let production = match resolve_production_modes(cli, root, output, false, false, false)
             {
                 Ok(modes) => modes.for_analysis(fallow_config::ProductionAnalysis::DeadCode),
@@ -2649,10 +2500,8 @@ fn dispatch_subcommand(command: Command, dispatch: &DispatchContext<'_>) -> Exit
             min_observation_volume,
             low_traffic_threshold,
         } => {
-            // Resolve coverage: CLI flag > FALLOW_COVERAGE env var
             let coverage =
                 coverage.or_else(|| std::env::var("FALLOW_COVERAGE").ok().map(PathBuf::from));
-            // --ownership-emails implies --ownership; --ownership implies --hotspots
             let ownership = ownership || ownership_emails.is_some();
             let hotspots = hotspots || ownership;
             dispatch_health(
@@ -3384,9 +3233,6 @@ fn dispatch_health(dispatch: &DispatchContext<'_>, args: HealthDispatchArgs<'_>)
         min_observation_volume,
         low_traffic_threshold,
     } = args;
-    // --report-only never fails CI, so combining it with the gate flags is a
-    // contradiction. Reject early with a targeted message rather than silently
-    // letting one win.
     if report_only && (min_score.is_some() || min_severity.is_some()) {
         return emit_error(
             "--report-only cannot be combined with --min-score or --min-severity. \
@@ -3396,19 +3242,12 @@ fn dispatch_health(dispatch: &DispatchContext<'_>, args: HealthDispatchArgs<'_>)
             output,
         );
     }
-    // --effort implies --targets
     let targets = targets || effort.is_some();
-    // --min-score, --save-snapshot, --trend, and --format badge imply --score
     let badge_format = matches!(output, fallow_config::OutputFormat::Badge);
     let score = score || min_score.is_some() || trend || badge_format;
     let snapshot_requested = save_snapshot.is_some();
-    // No section flags = show all (including score). Any flag set = show only those.
-    // --save-snapshot and --trend are orthogonal (not section flags) but force score.
     let any_section = complexity || file_scores || coverage_gaps || hotspots || targets || score;
     let eff_score = if any_section { score } else { true } || snapshot_requested;
-    // Score needs dead-code/file-score inputs and duplication for accuracy.
-    // Plain --score keeps churn-backed hotspot penalties tied to --hotspots/--targets,
-    // but snapshots and trend comparisons need complete vital signs.
     let force_full = snapshot_requested || eff_score;
     let needs_hotspot_vitals = snapshot_requested || trend;
     let score_only_output =
@@ -3490,8 +3329,6 @@ fn dispatch_health(dispatch: &DispatchContext<'_>, args: HealthDispatchArgs<'_>)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── CLI definition validity ─────────────────────────────────────
 
     /// Validates that the CLI definition has no flag name collisions, missing
     /// fields, or other structural errors. Catches issues like a global alias
@@ -3613,7 +3450,6 @@ mod tests {
             .map(|sub| sub.get_name().to_owned())
             .collect();
         for name in names {
-            // Skip the synthetic `help` subcommand clap injects automatically.
             if name == "help" {
                 continue;
             }
@@ -3660,23 +3496,13 @@ mod tests {
         s[line_start..line_end].trim().to_owned()
     }
 
-    // ── emit_error ──────────────────────────────────────────────────
-
     #[test]
     fn emit_error_returns_given_exit_code() {
         let code = emit_error("test error", 2, fallow_config::OutputFormat::Human);
         assert_eq!(code, ExitCode::from(2));
     }
-
-    // ── format/quiet parsing logic ─────────────────────────────────
-    // Note: format_from_env() and quiet_from_env() read process-global
-    // env vars, so we test the underlying parsing logic directly to
-    // avoid unsafe set_var/remove_var and parallel test interference.
-
     #[test]
     fn format_parsing_covers_all_variants() {
-        // The format_from_env function lowercases then matches.
-        // Test the same logic inline.
         let parse = |s: &str| -> Option<Format> {
             match s.to_lowercase().as_str() {
                 "json" => Some(Format::Json),

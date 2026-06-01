@@ -55,7 +55,6 @@ const LIT_LIFECYCLE_MEMBERS: &[&str] = &[
     "elementProperties",
     "finalize",
     "finalized",
-    // Native lifecycle is also called on Lit elements via super.connectedCallback() etc.
     "connectedCallback",
     "disconnectedCallback",
     "attributeChangedCallback",

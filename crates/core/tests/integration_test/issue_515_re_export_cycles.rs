@@ -1,13 +1,9 @@
 //! Integration tests for the user-visible `re-export-cycle` finding type.
 //!
 //! Pinned behaviors per issue #515:
-//! - 2-node, 3-node, and self-loop fixtures emit findings with the matching
-//!   `kind` discriminator and lexicographically sorted `files`.
-//! - Type-only re-export cycles (`export type * from ...` paired
-//!   symmetrically) still fire as findings, since chain propagation is the
-//!   same no-op as for value cycles.
-//! - Every finding ships with a non-empty typed `actions[]` so consumers
-//!   have a dispatch handle from day one (panel catch #3, Diego).
+//! - cycle kind matches the fixture shape
+//! - type-only re-export cycles still fire as findings
+//! - every finding includes non-empty typed `actions[]`
 
 use super::common::{create_config, fixture_path};
 use fallow_core::results::ReExportCycleKind;
@@ -23,9 +19,6 @@ fn two_node_cycle_fires_as_multi_node_finding() {
         !cycles.is_empty(),
         "expected at least one re-export cycle finding, got none"
     );
-    // The two-barrel cycle (a <-> b) is the only multi-node SCC; ignore the
-    // index.ts barrel (it's the entry point and is on the chain but not in a
-    // cycle).
     let two_node = cycles
         .iter()
         .find(|c| matches!(c.cycle.kind, ReExportCycleKind::MultiNode) && c.cycle.files.len() == 2)
@@ -97,9 +90,6 @@ fn self_loop_fires_with_self_loop_kind() {
 
 #[test]
 fn type_only_re_export_cycle_still_fires_as_finding() {
-    // Panel catch #9 (Aisha): `export type *` chains are structurally
-    // identical to value chains for cycle detection: chain propagation is a
-    // no-op either way, so the finding fires.
     let root = fixture_path("re-export-cycle-type-only");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");

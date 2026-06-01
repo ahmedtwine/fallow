@@ -166,13 +166,9 @@ pub(crate) fn parse_mdx_to_module(file_id: FileId, source: &str, content_hash: u
     info
 }
 
-// MDX tests exercise line-based import/export extraction — no unsafe code,
-// no Miri-specific value. Oxc parser tests are additionally ~1000x slower.
 #[cfg(all(test, not(miri)))]
 mod tests {
     use super::*;
-
-    // ── is_mdx_file ──────────────────────────────────────────────
 
     #[test]
     fn is_mdx_file_positive() {
@@ -193,8 +189,6 @@ mod tests {
     fn is_mdx_file_rejects_jsx() {
         assert!(!is_mdx_file(Path::new("component.jsx")));
     }
-
-    // ── extract_mdx_statements: import extraction ────────────────
 
     #[test]
     fn extracts_single_import() {
@@ -222,8 +216,6 @@ mod tests {
         assert!(result.contains("import{ Chart }"));
     }
 
-    // ── Export extraction ────────────────────────────────────────
-
     #[test]
     fn extracts_export_const() {
         let result = extract_mdx_statements("export const meta = { title: 'Hello' }\n\n# Title\n");
@@ -235,8 +227,6 @@ mod tests {
         let result = extract_mdx_statements("export{ foo } from './foo'\n\n# Title\n");
         assert!(result.contains("export{ foo }"));
     }
-
-    // ── Multi-line imports ───────────────────────────────────────
 
     #[test]
     fn multiline_import_with_braces() {
@@ -257,8 +247,6 @@ mod tests {
         assert!(result.contains("Bar"));
     }
 
-    // ── Mixed content ────────────────────────────────────────────
-
     #[test]
     fn imports_between_prose() {
         let source = "import { Header } from './Header'\n\n# Section 1\n\nSome content.\n\nimport { Footer } from './Footer'\n\n## Section 2\n";
@@ -277,8 +265,6 @@ mod tests {
         assert!(!result.contains("List item"));
     }
 
-    // Code fences
-
     #[test]
     fn fenced_import_is_ignored() {
         let source = r"import { Live } from './Live'
@@ -286,7 +272,7 @@ mod tests {
 # Example
 
 ```ts
-// file: exampleSlice.ts
+file: exampleSlice.ts
 import exampleSliceReducer from './exampleSlice'
 ```
 ";
@@ -354,8 +340,6 @@ import { Visible } from './Visible'
         assert!(result.contains("import { Visible } from './Visible'"));
     }
 
-    // ── Edge cases ───────────────────────────────────────────────
-
     #[test]
     fn empty_source() {
         let result = extract_mdx_statements("");
@@ -370,14 +354,12 @@ import { Visible } from './Visible'
 
     #[test]
     fn import_like_text_not_extracted() {
-        // "important" starts with "import" but doesn't match "import " or "import{"
         let result = extract_mdx_statements("This is an important note.\n");
         assert!(result.is_empty());
     }
 
     #[test]
     fn export_like_text_not_extracted() {
-        // "exporting" doesn't match "export " or "export{"
         let result = extract_mdx_statements("We are exporting goods overseas.\n");
         assert!(result.is_empty());
     }
@@ -396,13 +378,10 @@ import { Visible } from './Visible'
 
     #[test]
     fn single_line_import_with_braces_balanced() {
-        // Braces balanced on one line — should NOT enter multiline mode
         let source = "import { A } from './a'\n# Title\n";
         let result = extract_mdx_statements(source);
         assert_eq!(result.lines().count(), 1);
     }
-
-    // ── Multi-line import is extracted as one statement ──────────
 
     #[test]
     fn multiline_import_with_braces_extracted_as_one() {
@@ -416,16 +395,12 @@ import { Visible } from './Visible'
         );
     }
 
-    // ── Re-export with braces ───────────────────────────────────
-
     #[test]
     fn export_with_braces_from_module() {
         let source = "export { Foo, Bar } from './module'\n\n# Title\n";
         let result = extract_mdx_statements(source);
         assert!(result.contains("export { Foo, Bar } from './module'"));
     }
-
-    // ── Non-import/export lines between imports are ignored ─────
 
     #[test]
     fn non_import_lines_between_imports_ignored() {
@@ -438,11 +413,8 @@ import { Visible } from './Visible'
             !result.contains("paragraph"),
             "prose should not be extracted"
         );
-        // Only 2 lines total
         assert_eq!(result.lines().count(), 2);
     }
-
-    // ── Additional multi-line termination patterns ────────────────
 
     #[test]
     fn multiline_import_terminated_by_semicolon() {
@@ -479,13 +451,10 @@ import { Visible } from './Visible'
 
     #[test]
     fn import_with_from_on_same_line_not_multiline() {
-        // When 'from' is on the same line, braces don't trigger multiline mode
         let source = "import { A } from './a'\nimport { B } from './b'\n";
         let result = extract_mdx_statements(source);
         assert_eq!(result.lines().count(), 2);
     }
-
-    // ── Full parse tests (Oxc parser ~1000x slower under Miri) ──
 
     #[test]
     fn mdx_empty_source_returns_empty_module() {

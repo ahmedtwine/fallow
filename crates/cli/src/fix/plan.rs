@@ -1,26 +1,14 @@
 //! Batch-atomicity layer for `fallow fix`.
 //!
-//! Each per-issue-type fixer (`exports`, `enum_members`, `deps`, `catalog`)
-//! accumulates `(PathBuf, Vec<u8>)` entries on a shared [`FixPlan`] instead
-//! of writing directly. After all fixers run, the orchestrator commits the
-//! plan: every entry is first staged to a `NamedTempFile` in the same
-//! directory as the target, and only when every stage has succeeded does
-//! the commit promote each temp to its final path via the existing atomic
-//! rename. A failure at the stage step leaves the project untouched. A
-//! failure at the rename step is reported per-path; some renames may have
-//! already landed (POSIX rename is per-file atomic; there is no atomic
-//! multi-rename primitive).
-//!
-//! The plan also carries skipped-file records (e.g. hash mismatch between
-//! the in-process analysis and the on-disk content at fix time); the
-//! orchestrator surfaces these in the JSON envelope and non-zero exit code.
+//! Fixers stage writes into a shared [`FixPlan`], then the orchestrator
+//! commits them atomically per file and records any skips.
 
 use std::path::{Path, PathBuf};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use tempfile::NamedTempFile;
 
-/// One file's content waiting to be written.
+/// One file's staged content.
 struct PlannedWrite {
     path: PathBuf,
     content: Vec<u8>,
@@ -29,35 +17,13 @@ struct PlannedWrite {
 /// Why a file was skipped during a fix run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SkipReason {
-    /// The file's content hash at fix time differs from the hash captured
-    /// during the in-process analysis. Applying offsets computed against
-    /// the analyzed bytes would land them on the wrong source.
+    /// The file changed after analysis, so the offsets are stale.
     ContentChanged,
-    /// The file mixes CRLF and bare-LF line endings. The fix pipeline
-    /// detects line endings by presence check then splits / joins on the
-    /// detected style; on a mixed file that would silently rewrite to the
-    /// wrong offsets. The skip is NOT self-healing: re-running `fallow fix`
-    /// does not clear it. The user (or agent) must normalize the file (e.g.
-    /// `dos2unix <path>`, `git config core.autocrlf input`, prettier with
-    /// `endOfLine: lf`) before re-running. Issue #475.
+    /// The file mixes CRLF and LF line endings.
     MixedLineEndings,
-    /// The file lives in a directory whose consumers are commonly invisible
-    /// to static analysis (mocks, e2e suites, fixture / golden harnesses).
-    /// Removing the `export` keyword here risks breaking a real consumer
-    /// fallow's graph cannot see (Vitest mock aliases, off-workspace e2e
-    /// trees, generated/fixture build steps). Unlike the two skips above,
-    /// this is an INTENTIONAL conservative decision, not a recoverable
-    /// failure: it does NOT contribute to a non-zero exit code, and
-    /// re-running `fallow fix` will keep skipping. The export is still
-    /// reported by `fallow check`; the user removes it by hand if they have
-    /// confirmed it is truly unused. Issue #602.
+    /// Conservative skip for files whose consumers may be off-graph.
     LowConfidenceOffGraph,
-    /// The file itself has at least one import fallow could not resolve, so
-    /// its local usage graph is incomplete and any "this export is unused"
-    /// conclusion is lower confidence. Same intentional-skip semantics as
-    /// [`Self::LowConfidenceOffGraph`] (exit code unaffected, not
-    /// self-healing). The user resolves the import or removes the export by
-    /// hand. Issue #602.
+    /// Conservative skip for files with unresolved imports.
     LowConfidenceUnresolvedImports,
 }
 
@@ -71,10 +37,7 @@ impl SkipReason {
         }
     }
 
-    /// True for skips that represent an intentional conservative decision
-    /// rather than a recoverable failure. These do NOT contribute to a
-    /// non-zero exit code (the user did not ask for and cannot fix a
-    /// "failure"; the export is deliberately preserved). Issue #602.
+    /// True for conservative skips rather than recoverable failures.
     pub(super) fn is_intentional(self) -> bool {
         matches!(
             self,
@@ -89,15 +52,15 @@ impl SkipReason {
                 path.display(),
             ),
             Self::MixedLineEndings => format!(
-                "Skipping {}: file has mixed CRLF/LF line endings. Normalize with `dos2unix` or set `git config core.autocrlf input`, then re-run `fallow fix`.",
+                "Skipping {}: file has mixed CRLF/LF line endings. Normalize it, then re-run `fallow fix`.",
                 path.display(),
             ),
             Self::LowConfidenceOffGraph => format!(
-                "Kept unused export(s) in {}: this file is in a test, mock, or fixture directory whose consumers (Vitest mock aliases, e2e suites, fixture harnesses) may import it in ways fallow cannot see. Still listed by `fallow check`; remove by hand if you have confirmed it is unused.",
+                "Kept unused export(s) in {}: consumer coverage is incomplete, so the export was preserved.",
                 path.display(),
             ),
             Self::LowConfidenceUnresolvedImports => format!(
-                "Kept unused export(s) in {}: this file has imports fallow could not resolve, so its usage may be incomplete. Still listed by `fallow check`; resolve the imports or remove the export by hand.",
+                "Kept unused export(s) in {}: unresolved imports make the usage graph incomplete.",
                 path.display(),
             ),
         }
@@ -112,18 +75,13 @@ pub(super) struct SkippedFile {
 
 /// Outcome of [`FixPlan::commit`].
 pub(super) struct CommitOutcome {
-    /// Absolute paths whose new content landed on disk. Held for
-    /// observability and post-commit verification by integration tests;
-    /// the orchestrator only inspects `failed` (every fixer sets
-    /// `applied: true` optimistically before commit, then we flip to
-    /// false on failure via the `__target` sidechannel).
+    /// Absolute paths whose new content landed on disk.
     #[allow(
         dead_code,
         reason = "test-only reader; `#[expect]` is unfulfilled under `--all-targets` because the test cfg satisfies dead_code while the lib cfg would fire it"
     )]
     pub written: FxHashSet<PathBuf>,
-    /// Per-path errors. `failed.is_empty() && written == plan.entries` is
-    /// the success case.
+    /// Per-path errors.
     pub failed: Vec<(PathBuf, std::io::Error)>,
 }
 
@@ -150,10 +108,7 @@ impl FixPlan {
         }
     }
 
-    /// Queue a write. The last call for a given path wins; the caller is
-    /// responsible for composing edits on top of any prior staged content
-    /// (via `read_source_with_hash_check`, which returns the staged bytes
-    /// when present so the next fixer's edits compose rather than collide).
+    /// Queue a write. The last call for a path wins.
     pub(super) fn stage(&mut self, path: PathBuf, content: Vec<u8>) {
         if let Some(existing) = self.entries.iter_mut().find(|e| e.path == path) {
             existing.content = content;
@@ -162,15 +117,7 @@ impl FixPlan {
         self.entries.push(PlannedWrite { path, content });
     }
 
-    /// Return the currently-staged content for `path`, if any. Used by
-    /// `read_source_with_hash_check` so a second fixer reads its starting
-    /// bytes from the first fixer's pending plan entry instead of from
-    /// disk; this composes cross-fixer edits on the same file (e.g.
-    /// removing both an unused export AND an unused enum member from
-    /// the same source) into a single coherent rewrite. Without this
-    /// hand-off, the second stage would overwrite the first with a
-    /// plan-fresh-from-disk view, silently losing the first fixer's
-    /// edits.
+    /// Return the currently-staged content for `path`, if any.
     pub(super) fn staged_content(&self, path: &Path) -> Option<&[u8]> {
         self.entries
             .iter()
@@ -178,24 +125,7 @@ impl FixPlan {
             .map(|e| e.content.as_slice())
     }
 
-    /// Record that a file was skipped. The orchestrator uses this to
-    /// surface a clear diagnostic and set a non-zero exit code.
-    ///
-    /// Deduped on `(path, reason)`: every per-issue-type fixer
-    /// (`apply_export_fixes`, `apply_enum_member_fixes`,
-    /// `apply_catalog_entry_fixes`, etc.) calls
-    /// `read_source_with_hash_check` independently for files that carry
-    /// findings of its issue type, and any precondition failure (hash
-    /// mismatch, mixed CRLF/LF) lands here on every invocation. Without
-    /// the dedupe, one mixed-EOL file with both an unused export AND an
-    /// unused enum member would surface as TWO `fixes[]` entries and a
-    /// `skipped_mixed_line_endings: 2` envelope counter for what is
-    /// structurally one file. The orchestrator comment in
-    /// `build_skipped_records` and the user-facing reminder line both
-    /// document "one entry per skipped file" semantics; this dedupe
-    /// preserves that contract regardless of how many fixer invocations
-    /// produce the same skip. Caught 2026-05-21 by codex parallel
-    /// /fallow-review on issue #475.
+    /// Record that a file was skipped. Deduped on `(path, reason)`.
     pub(super) fn skip(&mut self, path: PathBuf, reason: SkipReason) {
         if self
             .skipped
@@ -219,24 +149,13 @@ impl FixPlan {
         self.entries.iter().map(|e| e.path.as_path())
     }
 
-    /// Stage every entry to a sibling `NamedTempFile`, then promote each
-    /// to its final path. If staging any entry fails, returns immediately
-    /// without renaming anything: the project is untouched. If a rename
-    /// fails (rare, filesystem-level), the entries that already renamed
-    /// stay applied and the failure is reported per-path.
+    /// Stage every entry to a sibling `NamedTempFile`, then promote each to
+    /// its final path.
     pub(super) fn commit(self) -> CommitOutcome {
         if self.entries.is_empty() {
             return CommitOutcome::empty();
         }
 
-        // Stage every entry first. Hold the NamedTempFile handles until we
-        // know every stage succeeded; on staging failure, all handles drop
-        // here and the temp files are removed before any rename runs. We
-        // also carry the RESOLVED (canonicalized) path so the final
-        // rename writes through symlinks, matching `fallow_config::atomic_write`'s
-        // contract; persisting to the original path would replace the
-        // symlink itself with a regular file and leave the real target
-        // untouched.
         let mut staged: Vec<StagedEntry> = Vec::with_capacity(self.entries.len());
         for entry in self.entries {
             match stage_one(&entry.path, &entry.content) {
@@ -250,10 +169,6 @@ impl FixPlan {
             }
         }
 
-        // Sort by REQUESTED path (the user-visible identity) for
-        // deterministic rename order. Stable per-path ordering matters
-        // for debugability (failure logs name files in a predictable
-        // order across runs).
         staged.sort_by(|a, b| a.requested.cmp(&b.requested));
 
         let mut written = FxHashSet::default();
@@ -264,7 +179,6 @@ impl FixPlan {
                     written.insert(stage.requested);
                 }
                 Err(err) => {
-                    // PersistError -> io::Error preserves the original errno.
                     failed.push((stage.requested, err.error));
                 }
             }
@@ -287,12 +201,6 @@ struct StagedEntry {
 }
 
 fn stage_one(target: &Path, content: &[u8]) -> std::io::Result<StagedEntry> {
-    // Match atomic_write's behavior: canonicalize through symlinks so the
-    // temp file lands in the directory of the resolved target AND the
-    // final rename promotes the temp into the resolved path. Persisting
-    // to the original (non-canonical) path replaces the symlink with the
-    // temp file, leaving the real target untouched; that regresses the
-    // pre-#454 atomic_write contract.
     let resolved = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
     let dir = resolved.parent().ok_or_else(|| {
         std::io::Error::new(
@@ -304,10 +212,6 @@ fn stage_one(target: &Path, content: &[u8]) -> std::io::Result<StagedEntry> {
     use std::io::Write;
     handle.write_all(content)?;
     handle.as_file().sync_all()?;
-    // Preserve the target's existing file mode on Unix. NamedTempFile creates
-    // the temp with 0600 by default; persisting directly would downgrade a
-    // target previously at 0644 (or any other mode) to owner-only, breaking
-    // shared workspaces and CI runners that rely on the existing read bit.
     fallow_config::preserve_target_mode(handle.path(), &resolved);
     Ok(StagedEntry {
         handle,
@@ -347,21 +251,8 @@ pub(super) fn read_source_with_hash_check(
     hashes: &CapturedHashes,
     plan: &mut FixPlan,
 ) -> Option<(String, super::io::EncodingMetadata)> {
-    // Cross-fixer composition: prefer the in-plan staged content over a
-    // disk read. Staged bytes are internal and always valid UTF-8 (every
-    // fixer produces text via `String::into_bytes`); a UTF-8 failure here
-    // would indicate a programmer error, not a user-facing bug. Run the
-    // staged bytes through the SAME classifier as the disk path so the
-    // `had_bom` flag survives a cross-fixer round trip: the first fixer's
-    // `stage_fixed_content` re-prepended the BOM bytes when `had_bom` was
-    // true, and a second fixer reading the same path must rebuild the
-    // metadata from those bytes (otherwise the second `stage_fixed_content`
-    // would drop the BOM via last-write-wins). See issue #475.
     if let Some(staged) = plan.staged_content(path) {
         let raw = String::from_utf8(staged.to_vec()).ok()?;
-        // Mixed-EOL is impossible on staged bytes because the prior staging
-        // joined uniformly, but we run the same classifier for symmetry. If
-        // it ever errs, surface as a skip so the regression is visible.
         return match super::io::classify_source(&raw) {
             Ok((content, meta)) => Some((content, meta)),
             Err(super::io::EncodingError::MixedLineEndings { .. }) => {
@@ -409,8 +300,6 @@ pub(super) fn stage_fixed_content(
         result.push_str(meta.line_ending);
     }
     let bytes = if meta.had_bom {
-        // UTF-8 BOM is three bytes (`EF BB BF`); reserve exactly to avoid
-        // a reallocation on the prepend.
         let bom_bytes = "\u{FEFF}".as_bytes();
         let mut buf = Vec::with_capacity(result.len() + bom_bytes.len());
         buf.extend_from_slice(bom_bytes);
@@ -447,9 +336,6 @@ mod tests {
 
     #[test]
     fn commit_stage_failure_leaves_project_untouched() {
-        // Force staging to fail by pointing at a path whose parent does
-        // not exist; no temp can be created. The other entry must NOT
-        // be promoted.
         let dir = tempfile::tempdir().unwrap();
         let good = dir.path().join("good.txt");
         let bad = dir.path().join("nonexistent").join("bad.txt");
@@ -479,8 +365,6 @@ mod tests {
 
     #[test]
     fn skip_reason_wire_value_is_stable() {
-        // Downstream JSON consumers gate on these strings; flag rename
-        // bombs at PR-review time.
         assert_eq!(SkipReason::ContentChanged.as_wire_str(), "content_changed");
         assert_eq!(
             SkipReason::LowConfidenceOffGraph.as_wire_str(),
@@ -494,8 +378,6 @@ mod tests {
 
     #[test]
     fn low_confidence_skips_are_intentional_others_are_not() {
-        // Intentional skips must NOT flip the non-zero exit code; the two
-        // recoverable failures must. Issue #602.
         assert!(SkipReason::LowConfidenceOffGraph.is_intentional());
         assert!(SkipReason::LowConfidenceUnresolvedImports.is_intentional());
         assert!(!SkipReason::ContentChanged.is_intentional());
@@ -544,9 +426,6 @@ mod tests {
 
     #[test]
     fn read_source_with_hash_check_proceeds_when_path_not_in_map() {
-        // Files not produced by the extract layer (package.json, YAML)
-        // are not in the captured-hash map. They must proceed without a
-        // skip (atomic_write per-file is the existing safety net).
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("package.json");
         std::fs::write(&file, "{}").unwrap();
@@ -577,11 +456,6 @@ mod tests {
 
     #[test]
     fn staged_content_lets_a_second_fixer_compose_on_top_of_the_first() {
-        // Regression for the issue #454 cross-fixer composition gap
-        // (codex parallel review BLOCK): when two fixers touch the same
-        // file, the second must read the FIRST's staged content (not the
-        // original disk bytes), so its rewrite composes instead of
-        // overwriting via last-write-wins.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("sample.ts");
         let original = "line a\nline b\nline c\n";
@@ -594,24 +468,19 @@ mod tests {
 
         let mut plan = FixPlan::new();
 
-        // First fixer: removes "line b" (whole-file rewrite).
         let first_view = read_source_with_hash_check(dir.path(), &file, &hashes, &mut plan)
             .expect("first read succeeds");
         assert_eq!(first_view.0, original);
         plan.stage(file.clone(), b"line a\nline c\n".to_vec());
 
-        // Second fixer: reads the same path; MUST see the first fixer's
-        // staged content, not the disk content, so its edits compose.
         let second_view = read_source_with_hash_check(dir.path(), &file, &hashes, &mut plan)
             .expect("second read sees staged content");
         assert_eq!(
             second_view.0, "line a\nline c\n",
             "second fixer must read the first fixer's staged rewrite, not the original disk bytes"
         );
-        // Second fixer mutates "line a" -> "edited a", stages the result.
         plan.stage(file.clone(), b"edited a\nline c\n".to_vec());
 
-        // Commit and confirm the on-disk file carries BOTH edits.
         let outcome = plan.commit();
         assert!(outcome.failed.is_empty());
         assert_eq!(
@@ -624,10 +493,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commit_preserves_target_file_mode() {
-        // Regression: NamedTempFile defaults to 0600. Without an explicit
-        // chmod step before persist, a target previously at 0644 would land
-        // at 0600 post-fix, silently downgrading the read bit for group +
-        // other. The commit MUST preserve the target's pre-existing mode.
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("source.ts");
@@ -650,11 +515,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commit_writes_through_symlink_to_the_real_target() {
-        // Regression for the issue #454 symlink BLOCK (codex parallel
-        // review): the previous shape canonicalized only to choose the
-        // temp directory but persisted to the original (non-canonical)
-        // path, so the rename replaced the symlink itself with a regular
-        // file and the real target was never touched.
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("real.ts");
         let link = dir.path().join("link.ts");
@@ -666,9 +526,6 @@ mod tests {
         let outcome = plan.commit();
         assert!(outcome.failed.is_empty());
 
-        // The symlink must still BE a symlink (not replaced by a regular
-        // file), and the rewrite must have flowed through to the real
-        // target.
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -689,27 +546,14 @@ mod tests {
 
     #[test]
     fn _atomic_write_still_works_for_callers_not_routed_through_the_plan() {
-        // Sanity check: the existing atomic_write entry point used by
-        // config.rs (which is intentionally NOT batched) still works.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         fallow_config::atomic_write(&path, b"{}").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
     }
 
-    // -- Issue #475: BOM round-trip + mixed-EOL skip ------------------------
-
     #[test]
     fn skip_deduplicates_repeat_entries_for_same_path_and_reason() {
-        // Codex parallel /fallow-review BLOCK on issue #475: every
-        // per-issue-type fixer (`apply_export_fixes`, `apply_enum_member_fixes`,
-        // `apply_catalog_entry_fixes`) calls `read_source_with_hash_check`
-        // independently for files that carry findings of its issue type. If
-        // a file has both an unused export AND an unused enum member AND
-        // mixed CRLF/LF line endings, BOTH fixers hit the precondition
-        // failure and push a skip. Without dedupe, the user sees two
-        // identical fixes[] entries and a misleading
-        // `skipped_mixed_line_endings: 2` for what is structurally one file.
         let mut plan = FixPlan::new();
         let path = PathBuf::from("/tmp/mixed.ts");
         plan.skip(path.clone(), SkipReason::MixedLineEndings);
@@ -720,14 +564,12 @@ mod tests {
             1,
             "multiple skip calls for the same (path, reason) must dedupe to one entry",
         );
-        // A different reason on the same path is a distinct skip: leave it.
         plan.skip(path, SkipReason::ContentChanged);
         assert_eq!(
             plan.skipped().len(),
             2,
             "distinct reasons on the same path stay separate",
         );
-        // A different path with an already-seen reason is also distinct.
         plan.skip(PathBuf::from("/tmp/other.ts"), SkipReason::MixedLineEndings);
         assert_eq!(plan.skipped().len(), 3);
     }
@@ -738,9 +580,6 @@ mod tests {
         let file = dir.path().join("mixed.ts");
         std::fs::write(&file, "a\r\nb\nc\r\n").unwrap();
         let mut hashes = CapturedHashes::default();
-        // Captured hash will not match because read_source returns Err
-        // BEFORE the hash check; the file must still skip with the mixed
-        // EOL reason, not with content-changed.
         hashes.insert(file.clone(), 0xDEAD_BEEF);
 
         let mut plan = FixPlan::new();
@@ -753,16 +592,6 @@ mod tests {
 
     #[test]
     fn read_source_with_hash_check_dedupes_mixed_eol_across_two_fixer_calls() {
-        // Codex parallel /fallow-review reproduction: a single mixed-EOL
-        // file that carries findings for multiple per-issue-type fixers
-        // (e.g. an unused export AND an unused enum member) gets two
-        // calls into `read_source_with_hash_check`, one per fixer. Each
-        // call hits the mixed-EOL precondition and tries to push a skip.
-        // The orchestrator's user-facing reporting promises "one entry
-        // per skipped file"; only the dedupe in `FixPlan::skip` upholds
-        // that contract. Without the dedupe, `fixes[]` carries two
-        // identical `mixed_line_endings` entries and the JSON envelope's
-        // `skipped_mixed_line_endings` counter reads 2 for one file.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("mixed.ts");
         std::fs::write(&file, "a\r\nb\nc\r\n").unwrap();
@@ -770,15 +599,12 @@ mod tests {
 
         let mut plan = FixPlan::new();
 
-        // First fixer (e.g. apply_export_fixes) calls read_source_with_hash_check.
         let first = read_source_with_hash_check(dir.path(), &file, &hashes, &mut plan);
         assert!(first.is_none(), "first fixer call must skip");
 
-        // Second fixer (e.g. apply_enum_member_fixes) hits the SAME file.
         let second = read_source_with_hash_check(dir.path(), &file, &hashes, &mut plan);
         assert!(second.is_none(), "second fixer call must also skip");
 
-        // Despite two skip pushes, the contract is "one entry per skipped file".
         assert_eq!(
             plan.skipped().len(),
             1,
@@ -789,8 +615,6 @@ mod tests {
 
     #[test]
     fn skip_reason_mixed_line_endings_wire_value_is_stable() {
-        // Downstream JSON consumers gate on this string; flag rename bombs
-        // at PR-review time.
         assert_eq!(
             SkipReason::MixedLineEndings.as_wire_str(),
             "mixed_line_endings"
@@ -801,12 +625,10 @@ mod tests {
     fn stage_fixed_content_preserves_bom_on_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("bom.ts");
-        // BOM + LF source.
         let body = "export const a = 1;\nexport const b = 2;\n";
         std::fs::write(&file, format!("\u{FEFF}{body}")).unwrap();
 
         let mut plan = FixPlan::new();
-        // Read via the canonical entry to capture BOM metadata.
         let (content, meta) = crate::fix::io::read_source(dir.path(), &file)
             .unwrap()
             .unwrap();
@@ -817,14 +639,12 @@ mod tests {
             "post-strip content must omit the BOM"
         );
 
-        // Pretend a fixer removed the second line.
         let new_lines: Vec<String> = vec!["export const a = 1;".to_owned()];
         stage_fixed_content(&mut plan, &file, &new_lines, &meta, &content);
 
         let outcome = plan.commit();
         assert!(outcome.failed.is_empty(), "commit must succeed");
 
-        // The on-disk bytes must start with the BOM bytes (`EF BB BF`).
         let on_disk = std::fs::read(&file).unwrap();
         assert_eq!(
             &on_disk[..3],
@@ -832,23 +652,12 @@ mod tests {
             "BOM must be re-prepended on round-trip; got {:?}",
             &on_disk[..on_disk.len().min(8)],
         );
-        // And the rest must be the new content plus the original trailing newline.
         let rest = std::str::from_utf8(&on_disk[3..]).unwrap();
         assert_eq!(rest, "export const a = 1;\n");
     }
 
     #[test]
     fn staged_content_round_trip_through_second_fixer_preserves_bom() {
-        // BOM-preservation invariant across the two-fixer staged-content
-        // round trip. Two fixers stage on the same BOM-bearing file in
-        // sequence: the first fixer's `stage_fixed_content` re-prepends
-        // the BOM; the second fixer reads via
-        // `read_source_with_hash_check` which routes through the
-        // `staged_content` fast path, must re-detect the BOM on the
-        // staged bytes via `classify_source`, propagate `had_bom = true`
-        // on its returned `EncodingMetadata`, and the second
-        // `stage_fixed_content` must re-prepend the BOM again. After
-        // commit, on-disk bytes must STILL start with the BOM.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("bom-multi.ts");
         let body = "line a\nline b\nline c\n";
@@ -858,7 +667,6 @@ mod tests {
 
         let mut plan = FixPlan::new();
 
-        // First fixer: remove `line b`.
         let (first_content, first_meta) =
             read_source_with_hash_check(dir.path(), &file, &hashes, &mut plan).unwrap();
         assert!(first_meta.had_bom);
@@ -872,9 +680,6 @@ mod tests {
             &first_content,
         );
 
-        // Second fixer: read again; MUST see the BOM re-prepended on the
-        // staged bytes via the staged_content fast path, and MUST flag
-        // had_bom = true on the returned metadata.
         let (second_content, second_meta) =
             read_source_with_hash_check(dir.path(), &file, &hashes, &mut plan).unwrap();
         assert!(
@@ -885,7 +690,6 @@ mod tests {
             !second_content.starts_with('\u{FEFF}'),
             "second fixer content must be post-BOM-strip",
         );
-        // Mutate `line a` -> `edited a`.
         let second_new_lines: Vec<String> =
             vec!["edited a".to_owned(), "line c".to_owned(), String::new()];
         stage_fixed_content(
@@ -896,7 +700,6 @@ mod tests {
             &second_content,
         );
 
-        // Commit and confirm BOM survives both round-trips.
         let outcome = plan.commit();
         assert!(outcome.failed.is_empty());
         let on_disk = std::fs::read(&file).unwrap();

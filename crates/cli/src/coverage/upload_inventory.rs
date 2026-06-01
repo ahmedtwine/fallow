@@ -99,8 +99,6 @@ pub struct UploadInventoryArgs {
     pub ignore_upload_errors: bool,
 }
 
-// Manual `Debug` so `tracing::debug!(?args)` / `dbg!(args)` / unwrap-on-Err
-// formatting cannot bleed the API key into stderr.
 impl fmt::Debug for UploadInventoryArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UploadInventoryArgs")
@@ -159,10 +157,6 @@ impl UploadError {
             "error".red().bold()
         };
         eprintln!("{LOG_PREFIX}: {severity}: {body}");
-        // Validation, payload, and auth errors are always fatal; the user
-        // needs to fix their inputs or credentials. The
-        // --ignore-upload-errors opt-out only applies to transient transport
-        // and server failures.
         if soft_fail {
             eprintln!("  -> --ignore-upload-errors set, continuing with exit 0");
             return ExitCode::SUCCESS;
@@ -224,8 +218,6 @@ fn run_inner(args: &UploadInventoryArgs, root: &Path) -> Result<(), UploadError>
         &payload,
     )
 }
-
-// ── Project ID resolution ────────────────────────────────────────────
 
 fn resolve_project_id(args: &UploadInventoryArgs, root: &Path) -> Result<String, UploadError> {
     if let Some(explicit) = args.project_id.as_deref() {
@@ -292,13 +284,11 @@ fn git_origin_project_id(root: &Path) -> Option<String> {
 /// (`git@github.com:owner/repo(.git)?`), and `ssh://` / `git://` variants.
 fn parse_git_remote_to_project_id(url: &str) -> Option<String> {
     let stripped_suffix = url.trim().trim_end_matches(".git");
-    // Shape 1: `git@host:owner/repo`
     if let Some((_, path)) = stripped_suffix.split_once(':')
         && let Some(project_id) = take_last_two_segments(path)
     {
         return Some(project_id);
     }
-    // Shape 2: `scheme://host/owner/repo`
     if let Some(path_part) = stripped_suffix.split("://").nth(1)
         && let Some((_, tail)) = path_part.split_once('/')
         && let Some(project_id) = take_last_two_segments(tail)
@@ -317,8 +307,6 @@ fn take_last_two_segments(path: &str) -> Option<String> {
     let owner = parts.pop()?;
     Some(format!("{owner}/{repo}"))
 }
-
-// ── Git SHA resolution ───────────────────────────────────────────────
 
 fn resolve_git_sha(args: &UploadInventoryArgs, root: &Path) -> Result<String, UploadError> {
     let sha = if let Some(explicit) = args.git_sha.as_deref() {
@@ -390,8 +378,6 @@ fn dirty_worktree(root: &Path) -> bool {
     }
     output.stdout.iter().any(|b| !b.is_ascii_whitespace())
 }
-
-// ── Config + discovery ───────────────────────────────────────────────
 
 fn load_resolved_config(root: &Path) -> Result<ResolvedConfig, UploadError> {
     let user_config = match FallowConfig::find_and_load(root) {
@@ -504,11 +490,6 @@ fn normalize_path_prefix(raw: Option<&str>) -> Result<Option<String>, UploadErro
             "--path-prefix '{trimmed}' contains backslashes. Use POSIX separators (forward slashes) even on Windows, because the runtime beacon emits POSIX paths."
         )));
     }
-    // Leading slash requirement: runtime paths are always absolute inside
-    // containers (V8 reports `/app/src/*`, `/workspace/src/*`). A
-    // relative-looking prefix (`app`) would silently join to
-    // `app/src/foo.ts` and miss every runtime row. Keep the guard strict
-    // so typos surface immediately.
     if !trimmed.starts_with('/') {
         return Err(UploadError::Validation(format!(
             "--path-prefix '{trimmed}' must start with '/'. Runtime paths are absolute inside containers; a relative prefix won't match. Example: --path-prefix /app"
@@ -518,9 +499,6 @@ fn normalize_path_prefix(raw: Option<&str>) -> Result<Option<String>, UploadErro
 }
 
 fn extension_supported(path: &Path) -> bool {
-    // Skip TypeScript declaration files. Their "functions" are ambient type
-    // signatures, not runtime code - including them would make every signature
-    // appear as `untracked` in the dashboard.
     if is_typescript_declaration(path) {
         return false;
     }
@@ -553,12 +531,8 @@ fn exclude_matcher_matches(matcher: &GlobSet, rel_path: &Path) -> bool {
 }
 
 fn to_posix_string(path: &Path) -> String {
-    // Windows walker paths carry `\` separators; the server and the beacon
-    // both key on POSIX slashes, so normalize before sending.
     path.to_string_lossy().replace('\\', "/")
 }
-
-// ── Payload + HTTP ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
 struct InventoryFunction {
@@ -592,11 +566,6 @@ impl InventoryFunction {
             start_column: Some(entry.start_column),
             end_line: Some(entry.end_line),
             end_column: Some(entry.end_column),
-            // Content digest of the function's full-span source slice, computed
-            // by the inventory walker. Optional cross-producer tiebreaker that
-            // lets runtime-coverage baselines survive line moves; excluded from
-            // `stable_id`. Resolution stays `Resolved` because byte-accurate
-            // UTF-16 columns satisfy that contract independently of `source_hash`.
             source_hash: Some(entry.source_hash.clone()),
             resolution: IdentityResolution::Resolved,
             stable_id,
@@ -712,8 +681,6 @@ fn url_encode_path_segment(value: &str) -> String {
 /// rolls up lazy-parsed functions.
 fn print_overlap_warning_if_needed(overlap: &PathOverlap) {
     if overlap.sampled == 0 {
-        // No runtime data for this SHA yet. The success message already
-        // tells the user to wait for the beacon; don't add noise here.
         return;
     }
     if overlap.matched.saturating_mul(2) >= overlap.sampled {
@@ -747,8 +714,6 @@ fn upload(
     payload: &InventoryRequest<'_>,
 ) -> Result<(), UploadError> {
     let url = endpoint_url(endpoint_override, project_id);
-    // Informational progress output goes to stdout alongside the dry-run
-    // summary for symmetry. Only errors and warnings use stderr.
     println!(
         "{LOG_PREFIX}: uploading {} functions for {project_id} @ {}",
         format_count(payload.functions.len()),
@@ -778,11 +743,6 @@ fn upload(
             format_count(func_count),
             format_bytes(data.data.blob_size),
         );
-        // Intentional wording: the Untracked filter needs BOTH the static
-        // inventory (this upload) AND runtime coverage from the beacon for
-        // the same SHA. Users who upload first on a new SHA will see a
-        // "waiting for runtime data" state; do not promise immediate results
-        // or the first-run UX looks broken.
         println!(
             "  -> Inventory stored. The Untracked filter lights up once runtime coverage arrives for this SHA. Dashboard: https://fallow.cloud/{project_id}"
         );
@@ -792,10 +752,6 @@ fn upload(
         return Ok(());
     }
 
-    // Parse the body once so we can dispatch by the machine-readable `code`
-    // field and also render a human-friendly message. We deliberately do NOT
-    // route through `http_status_message`; it collapses code + message into
-    // one formatted string, which forces callers to string-scan to classify.
     let body = response.read_to_string().unwrap_or_default();
     let envelope = parse_error_envelope(&body);
     let code = envelope.code();
@@ -861,8 +817,6 @@ fn format_bytes(bytes: u64) -> String {
         format!("{bytes} B")
     }
 }
-
-// ── Dry-run output ───────────────────────────────────────────────────
 
 fn print_dry_run_summary(
     project_id: &str,
@@ -938,8 +892,6 @@ mod tests {
 
     #[test]
     fn upload_inventory_args_debug_masks_api_key() {
-        // Future `tracing::debug!(?args)` or `dbg!(args)` calls must not leak
-        // the bearer token through stderr.
         let args = UploadInventoryArgs {
             api_key: Some("fallow_live_secret_token_value".to_owned()),
             api_endpoint: Some("https://api.fallow.cloud".to_owned()),
@@ -955,7 +907,6 @@ mod tests {
             formatted.contains("api_key: Some(\"***\")"),
             "expected explicit redaction marker, got: {formatted}"
         );
-        // None case must remain distinguishable from "set but redacted".
         let bare = UploadInventoryArgs::default();
         let formatted_bare = format!("{bare:?}");
         assert!(
@@ -998,9 +949,6 @@ mod tests {
 
     #[test]
     fn parse_git_remote_nested_group_uses_last_two_segments() {
-        // GitLab supports nested groups. Auto-detection keeps the familiar
-        // trailing `owner/repo` pair; repos that want the full namespace can
-        // pass --project-id explicitly.
         assert_eq!(
             parse_git_remote_to_project_id("https://gitlab.com/acme/team/widgets.git"),
             Some("team/widgets".to_owned())
@@ -1020,8 +968,6 @@ mod tests {
 
     #[test]
     fn validate_project_id_accepts_bare_name() {
-        // Dogfood projects use bare repo names (`fallow-cloud-api`), not
-        // `owner/repo`. Both shapes are legitimate on the server side.
         assert!(validate_project_id("fallow-cloud-api").is_ok());
     }
 
@@ -1199,8 +1145,6 @@ mod tests {
 
     #[test]
     fn extension_supported_still_accepts_non_declaration_ts() {
-        // Regression guard: the .d.ts skip must not accidentally reject
-        // files whose names contain ".d." but are not declarations.
         for name in ["vite.config.ts", "file.weird.d.name.ts"] {
             let path = PathBuf::from(name);
             assert!(extension_supported(&path), "{name} should still be walked");
@@ -1373,11 +1317,6 @@ mod tests {
 
     #[test]
     fn identity_stable_id_is_repo_relative_not_prefixed() {
-        // The legacy filePath carries the container prefix; the identity must
-        // be computed over the repo-relative path so it matches the protocol's
-        // project-root-relative contract AND fallow's own consumer-side
-        // identity. Hashing the prefixed path here would silently break the
-        // cross-surface join.
         let func =
             InventoryFunction::from_entry("/app/src/render.tsx", "src/render.tsx", sample_entry());
         assert_eq!(func.file_path, "/app/src/render.tsx");
@@ -1390,8 +1329,6 @@ mod tests {
 
     #[test]
     fn identity_stable_id_unchanged_by_path_prefix() {
-        // With and without --path-prefix, the identity (and stable_id) stay
-        // pinned to the repo-relative path; only filePath moves.
         let with_prefix =
             InventoryFunction::from_entry("/app/src/render.tsx", "src/render.tsx", sample_entry());
         let without_prefix =
@@ -1406,8 +1343,6 @@ mod tests {
 
     #[test]
     fn identity_matches_protocol_conformance_fixture() {
-        // Pin the cross-producer join key to the protocol's anchor fixture so
-        // a divergent helper change is caught in fallow CI, not at join time.
         assert_eq!(
             function_identity_id("src/render.tsx", "render", 42),
             "fallow:fn:cb4482d6aef7c79a"

@@ -18,8 +18,6 @@ pub use filtering::get_changed_files;
 pub use filtering::resolve_workspace_scope;
 pub use rules::has_error_severity_issues;
 
-// ── Issue type filters ──────────────────────────────────────────
-
 #[derive(Default)]
 pub struct IssueFilters {
     pub unused_files: bool,
@@ -141,8 +139,6 @@ impl IssueFilters {
     }
 }
 
-// ── Trace options ───────────────────────────────────────────────
-
 pub struct TraceOptions {
     pub trace_export: Option<String>,
     pub trace_file: Option<String>,
@@ -158,8 +154,6 @@ impl TraceOptions {
             || self.performance
     }
 }
-
-// ── Check command ────────────────────────────────────────────────
 
 pub struct CheckOptions<'a> {
     pub root: &'a std::path::Path,
@@ -236,14 +230,12 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         fallow_config::ProductionAnalysis::DeadCode,
     )?;
 
-    // Thread --include-entry-exports flag into config for analysis layer
     if opts.include_entry_exports {
         config.include_entry_exports = true;
     }
 
     opts.filters.activate_explicit_opt_ins(&mut config.rules);
 
-    // Workspace filter resolution (either --workspace or --changed-workspaces)
     let ws_roots = filtering::resolve_workspace_scope(
         opts.root,
         opts.workspace,
@@ -251,12 +243,10 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         opts.output,
     )?;
 
-    // Changed-files resolution
     let changed_files: Option<rustc_hash::FxHashSet<std::path::PathBuf>> = opts
         .changed_since
         .and_then(|git_ref| filtering::get_changed_files(opts.root, git_ref));
 
-    // Core analysis
     let use_trace = opts.trace_opts.any_active();
     #[expect(
         deprecated,
@@ -298,12 +288,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
             }
         }
     } else {
-        // `fallow_core::analyze` returns only `AnalysisResults`, not the wider
-        // `AnalysisOutput`, so `script_used_packages` is intentionally empty here.
-        // No code on this path reads it: trace dispatch is gated on `trace_graph`
-        // (which is also `None` here), and `SharedParseData` is only constructed
-        // when `retain_modules_for_health` is set (which routes through
-        // `analyze_retaining_modules`, populating the real set).
         match fallow_core::analyze(&config) {
             Ok(r) => (r, None, None, None, None, rustc_hash::FxHashSet::default()),
             Err(e) => {
@@ -313,7 +297,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
     };
     let elapsed = start.elapsed();
 
-    // Performance output
     if let Some(ref timings) = trace_timings
         && opts.trace_opts.performance
         && !opts.defer_performance
@@ -321,7 +304,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         report::print_performance(timings, config.output);
     }
 
-    // Trace early-return
     if let Some(ref graph) = trace_graph
         && let Some(code) = output::handle_trace_output(
             graph,
@@ -334,20 +316,14 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         return Err(code);
     }
 
-    // Workspace scoping
     if let Some(ref ws_roots) = ws_roots {
         filtering::filter_to_workspaces(&mut results, ws_roots);
     }
 
-    // Changed-file filtering
     if let Some(ref changed) = changed_files {
         filtering::filter_changed_files(&mut results, changed);
     }
 
-    // Diff-line filtering (issue #424). CLI calls use the startup cache so
-    // combined runs do not re-read stdin or re-parse the same file three
-    // times; programmatic/NAPI calls pass an explicit per-call index so
-    // concurrent requests cannot inherit another request's diff scope.
     if let Some(diff_index) = match opts.diff_index {
         Some(index) => Some(index),
         None if opts.use_shared_diff_index => crate::report::ci::diff_filter::shared_diff_index(),
@@ -356,7 +332,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         filtering::filter_results_by_diff(&mut results, diff_index, opts.root);
     }
 
-    // Single-file filtering (--file)
     if !opts.file.is_empty() {
         let file_set: rustc_hash::FxHashSet<std::path::PathBuf> = opts
             .file
@@ -369,7 +344,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
                 }
             })
             .collect();
-        // Warn about paths that don't exist on disk (show resolved path for clarity)
         for (original, resolved) in opts.file.iter().zip(file_set.iter()) {
             if !resolved.exists() {
                 eprintln!(
@@ -380,8 +354,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
             }
         }
         filtering::filter_changed_files(&mut results, &file_set);
-        // Suppress project-wide dependency issues in single-file mode.
-        // Users expect --file to scope ALL output to the specified file(s).
         results.unused_dependencies.clear();
         results.unused_dev_dependencies.clear();
         results.unused_optional_dependencies.clear();
@@ -389,13 +361,10 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         results.test_only_dependencies.clear();
     }
 
-    // Rules application
     rules::apply_rules(&mut results, &config);
 
-    // CLI issue-type filters
     opts.filters.apply(&mut results);
 
-    // Baseline handling
     let baseline_matched = handle_baseline(
         &mut results,
         opts.save_baseline,
@@ -405,7 +374,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         opts.output,
     )?;
 
-    // Warn if saving a baseline from scoped results (would produce misleading counts)
     if !matches!(
         opts.regression_opts.save_target,
         regression::SaveRegressionTarget::None
@@ -418,9 +386,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         );
     }
 
-    // Save regression baseline if requested.
-    // Track the just-saved counts so that if --fail-on-regression is also active,
-    // the same-run comparison uses the fresh baseline (not the pre-save config state).
     let just_saved_baseline = match opts.regression_opts.save_target {
         regression::SaveRegressionTarget::File(save_path) => {
             let counts = regression::CheckCounts::from_results(&results);
@@ -448,7 +413,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
         regression::SaveRegressionTarget::None => None,
     };
 
-    // Regression detection — use just-saved baseline if available, then config, then file
     let config_baseline_ref = just_saved_baseline
         .as_ref()
         .map(regression::CheckCounts::to_config_baseline);
@@ -458,7 +422,6 @@ pub fn execute_check(opts: &CheckOptions<'_>) -> Result<CheckResult, ExitCode> {
     let regression_outcome =
         regression::compare_check_regression(&results, &opts.regression_opts, config_baseline)?;
 
-    // SARIF file write
     if let Some(sarif_path) = opts.sarif_file {
         output::write_sarif_file(&results, &config, sarif_path, opts.quiet);
     }
@@ -549,7 +512,6 @@ pub fn print_check_result(result: &CheckResult, opts: PrintCheckOptions) -> Exit
         return report_code;
     }
 
-    // Print regression outcome to stderr
     if let Some(ref outcome) = result.regression {
         if !opts.quiet {
             regression::print_regression_outcome(outcome);
@@ -572,7 +534,6 @@ pub fn run_check(opts: &CheckOptions<'_>) -> ExitCode {
         Err(code) => return code,
     };
 
-    // Entry-point summary (standalone check mode; combined mode uses orientation header)
     if !opts.quiet && matches!(opts.output, OutputFormat::Human) {
         crate::combined::print_entry_point_summary(&result.results);
     }
@@ -600,16 +561,12 @@ pub fn run_check(opts: &CheckOptions<'_>) -> ExitCode {
         },
     );
 
-    // Cross-reference: run duplication analysis on the full results
-    // (the combined command handles this separately)
     if opts.include_dupes && result.config.duplicates.enabled {
         output::run_cross_reference(&result.config, &result.results, opts.quiet);
     }
 
     exit
 }
-
-// ── Baseline helpers ────────────────────────────────────────────
 
 /// Save baseline and/or compare against an existing baseline.
 ///
@@ -624,7 +581,6 @@ fn handle_baseline(
     quiet: bool,
     output: OutputFormat,
 ) -> Result<Option<(usize, usize)>, ExitCode> {
-    // Save baseline if requested
     if let Some(baseline_path) = save_path {
         let baseline_data = BaselineData::from_results(results, root);
         match serde_json::to_string_pretty(&baseline_data) {
@@ -661,7 +617,6 @@ fn handle_baseline(
         }
     }
 
-    // Compare against baseline if provided
     if let Some(baseline_path) = load_path {
         match std::fs::read_to_string(baseline_path) {
             Ok(content) => match serde_json::from_str::<BaselineData>(&content) {
@@ -867,8 +822,6 @@ mod tests {
         assert!(!saved.ends_with("\n\n"));
     }
 
-    // ── IssueFilters::any_active ─────────────────────────────────
-
     #[test]
     fn no_filters_means_none_active() {
         assert!(!no_filters().any_active());
@@ -903,8 +856,6 @@ mod tests {
             assert!(f.any_active());
         }
     }
-
-    // ── IssueFilters::apply ──────────────────────────────────────
 
     #[test]
     fn apply_no_active_filters_preserves_all_results() {
@@ -964,7 +915,6 @@ mod tests {
     #[test]
     fn apply_circular_deps_filter_keeps_only_circular_deps() {
         let mut results = make_results();
-        // Add circular dependency to results
         results.circular_dependencies.push(
             fallow_types::output_dead_code::CircularDependencyFinding::with_actions(
                 fallow_core::results::CircularDependency {
@@ -988,8 +938,6 @@ mod tests {
         assert!(results.unused_exports.is_empty());
         assert!(results.unused_dependencies.is_empty());
     }
-
-    // ── TraceOptions::any_active ─────────────────────────────────
 
     #[test]
     fn no_trace_options_means_none_active() {
@@ -1046,8 +994,6 @@ mod tests {
         assert!(t.any_active());
     }
 
-    // ── Boundary violations filter ──────────────────────────────
-
     #[test]
     fn apply_boundary_violations_filter() {
         let mut results = make_results();
@@ -1074,8 +1020,6 @@ mod tests {
         assert!(results.unused_dependencies.is_empty());
         assert!(results.circular_dependencies.is_empty());
     }
-
-    // ── Combined filter for multiple types ──────────────────────
 
     #[test]
     fn apply_all_filter_types_simultaneously() {
@@ -1108,7 +1052,6 @@ mod tests {
             ),
         );
 
-        // Enable all filters
         let f = IssueFilters {
             unused_files: true,
             unused_exports: true,
@@ -1132,11 +1075,8 @@ mod tests {
         };
         let total_before = results.total_issues();
         f.apply(&mut results);
-        // With all filters enabled, all issues should be preserved
         assert_eq!(results.total_issues(), total_before);
     }
-
-    // ── Optional and type-only dependency filters ───────────────
 
     #[test]
     fn apply_unused_deps_clears_optional_and_type_only() {

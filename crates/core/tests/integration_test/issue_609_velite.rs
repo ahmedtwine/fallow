@@ -49,21 +49,16 @@ fn velite_config_content_roots_and_generated_output_are_used() {
             });
         ",
     );
-    // App entry consumes the generated collection output.
     write(
         root.join("src/app.ts"),
         "import { posts } from '../.velite';\nexport const app = posts;\n",
     );
-    // Generated output (produced by Velite at build time).
     write(
         root.join(".velite/index.ts"),
         "export const posts: unknown[] = [];\n",
     );
-    // Velite-managed content under the configured root.
     write(root.join("content/blog/post.mdx"), "# Post\n");
-    // Control 1: an MDX file OUTSIDE the content root stays flagged.
     write(root.join("notes/stray.mdx"), "# Stray\n");
-    // Control 2: a plain orphan source file stays flagged.
     write(root.join("orphan.ts"), "export const orphan = true;\n");
 
     let config = create_config(root.to_path_buf());
@@ -103,7 +98,6 @@ fn velite_config_content_roots_and_generated_output_are_used() {
         );
     }
 
-    // Controls: scoping must not credit files outside the content root.
     assert!(
         unused_files
             .iter()
@@ -119,7 +113,6 @@ fn velite_config_content_roots_and_generated_output_are_used() {
         !unresolved_specs.contains(&"../.velite"),
         "generated .velite import should resolve: {unresolved_specs:?}"
     );
-    // velite.config.ts import credits @shikijs/rehype; velite is tooling.
     assert!(
         !unused_dev_deps.contains(&"@shikijs/rehype"),
         "config import should credit @shikijs/rehype: {unused_dev_deps:?}"
@@ -128,7 +121,6 @@ fn velite_config_content_roots_and_generated_output_are_used() {
         !unused_dev_deps.contains(&"velite"),
         "velite is a tooling dependency and must not be flagged: {unused_dev_deps:?}"
     );
-    // Control: an unrelated dep stays reported.
     assert!(
         unused_dev_deps.contains(&"left-pad"),
         "genuinely unused dev deps should still be reported: {unused_dev_deps:?}"

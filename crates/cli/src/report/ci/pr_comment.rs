@@ -151,9 +151,6 @@ pub fn render_pr_comment(command: &str, provider: Provider, issues: &[CiIssue]) 
     } else {
         write!(&mut out, "Found **{count}** {noun}.\n\n").expect("write to string");
         let groups = group_by_category(issues);
-        // Single-category invocations (e.g. `fallow check --format pr-comment-github`)
-        // get the original flat-table shape. Combined / multi-category runs get
-        // one collapsible section per category so reviewers can fold by area.
         if groups.len() == 1 {
             render_findings_table(&mut out, issues, max, "Details");
         } else {
@@ -272,13 +269,11 @@ fn group_by_category(issues: &[CiIssue]) -> Vec<(&'static str, Vec<CiIssue>)> {
         buckets.entry(category).or_default().push(issue.clone());
     }
     let mut ordered: Vec<(&'static str, Vec<CiIssue>)> = Vec::with_capacity(buckets.len());
-    // Emit known categories in the declared order first.
     for category in CATEGORY_ORDER {
         if let Some(items) = buckets.remove(category) {
             ordered.push((category, items));
         }
     }
-    // Anything left over (future categories not yet ordered) goes after.
     for (category, items) in buckets {
         ordered.push((category, items));
     }
@@ -435,15 +430,7 @@ mod tests {
 
     #[test]
     fn sticky_marker_id_default_when_nothing_set() {
-        // WORKSPACE_MARKER is a OnceLock that's set-once-per-process; tests
-        // can't unset it. We only assert about the unset branch when the
-        // OnceLock hasn't been touched, which is the case in this test if
-        // it's the first marker test to run. To keep tests order-independent
-        // we test sanitize_marker_segment + sticky_marker_id-with-mock
-        // separately rather than racing the OnceLock state.
         let body = render_pr_comment("check", Provider::Github, &[]);
-        // The marker prefix is always `<!-- fallow-id: fallow-results`,
-        // regardless of whether a workspace suffix follows.
         assert!(body.contains("<!-- fallow-id: fallow-results"));
         assert!(body.contains("No GitHub PR/MR findings."));
     }
@@ -452,19 +439,12 @@ mod tests {
     fn short_hex_hash_is_deterministic_and_six_chars() {
         let a = short_hex_hash("api,worker");
         assert_eq!(a.len(), 6);
-        // Same input -> same hash across calls.
         assert_eq!(a, short_hex_hash("api,worker"));
-        // Different input -> different hash (modulo collision; the
-        // workspace-marker assertion is "monorepo with 2-10 distinct
-        // workspaces should not race", which a 6-hex-char suffix
-        // satisfies at ~1/16M collision rate).
         assert_ne!(a, short_hex_hash("admin,web"));
     }
 
     #[test]
     fn sanitize_marker_segment_collapses_unsafe_chars_to_dashes() {
-        // `@`, `/`, spaces, and other special chars all become `-`.
-        // Leading and trailing dashes are trimmed.
         assert_eq!(sanitize_marker_segment("@fallow/runtime"), "fallow-runtime");
         assert_eq!(
             sanitize_marker_segment("packages/web ui"),
@@ -479,9 +459,6 @@ mod tests {
 
     #[test]
     fn escape_md_escapes_inline_commonmark_specials() {
-        // Inline-context CommonMark specials must escape: emphasis, links,
-        // images, code, HTML, headings (when first char of cell), pipes,
-        // strikethrough.
         let raw = "foo*bar_baz [a](u) `c` <h> #x !i ~s | p";
         let escaped = escape_md(raw);
         for ch in [
@@ -498,39 +475,25 @@ mod tests {
 
     #[test]
     fn escape_md_escapes_ampersand_to_block_numeric_entity_bypass() {
-        // Without escaping `&`, a description containing `&#42;` would render
-        // as `*` AFTER our escape pass, reintroducing the emphasis-injection
-        // we explicitly defended against. Escaping the `&` (and `#`) breaks
-        // the entity so it renders literally.
         let raw = "value &#42;suspicious&#42; here";
         let escaped = escape_md(raw);
-        // Both `&` and `#` are escaped, so the entity becomes `\&\#42;`,
-        // which Markdown renders as a literal `&#42;` instead of a `*`.
         assert!(escaped.contains(r"\&"), "got: {escaped}");
         assert!(escaped.contains(r"\#"), "got: {escaped}");
-        // Defence-in-depth: the substring " *suspicious" only appears if
-        // the entity decoded; with both escapes in place it cannot.
         assert!(!escaped.contains(" *suspicious"), "got: {escaped}");
     }
 
     #[test]
     fn summary_label_foreshadows_truncation() {
-        // When the section is truncated, the <details> summary tells the
-        // reader BEFORE they click that fewer rows than the count appear.
         assert_eq!(
             summary_label("Duplication", 160, 50),
             "Duplication (160, showing 50)"
         );
-        // When the section fits, the bare count reads as before.
         assert_eq!(summary_label("Health", 12, 50), "Health (12)");
         assert_eq!(summary_label("Dependencies", 50, 50), "Dependencies (50)");
     }
 
     #[test]
     fn escape_md_does_not_escape_block_only_markers() {
-        // `.`, `-`, `+` are only special at the start of a block-level line
-        // (ordered / unordered list markers). Table cells are inline; over-
-        // escaping these produces visually noisy `\-` / `\.` in the cell.
         let raw = "fallow/test-only-dependency package.json:12";
         let escaped = escape_md(raw);
         assert!(!escaped.contains("\\-"), "should not escape `-`");
@@ -540,16 +503,12 @@ mod tests {
 
     #[test]
     fn escape_md_collapses_newlines_to_spaces() {
-        // Table cells are single-line by construction; a literal newline in
-        // a description would terminate the row and break the table.
         let raw = "first\nsecond\nthird";
         assert_eq!(escape_md(raw), "first second third");
     }
 
     #[test]
     fn escape_md_leaves_safe_chars_unchanged() {
-        // Plain alphanumeric, spaces, slashes, colons, equals, quotes: all
-        // legal inside a Markdown table cell.
         let raw = "Export 'helperFn' is never imported by other modules";
         assert_eq!(
             escape_md(raw),
@@ -565,8 +524,6 @@ mod tests {
                 "{rule_id} must be project-level"
             );
         }
-        // Per-source-file rules stay diff-filterable so the comment body
-        // keeps focus on the lines a PR actually changed.
         for rule_id in [
             "fallow/unused-file",
             "fallow/unused-export",
@@ -593,9 +550,6 @@ mod tests {
 
     #[test]
     fn project_level_rule_ids_each_register_in_explain_registry() {
-        // Drift guard: every project-level id must resolve to a `RuleDef` so
-        // the SARIF help URI, `_meta`, and sticky-comment category stay
-        // consistent with the bypass list.
         for rule_id in PROJECT_LEVEL_RULE_IDS {
             assert!(
                 crate::explain::rule_by_id(rule_id).is_some(),
@@ -606,15 +560,9 @@ mod tests {
 
     #[test]
     fn escape_md_double_apply_is_safe() {
-        // Idempotency on the escape character itself: `\` always escapes,
-        // so escaping twice does not produce visual `\\\\` for callers that
-        // accidentally double-escape.
         let raw = "code with `backticks` and *stars*";
         let once = escape_md(raw);
         let twice = escape_md(&once);
-        // Second pass adds an additional layer of escaping, which is
-        // expected: callers must not double-call. The contract is "single
-        // pass produces correct GFM"; we just assert it doesn't panic.
         assert!(twice.contains(r"\\"));
     }
 }

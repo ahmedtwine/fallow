@@ -29,7 +29,6 @@ pub(super) fn concatenate_with_sentinels(
             file_of.push(file_id);
         }
 
-        // Insert sentinel between files (not after the last one).
         if file_id + 1 < ranked_files.len() {
             text.push(sentinel);
             file_of.push(usize::MAX);

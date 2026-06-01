@@ -10,11 +10,6 @@
 //! patch releases; a subsequent minor will flip `publish = false` so the crate
 //! is no longer fetchable from crates.io.
 
-// fallow's analysis never executes the analyzed project's code. The only
-// external program it spawns is `git`, routed through `crate::spawn`. This deny
-// (paired with the `.clippy.toml` ban on `std::process::Command::new`) makes any
-// new process spawn on the analysis path a build failure. Test helpers that
-// shell out to `git` to build fixtures are exempt via `not(test)`.
 #![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 pub mod analyze;
@@ -37,7 +32,6 @@ pub(crate) mod spawn;
 pub mod suppress;
 pub mod trace;
 
-// Re-export from fallow-graph for backwards compatibility
 pub use fallow_graph::graph;
 pub use fallow_graph::project;
 pub use fallow_graph::resolve;
@@ -165,12 +159,6 @@ fn update_cache(
     for module in modules {
         if let Some(file) = files.get(module.file_id.0 as usize) {
             let (mt, sz) = file_mtime_and_size(&file.path);
-            // If content hash matches, just refresh mtime/size if stale
-            // (e.g. `touch`ed file). Critically, preserve the existing
-            // `last_access_secs` instead of rebuilding the entry via
-            // `module_to_cached` (which would stamp the current epoch
-            // second and defeat the LRU). A metadata-only refresh is NOT
-            // a content change, so the entry's recency should not bump.
             if let Some(cached) = store.get_by_path_only(&file.path)
                 && cached.content_hash == module.content_hash
             {
@@ -281,13 +269,6 @@ fn warn_undeclared_workspaces(
         return;
     }
 
-    // Filter out paths that ALREADY carry a config-load-time diagnostic
-    // (typically `MalformedPackageJson` from issue #473). A directory whose
-    // package.json failed to parse appears "undeclared" from the analyze
-    // pipeline's perspective because `discover_workspaces` silently dropped
-    // it, but the user IS declaring it; the malformed-package-json warning
-    // already names the path and explains the fix, so re-flagging it as
-    // "undeclared" actively misleads.
     let existing = fallow_config::workspace_diagnostics_for(root);
     let already_flagged: rustc_hash::FxHashSet<PathBuf> = existing
         .iter()
@@ -304,10 +285,6 @@ fn warn_undeclared_workspaces(
         return;
     }
 
-    // Fold the surviving undeclared diagnostics into the shared registry so
-    // they appear in `workspace_diagnostics[]` on the JSON envelope and in
-    // `fallow list --workspaces`. Quiet mode still populates the registry
-    // (JSON consumers need the data) but skips the human warning.
     fallow_config::append_workspace_diagnostics(root, undeclared.clone());
 
     if !quiet && let Some(message) = format_undeclared_workspace_warning(root, &undeclared) {
@@ -434,7 +411,6 @@ pub fn analyze_with_parse_result(
         );
     }
 
-    // Discover workspaces
     let t = Instant::now();
     let workspaces_vec = discover_workspaces(&config.root);
     let workspaces_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -442,7 +418,6 @@ pub fn analyze_with_parse_result(
         tracing::info!(count = workspaces_vec.len(), "workspaces discovered");
     }
 
-    // Warn about directories with package.json not declared as workspaces
     warn_undeclared_workspaces(
         &config.root,
         &workspaces_vec,
@@ -453,7 +428,6 @@ pub fn analyze_with_parse_result(
     let discovery_hidden_dir_scopes =
         discover::collect_hidden_dir_scopes(config, root_pkg.as_ref(), &workspaces_vec);
 
-    // Stage 1: Discover files (cheap — needed for file registry and resolution)
     let t = Instant::now();
     progress.set_stage("discovering files...");
     let discovered_files =
@@ -465,7 +439,6 @@ pub fn analyze_with_parse_result(
     let workspaces = project.workspaces();
     let workspace_pkgs = load_workspace_packages(workspaces);
 
-    // Stage 1.5: Run plugin system
     let t = Instant::now();
     progress.set_stage("detecting plugins...");
     let mut plugin_result = run_plugins(
@@ -477,7 +450,6 @@ pub fn analyze_with_parse_result(
     );
     let plugins_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 1.6: Analyze package.json scripts
     let t = Instant::now();
     analyze_all_scripts(
         config,
@@ -488,9 +460,6 @@ pub fn analyze_with_parse_result(
     );
     let scripts_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 2: SKIPPED — using pre-parsed modules from caller
-
-    // Stage 3: Discover entry points
     let t = Instant::now();
     let entry_points = discover_all_entry_points(
         config,
@@ -502,10 +471,8 @@ pub fn analyze_with_parse_result(
     );
     let entry_points_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Compute entry-point summary before the graph consumes the entry_points vec
     let ep_summary = summarize_entry_points(&entry_points.all);
 
-    // Stage 4: Resolve imports to file IDs
     let t = Instant::now();
     progress.set_stage("resolving imports...");
     let mut resolved = resolve::resolve_all_imports(
@@ -528,7 +495,6 @@ pub fn analyze_with_parse_result(
     );
     let resolve_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 5: Build module graph
     let t = Instant::now();
     progress.set_stage("building module graph...");
     let mut graph = graph::ModuleGraph::build_with_reachability_roots(
@@ -541,7 +507,6 @@ pub fn analyze_with_parse_result(
     credit_workspace_package_usage(&mut graph, &resolved, workspaces);
     let graph_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 6: Analyze for dead code
     let t = Instant::now();
     progress.set_stage("analyzing...");
     #[expect(
@@ -652,9 +617,6 @@ fn analyze_full(
     let _span = tracing::info_span!("fallow_analyze").entered();
     let pipeline_start = Instant::now();
 
-    // Progress bars: enabled when not quiet, stderr is a terminal, and output is human-readable.
-    // Structured formats (JSON, SARIF) suppress spinners even on TTY — users piping structured
-    // output don't expect progress noise on stderr.
     let show_progress = !config.quiet
         && std::io::IsTerminal::is_terminal(&std::io::stderr())
         && matches!(
@@ -665,14 +627,12 @@ fn analyze_full(
         );
     let progress = progress::AnalysisProgress::new(show_progress);
 
-    // Warn if node_modules is missing — resolution will be severely degraded
     if !config.root.join("node_modules").is_dir() {
         tracing::warn!(
             "node_modules directory not found. Run `npm install` / `pnpm install` first for accurate results."
         );
     }
 
-    // Discover workspaces if in a monorepo
     let t = Instant::now();
     let workspaces_vec = discover_workspaces(&config.root);
     let workspaces_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -680,7 +640,6 @@ fn analyze_full(
         tracing::info!(count = workspaces_vec.len(), "workspaces discovered");
     }
 
-    // Warn about directories with package.json not declared as workspaces
     warn_undeclared_workspaces(
         &config.root,
         &workspaces_vec,
@@ -691,21 +650,17 @@ fn analyze_full(
     let discovery_hidden_dir_scopes =
         discover::collect_hidden_dir_scopes(config, root_pkg.as_ref(), &workspaces_vec);
 
-    // Stage 1: Discover all source files
     let t = Instant::now();
     progress.set_stage("discovering files...");
     let discovered_files =
         discover::discover_files_with_additional_hidden_dirs(config, &discovery_hidden_dir_scopes);
     let discover_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Build ProjectState: owns the file registry with stable FileIds and workspace metadata.
-    // This is the foundation for cross-workspace resolution and future incremental analysis.
     let project = project::ProjectState::new(discovered_files, workspaces_vec);
     let files = project.files();
     let workspaces = project.workspaces();
     let workspace_pkgs = load_workspace_packages(workspaces);
 
-    // Stage 1.5: Run plugin system — parse config files, discover dynamic entries
     let t = Instant::now();
     progress.set_stage("detecting plugins...");
     let mut plugin_result = run_plugins(
@@ -717,7 +672,6 @@ fn analyze_full(
     );
     let plugins_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 1.6: Analyze package.json scripts for binary usage and config file refs
     let t = Instant::now();
     analyze_all_scripts(
         config,
@@ -728,7 +682,6 @@ fn analyze_full(
     );
     let scripts_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 2: Parse all files in parallel and extract imports/exports
     let t = Instant::now();
     progress.set_stage(&format!("parsing {} files...", files.len()));
     let cache_max_size_bytes = resolve_cache_max_size_bytes(config);
@@ -749,7 +702,6 @@ fn analyze_full(
     let parse_cpu_ms = parse_result.parse_cpu_ms;
     let parse_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Update cache with freshly parsed modules and refresh stale mtime/size entries.
     let t = Instant::now();
     if !config.no_cache {
         let store = cache_store.get_or_insert_with(cache::CacheStore::new);
@@ -764,7 +716,6 @@ fn analyze_full(
     }
     let cache_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 3: Discover entry points (static patterns + plugin-discovered patterns)
     let t = Instant::now();
     let entry_points = discover_all_entry_points(
         config,
@@ -776,7 +727,6 @@ fn analyze_full(
     );
     let entry_points_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 4: Resolve imports to file IDs
     let t = Instant::now();
     progress.set_stage("resolving imports...");
     let mut resolved = resolve::resolve_all_imports(
@@ -799,7 +749,6 @@ fn analyze_full(
     );
     let resolve_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 5: Build module graph
     let t = Instant::now();
     progress.set_stage("building module graph...");
     let mut graph = graph::ModuleGraph::build_with_reachability_roots(
@@ -812,10 +761,8 @@ fn analyze_full(
     credit_workspace_package_usage(&mut graph, &resolved, workspaces);
     let graph_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Compute entry-point summary before the graph consumes the entry_points vec
     let ep_summary = summarize_entry_points(&entry_points.all);
 
-    // Stage 6: Analyze for dead code (with plugin context and workspace info)
     let t = Instant::now();
     progress.set_stage("analyzing...");
     #[expect(
@@ -954,9 +901,6 @@ fn analyze_all_scripts(
     workspace_pkgs: &[LoadedWorkspacePackage<'_>],
     plugin_result: &mut plugins::AggregatedPluginResult,
 ) {
-    // Collect all dependency names to build the bin-name → package-name reverse map.
-    // This resolves binaries like "attw" to "@arethetypeswrong/cli" even without
-    // node_modules/.bin symlinks.
     let mut all_dep_names: Vec<String> = Vec::new();
     if let Some(pkg) = root_pkg {
         all_dep_names.extend(pkg.all_dependency_names());
@@ -967,8 +911,6 @@ fn analyze_all_scripts(
     all_dep_names.sort_unstable();
     all_dep_names.dedup();
 
-    // Probe node_modules/ at project root and each workspace root so non-hoisted
-    // deps (pnpm strict, Yarn workspaces) are also discovered.
     let mut nm_roots: Vec<&std::path::Path> = Vec::new();
     if config.root.join("node_modules").is_dir() {
         nm_roots.push(&config.root);
@@ -1051,12 +993,6 @@ fn analyze_all_scripts(
         plugin_result.entry_patterns.extend(entry_patterns);
     }
 
-    // Scan CI config files for binary invocations and positional file references.
-    // Returns both packages used by CI tooling AND project-relative file paths
-    // referenced as command-line arguments (e.g., `node scripts/deploy.ts` in a
-    // GitHub Actions `run:` block) so the referenced files become reachable
-    // entry points. CI files always live at the project root, so file paths
-    // need no workspace-prefix transformation. See issue #195 (Case D).
     let ci_analysis = scripts::ci::analyze_ci_files(&config.root, &bin_map);
     plugin_result
         .script_used_packages
@@ -1125,7 +1061,6 @@ fn discover_all_entry_points(
     let infra_entries = discover::discover_infrastructure_entry_points(&config.root);
     entry_points.extend_runtime(infra_entries);
 
-    // Add dynamically loaded files from config as entry points
     if !config.dynamically_loaded.is_empty() {
         let dynamic_entries = discover::discover_dynamically_loaded_entry_points(config, files);
         entry_points.extend_runtime(dynamic_entries);
@@ -1211,7 +1146,6 @@ fn run_plugins(
         .map(std::path::PathBuf::as_path)
         .collect();
 
-    // Run plugins for root project (full run with external plugins, inline config, etc.)
     let mut result = root_pkg.map_or_else(plugins::AggregatedPluginResult::default, |pkg| {
         registry.run_with_search_roots(
             pkg,
@@ -1235,13 +1169,9 @@ fn run_plugins(
     let root_active_plugins: rustc_hash::FxHashSet<&str> =
         result.active_plugins.iter().map(String::as_str).collect();
 
-    // Pre-compile config matchers once and bucket source files by workspace.
-    // Workspace config matching can then scan only files below that workspace
-    // instead of every project file for every active matcher.
     let precompiled_matchers = registry.precompile_config_matchers();
     let workspace_relative_files = bucket_files_by_workspace(workspace_pkgs, &file_paths);
 
-    // Run plugins for each workspace package in parallel, then merge results.
     let ws_results: Vec<_> = workspace_pkgs
         .par_iter()
         .zip(workspace_relative_files.par_iter())
@@ -1268,34 +1198,8 @@ fn run_plugins(
         })
         .collect();
 
-    // Merge workspace results sequentially (deterministic order via par_iter
-    // index stability). Each result is prefix-transformed for its workspace,
-    // then folded into the accumulator via the single field-exhaustive
-    // `merge_into` (issue #444): adding a field to `AggregatedPluginResult`
-    // becomes a compile error in `merge_into` rather than a silently-dropped
-    // field that would diverge the CLI from the LSP.
     for (mut ws_result, ws_prefix) in ws_results {
         ws_result.apply_workspace_prefix(&ws_prefix);
-        // `used_class_members` and `scss_include_paths` flow through the merge
-        // (issue #772): a workspace package that activates a framework
-        // contributing a heritage-scoped class-member allowlist (Lit, Lexical,
-        // Ember, ...) or SCSS `includePaths` (Angular/Nx) needs those folded
-        // into the root aggregate, otherwise the package's members surface as
-        // false `unused-class-member` findings and its SCSS `@use`/`@import`
-        // surface as `unresolved-import`. Both are prefix-agnostic (member
-        // names and absolute directories), so `apply_workspace_prefix` leaves
-        // them untouched and `merge_into` unions them as-is.
-        //
-        // Two fields stay cleared to keep behavior unchanged:
-        //   - `config_patterns` IS populated by `run_workspace_fast` but no
-        //     consumer reads the merged aggregate's `config_patterns` after
-        //     `run_plugins`, so folding it in is inert; it is cleared to keep
-        //     the merge byte-identical for that field.
-        //   - `script_used_packages` is never populated by `run_workspace_fast`
-        //     (the root's script-used set is computed separately after this
-        //     function returns), so clearing it is a no-op today; it is cleared
-        //     anyway so a future change that starts populating it cannot
-        //     silently alter root script-credit behavior.
         ws_result.config_patterns.clear();
         ws_result.script_used_packages.clear();
         result.merge_into(ws_result);
@@ -1426,11 +1330,6 @@ pub fn config_for_project(
                 .production
                 .for_analysis(fallow_config::ProductionAnalysis::DeadCode);
             config.production = dead_code_production.into();
-            // Issue #468: validate boundary zone references and root-prefix
-            // conflicts BEFORE resolve(). Mirrors the CLI's runtime_support
-            // wiring; LSP and programmatic embedders surface the same exit-2
-            // diagnostic via FallowError::config so editors / API consumers
-            // get a structured failure instead of analysis-time noise.
             config
                 .validate_resolved_boundaries(root)
                 .map_err(|errors| {
@@ -1637,16 +1536,6 @@ mod tests {
 
     #[test]
     fn warn_undeclared_workspaces_suppresses_paths_already_flagged_as_malformed() {
-        // Regression test for the load-bearing dedup in
-        // `warn_undeclared_workspaces`: when a declared workspace's
-        // package.json is malformed, the discovery pass drops the directory
-        // and stashes `MalformedPackageJson` in the registry. The later
-        // undeclared-workspace pass would otherwise re-flag the SAME
-        // directory as "undeclared" (because it never made it into the
-        // `declared` Vec), confusing users who think the workspace is not
-        // declared when it actually is, just typo'd. This test asserts the
-        // pre-existing MalformedPackageJson entry suppresses the duplicate
-        // undeclared warning.
         let dir = tempfile::tempdir().expect("create temp dir");
         let pkg_good = dir.path().join("packages").join("good");
         let pkg_bad = dir.path().join("packages").join("bad");
@@ -1660,9 +1549,6 @@ mod tests {
         std::fs::write(pkg_good.join("package.json"), r#"{"name": "good"}"#).unwrap();
         std::fs::write(pkg_bad.join("package.json"), r"{,").unwrap();
 
-        // Run discovery; in production `load_config_for_analysis` stashes
-        // the returned diagnostics into the registry, so this test mirrors
-        // that pattern by stashing manually.
         let (workspaces, diagnostics) = fallow_config::discover_workspaces_with_diagnostics(
             dir.path(),
             &globset::GlobSet::empty(),
@@ -1671,9 +1557,6 @@ mod tests {
         assert_eq!(workspaces.len(), 1, "only the valid workspace discovers");
         fallow_config::stash_workspace_diagnostics(dir.path(), diagnostics);
 
-        // Now run the undeclared pass via the public entry point. The
-        // registry should contain the MalformedPackageJson diagnostic but
-        // NOT an UndeclaredWorkspace for the same path.
         warn_undeclared_workspaces(dir.path(), &workspaces, &globset::GlobSet::empty(), false);
 
         let diagnostics = fallow_config::workspace_diagnostics_for(dir.path());

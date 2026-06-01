@@ -5,16 +5,13 @@
 
 use oxc_ast::ast::Comment;
 
-// Re-export types from fallow-types
 pub use fallow_types::suppress::{IssueKind, Suppression, UnknownSuppressionKind};
 
 /// Parsed suppressions plus any tokens that did not resolve to a known kind.
 ///
 /// `unknown_kinds` are tokens from a `// fallow-ignore-*` marker that did
-/// not parse to any `IssueKind`. The remaining known tokens on the same
-/// marker are still recorded as normal `Suppression` entries; downstream
-/// `find_stale` surfaces each unknown token as a `StaleSuppression` finding
-/// instead of discarding the entire marker silently. See issue #449.
+/// not parse to any `IssueKind`. Known tokens on the same marker are still
+/// recorded as normal `Suppression` entries.
 #[derive(Debug, Default, Clone)]
 pub struct ParsedSuppressions {
     /// Suppressions for tokens that parsed to a known `IssueKind`.
@@ -96,18 +93,8 @@ fn push_suppressions(parsed: &mut ParsedSuppressions, line: u32, comment_line: u
 
 /// Parse all fallow suppression comments from a file's comment list.
 ///
-/// Supports:
-/// - `// fallow-ignore-file` to suppress all issues in the file
-/// - `// fallow-ignore-file unused-export` to suppress a specific issue type for the file
-/// - `// fallow-ignore-next-line` to suppress all issues on the next line
-/// - `// fallow-ignore-next-line unused-export` to suppress a specific issue type on the next line
-/// - `// fallow-ignore-next-line unused-export, complexity` to suppress multiple issue types on the next line
-/// - `<!-- fallow-ignore-file complexity -->` to suppress a specific issue type in HTML-like files
-///
-/// Unknown tokens (typos, obsolete kind names) are collected into
-/// `unknown_kinds` rather than silently discarding the entire marker. The
-/// known tokens on the same marker are still recorded as suppressions; see
-/// issue #449.
+/// Unknown tokens are collected into `unknown_kinds` rather than discarding
+/// the whole marker.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
@@ -139,10 +126,6 @@ pub fn parse_suppressions(comments: &[Comment], source: &str) -> ParsedSuppressi
 }
 
 /// Parse suppressions from raw source text using simple string scanning.
-/// Used for SFC files where comment byte offsets do not correspond to the original file.
-///
-/// Returns both recognized suppressions and the unknown tokens that did not
-/// parse to any `IssueKind`. See `parse_suppressions` and issue #449.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "line count is bounded by file size"
@@ -153,7 +136,6 @@ pub fn parse_suppressions_from_source(source: &str) -> ParsedSuppressions {
     for (line_idx, line) in source.lines().enumerate() {
         let trimmed = line.trim();
 
-        // Match line, block, and HTML comment styles.
         let comment_text = if let Some(rest) = trimmed.strip_prefix("//") {
             Some(rest.trim())
         } else if let Some(rest) = trimmed.strip_prefix("/*") {
@@ -170,12 +152,12 @@ pub fn parse_suppressions_from_source(source: &str) -> ParsedSuppressions {
 
         if let Some(rest) = text.strip_prefix("fallow-ignore-file") {
             let rest = rest.trim();
-            let src_comment_line = (line_idx as u32) + 1; // 1-based
+            let src_comment_line = (line_idx as u32) + 1;
             push_suppressions(&mut parsed, 0, src_comment_line, rest);
         } else if let Some(rest) = text.strip_prefix("fallow-ignore-next-line") {
             let rest = rest.trim();
-            let src_comment_line = (line_idx as u32) + 1; // 1-based
-            let suppressed_line = src_comment_line + 1; // next line
+            let src_comment_line = (line_idx as u32) + 1;
+            let suppressed_line = src_comment_line + 1;
 
             push_suppressions(&mut parsed, suppressed_line, src_comment_line, rest);
         }
@@ -264,8 +246,6 @@ mod tests {
 
     #[test]
     fn parse_partial_accept_known_kinds_recorded() {
-        // Issue #449: previously discarded the entire line; now the known
-        // kind suppresses normally and the unknown surfaces separately.
         let source =
             "// fallow-ignore-next-line unused-export, complexity-typo\nexport const foo = 1;\n";
         let parsed = parse_suppressions_from_source(source);
@@ -322,12 +302,10 @@ mod tests {
         let suppressions = parse_suppressions(&parser_return.program.comments, source).suppressions;
         assert_eq!(suppressions.len(), 2);
 
-        // File-wide suppression
         assert_eq!(suppressions[0].line, 0);
         assert!(suppressions[0].kind.is_none());
 
-        // Next-line suppression with kind
-        assert_eq!(suppressions[1].line, 3); // suppresses line 3 (export const foo)
+        assert_eq!(suppressions[1].line, 3);
         assert_eq!(suppressions[1].kind, Some(IssueKind::UnusedExport));
     }
 
@@ -348,8 +326,6 @@ mod tests {
         assert_eq!(suppressions[0].line, 0);
         assert_eq!(suppressions[0].kind, Some(IssueKind::Complexity));
     }
-
-    // ── Additional coverage ─────────────────────────────────────
 
     #[test]
     fn parse_block_comment_next_line_suppression() {
@@ -440,7 +416,6 @@ mod tests {
 
     #[test]
     fn parse_suppression_not_at_line_start_ignored() {
-        // Inline comments that don't start the line are not parsed
         let source = "export const foo = 1; // fallow-ignore-file\n";
         let suppressions = parse_suppressions_from_source(source).suppressions;
         assert!(
@@ -451,7 +426,6 @@ mod tests {
 
     #[test]
     fn parse_block_comment_without_closing_ignored() {
-        // A block comment that doesn't end with */ should not be parsed
         let source = "/* fallow-ignore-file\nexport const foo = 1;\n";
         let suppressions = parse_suppressions_from_source(source).suppressions;
         assert!(suppressions.is_empty());
@@ -469,7 +443,6 @@ mod tests {
 
     #[test]
     fn byte_offset_to_line_beyond_source() {
-        // Offset beyond source length should be clamped
         assert_eq!(byte_offset_to_line("abc\n", 100), 2);
     }
 

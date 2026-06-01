@@ -130,9 +130,6 @@ fn normalise_payload_paths(root: &Path, kind: WorkspaceDiagnosticKind) -> Worksp
         let stripped = text
             .replace(&format!("{root_str}/"), "")
             .replace(&format!("{root_alt}/"), "");
-        // Also strip a stray Windows-style trailing-separator form just in case
-        // the diagnostic was constructed with a path whose `display()` keeps
-        // backslashes.
         stripped
             .replace(&format!("{root_str}\\"), "")
             .replace(&format!("{root_alt}\\"), "")
@@ -279,10 +276,6 @@ fn plan_warnings(root: &Path, diagnostics: &[WorkspaceDiagnostic]) -> Vec<Planne
 
     let mut plans: Vec<PlannedWarning> = Vec::new();
     let mut glob_groups: Vec<(&str, Vec<&WorkspaceDiagnostic>)> = Vec::new();
-    // `tsconfig.json` references[] entries pointing at missing directories are
-    // aggregated together: a single root tsconfig commonly lists every sibling
-    // package, and on a large monorepo the referenced source tree may not be
-    // checked out, producing dozens of distinct-but-repetitive lines.
     let mut tsconfig_ref_misses: Vec<&WorkspaceDiagnostic> = Vec::new();
     for diag in diagnostics {
         match &diag.kind {
@@ -312,8 +305,6 @@ fn plan_warnings(root: &Path, diagnostics: &[WorkspaceDiagnostic]) -> Vec<Planne
         });
     }
 
-    // A single missing reference keeps today's per-instance message; two or
-    // more collapse to one summary line naming a few of the missing paths.
     if let [only] = tsconfig_ref_misses.as_slice() {
         plans.push(per_instance(only));
     } else if !tsconfig_ref_misses.is_empty() {
@@ -342,17 +333,12 @@ fn plan_warnings(root: &Path, diagnostics: &[WorkspaceDiagnostic]) -> Vec<Planne
 /// only the stderr surface is bounded, so structured JSON consumers still see
 /// every diagnostic.
 pub(super) fn emit_diagnostics(root: &Path, diagnostics: &[WorkspaceDiagnostic]) {
-    // Capture every diagnostic before the dedupe gate so tests observe both
-    // calls on the same (root, kind, path) and see the constituents behind an
-    // aggregated glob warning.
     #[cfg(test)]
     for diag in diagnostics {
         capture_diag(diag);
     }
 
     for plan in plan_warnings(root, diagnostics) {
-        // On a poisoned mutex, `should_emit` returns true and we emit anyway:
-        // over-warning beats swallowing a typo.
         if should_emit(plan.dedupe_key) {
             tracing::warn!("fallow: {}", plan.message);
         }
@@ -544,10 +530,6 @@ pub fn workspace_diagnostics_for(root: &Path) -> Vec<WorkspaceDiagnostic> {
 /// caches.
 #[must_use]
 pub(super) fn is_skip_listed_dir(name: &str) -> bool {
-    // Dot-prefixed names (`.next`, `.turbo`, `.nuxt`, `.svelte-kit`, `.cache`)
-    // are caught by the `starts_with('.')` arm; do not duplicate them in the
-    // explicit list. The explicit list is reserved for non-dot conventional
-    // build / output / tooling directories that pnpm/npm/yarn also filter.
     name.starts_with('.') || matches!(name, "node_modules" | "build" | "dist" | "coverage")
 }
 
@@ -599,7 +581,6 @@ mod tests {
             message.starts_with("Glob 'playground/**' matched 5 directories with no package.json"),
             "count and pattern lead the message: {message}"
         );
-        // First three sorted examples are named; the rest summarised.
         assert!(
             message.contains(
                 "(e.g. playground/cli, playground/lib-types, playground/minify, and 2 more)"
@@ -612,7 +593,6 @@ mod tests {
             ),
             "next-step hint preserved: {message}"
         );
-        // Never names the truncated examples inline.
         assert!(
             !message.contains("playground/ssr"),
             "tail example not named: {message}"
@@ -692,7 +672,6 @@ mod tests {
         let plans = plan_warnings(root, std::slice::from_ref(&diag));
 
         assert_eq!(plans.len(), 1);
-        // Byte-identical to the per-instance message and key (no aggregation).
         assert_eq!(plans[0].message, diag.message);
         assert!(
             plans[0]

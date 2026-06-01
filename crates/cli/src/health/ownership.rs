@@ -59,8 +59,7 @@ const DRIFT_MIN_FILE_AGE_DAYS: u64 = 30;
 /// "scaffolded by one person, properly built by team" false positives.
 const DRIFT_MAX_ORIGINAL_SHARE: f64 = 0.10;
 
-/// Declared owner activity: a matching contributor must have touched the file
-/// inside this window to suppress drift as actively owned.
+/// Declared owner activity window in days.
 const DECLARED_OWNER_ACTIVE_DAYS: u64 = 90;
 
 /// Inputs needed to compute ownership for one file. Built once per analysis
@@ -109,7 +108,6 @@ pub fn compute_ownership(
         return None;
     }
 
-    // Resolve, filter, and rank contributions.
     let mut filtered: Vec<RankedAuthor<'_>> = churn
         .authors
         .iter()
@@ -174,9 +172,6 @@ pub fn compute_ownership(
         })
         .collect();
 
-    // suggested_reviewers = recent_contributors filtered by stale_days < 90.
-    // AI agents can paste this directly into "Request review from @X, @Y"
-    // PR comments without re-filtering.
     let suggested_reviewers: Vec<ContributorEntry> = recent_contributors
         .iter()
         .filter(|c| c.stale_days < 90)
@@ -322,10 +317,6 @@ fn compute_drift(
     };
     let top = &ranked[0];
 
-    // Compare by interned author idx, not pointer identity. Pointer equality
-    // works today because both `RankedAuthor` entries borrow from the same
-    // `FxHashMap`, but it would silently break if `filtered` were ever
-    // rebuilt from copies. The idx field is a stable identifier.
     if original.idx == top.idx {
         return (false, None);
     }
@@ -520,8 +511,6 @@ mod tests {
         }
     }
 
-    // ── extract_handle ────────────────────────────────────────────
-
     #[test]
     fn extract_handle_strips_domain() {
         assert_eq!(extract_handle("alice@example.com"), "alice");
@@ -537,7 +526,6 @@ mod tests {
 
     #[test]
     fn extract_handle_keeps_plus_suffix_when_present() {
-        // user+tag@example.com -> "tag" (matches GH noreply pattern)
         assert_eq!(extract_handle("user+tag@example.com"), "tag");
     }
 
@@ -548,11 +536,8 @@ mod tests {
 
     #[test]
     fn extract_handle_empty_local_falls_back() {
-        // "@example.com" -> empty local, return original
         assert_eq!(extract_handle("@example.com"), "@example.com");
     }
-
-    // ── hash_email ────────────────────────────────────────────────
 
     #[test]
     fn hash_email_is_stable() {
@@ -567,8 +552,6 @@ mod tests {
     fn hash_email_differs_per_input() {
         assert_ne!(hash_email("alice@x"), hash_email("bob@x"));
     }
-
-    // ── render_email ──────────────────────────────────────────────
 
     #[test]
     fn render_email_raw_passes_through() {
@@ -630,8 +613,6 @@ mod tests {
         );
     }
 
-    // ── compile_bot_globs / is_bot ────────────────────────────────
-
     #[test]
     fn bot_globs_match_default_patterns() {
         let globs = compile_bot_globs(&[
@@ -648,26 +629,18 @@ mod tests {
 
     #[test]
     fn human_github_noreply_is_not_a_bot() {
-        // Regression: `*noreply*` was once a default bot pattern but it
-        // matched the GitHub privacy-default address format used by the
-        // majority of real human contributors. Ensure default patterns
-        // don't fire on a typical human noreply address.
         let globs =
             compile_bot_globs(&fallow_config::OwnershipConfig::default().bot_patterns).unwrap();
-        // Real example from a vite contributor.
         assert!(!is_bot(
             "49056869+sapphi-red@users.noreply.github.com",
             &globs
         ));
         assert!(!is_bot("12345+alice@users.noreply.github.com", &globs));
-        // The actual github-actions[bot] still gets caught via `\[bot\]`.
         assert!(is_bot(
             "41898282+github-actions[bot]@users.noreply.github.com",
             &globs
         ));
     }
-
-    // ── compute_bus_factor ────────────────────────────────────────
 
     #[test]
     fn bus_factor_single_dominant_author_is_one() {
@@ -689,7 +662,6 @@ mod tests {
 
     #[test]
     fn bus_factor_even_split_three_authors_is_two() {
-        // Three authors at 4/3/3 weighted. Top one is 40%, top two = 70% (>= 50%).
         let pool = vec!["a@x".to_string(), "b@x".to_string(), "c@x".to_string()];
         let churn = churn_with_authors(
             "f.ts",
@@ -727,8 +699,6 @@ mod tests {
         assert_eq!(m.top_contributor.identifier, "alice@x");
     }
 
-    // ── recent_contributors ───────────────────────────────────────
-
     #[test]
     fn recent_contributors_takes_top_three_excluding_top() {
         let pool = (0..6).map(|i| format!("u{i}@x")).collect::<Vec<_>>();
@@ -751,12 +721,8 @@ mod tests {
         assert_eq!(m.recent_contributors[2].identifier, "u3@x");
     }
 
-    // ── drift detection ───────────────────────────────────────────
-
     #[test]
     fn drift_fires_when_original_author_inactive_old_file() {
-        // alice scaffolded 200 days ago with 1 commit, bob has built it out
-        // with 20 weighted commits. alice's share is well below 10%.
         let pool = vec!["alice@x".to_string(), "bob@x".to_string()];
         let churn = churn_with_authors(
             "f.ts",
@@ -777,7 +743,6 @@ mod tests {
 
     #[test]
     fn drift_does_not_fire_for_recently_scaffolded_file() {
-        // File is only 10 days old. Drift heuristic requires 30+ day age.
         let pool = vec!["alice@x".to_string(), "bob@x".to_string()];
         let churn = churn_with_authors(
             "f.ts",
@@ -796,7 +761,6 @@ mod tests {
 
     #[test]
     fn drift_does_not_fire_when_original_still_active() {
-        // alice still has 30% share — no drift even though bob is on top.
         let pool = vec!["alice@x".to_string(), "bob@x".to_string()];
         let churn = churn_with_authors(
             "f.ts",
@@ -820,8 +784,6 @@ mod tests {
         let m = compute_ownership(&churn, Path::new("f.ts"), &ctx).unwrap();
         assert!(!m.drift);
     }
-
-    // ── CODEOWNERS cross-reference ───────────────────────────────
 
     #[test]
     fn unowned_tristate_some_true_when_no_rule_matches() {
@@ -908,8 +870,6 @@ mod tests {
         assert!(m.declared_owner.is_none());
     }
 
-    // ── empty / bot-only inputs ───────────────────────────────────
-
     #[test]
     fn returns_none_when_no_authors() {
         let pool: Vec<String> = vec![];
@@ -928,11 +888,8 @@ mod tests {
         assert!(compute_ownership(&churn, Path::new("f.ts"), &ctx).is_none());
     }
 
-    // ── stale_days ────────────────────────────────────────────────
-
     #[test]
     fn stale_days_clamps_at_zero_for_future_timestamps() {
-        // Future timestamp shouldn't underflow.
         assert_eq!(stale_days(NOW + 1000, NOW), 0);
     }
 
@@ -942,12 +899,9 @@ mod tests {
         assert_eq!(stale_days(ts_days_ago(0), NOW), 0);
     }
 
-    // ── share rounding ────────────────────────────────────────────
-
     #[test]
     fn shares_are_rounded_to_three_decimals() {
         let pool = vec!["a@x".to_string(), "b@x".to_string(), "c@x".to_string()];
-        // Ratios: 1/3, 1/3, 1/3 = 0.333... → 0.333 after round3.
         let churn = churn_with_authors(
             "f.ts",
             &[

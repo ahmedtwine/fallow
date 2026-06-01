@@ -18,8 +18,6 @@ use crate::health::{HealthOptions, HealthResult, SortBy};
 use crate::report;
 use crate::report::plural;
 
-// ── Types ────────────────────────────────────────────────────────
-
 const AUDIT_BASE_SNAPSHOT_CACHE_VERSION: u8 = 2;
 const MAX_AUDIT_BASE_SNAPSHOT_CACHE_SIZE: usize = 16 * 1024 * 1024;
 
@@ -124,20 +122,12 @@ pub struct AuditOptions<'a> {
     pub runtime_coverage: Option<&'a std::path::Path>,
     /// Threshold for hot-path classification, forwarded to the sidecar.
     pub min_invocations_hot: u64,
-    // `diff_file` was removed from this struct: audit now sources the
-    // parsed diff index from the process-wide cache in
-    // `crate::report::ci::diff_filter::shared_diff_index()`, populated
-    // by `main()`. The cache covers `--diff-file PATH`, `--diff-file -`,
-    // `--diff-stdin`, and the `$FALLOW_DIFF_FILE` env var.
 }
-
-// ── Auto-detect base branch ──────────────────────────────────────
 
 /// Try to determine the default branch for the repository.
 /// Priority: `git symbolic-ref refs/remotes/origin/HEAD` → `main` → `master`.
 /// Returns `None` if none of these exist.
 fn auto_detect_base_branch(root: &std::path::Path) -> Option<String> {
-    // Try symbolic-ref first (works when origin HEAD is set)
     let mut symbolic_ref = std::process::Command::new("git");
     symbolic_ref
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
@@ -152,7 +142,6 @@ fn auto_detect_base_branch(root: &std::path::Path) -> Option<String> {
         }
     }
 
-    // Try main
     let mut verify_main = std::process::Command::new("git");
     verify_main
         .args(["rev-parse", "--verify", "main"])
@@ -164,7 +153,6 @@ fn auto_detect_base_branch(root: &std::path::Path) -> Option<String> {
         return Some("main".to_string());
     }
 
-    // Try master
     let mut verify_master = std::process::Command::new("git");
     verify_master
         .args(["rev-parse", "--verify", "master"])
@@ -194,8 +182,6 @@ fn get_head_sha(root: &std::path::Path) -> Option<String> {
     }
 }
 
-// ── Verdict computation ──────────────────────────────────────────
-
 fn compute_verdict(
     check: Option<&CheckResult>,
     dupes: Option<&DupesResult>,
@@ -204,7 +190,6 @@ fn compute_verdict(
     let mut has_errors = false;
     let mut has_warnings = false;
 
-    // Dead code: use rules severity
     if let Some(result) = check {
         if crate::check::has_error_severity_issues(
             &result.results,
@@ -217,16 +202,12 @@ fn compute_verdict(
         }
     }
 
-    // Complexity: findings that exceeded configured thresholds are always errors.
-    // Health rules don't have a warn-severity concept — any finding above the
-    // threshold is a quality gate failure, matching `fallow health` exit code semantics.
     if let Some(result) = health
         && !result.report.findings.is_empty()
     {
         has_errors = true;
     }
 
-    // Duplication: clone groups are warnings (unless threshold exceeded)
     if let Some(result) = dupes
         && !result.report.clone_groups.is_empty()
     {
@@ -704,12 +685,6 @@ fn compute_base_snapshot(
         coverage_root: opts.coverage_root,
         gate: AuditGate::All,
         include_entry_exports: opts.include_entry_exports,
-        // Base-snapshot pass intentionally does NOT spawn the sidecar
-        // again or apply hot-path filtering: hot-path-touched is a
-        // PR-vs-HEAD signal, and the recursive base run is HEAD's
-        // baseline, so it has nothing to compare against. Suppressing
-        // here also avoids a duplicate license check + sidecar download
-        // cost on every audit run.
         runtime_coverage: None,
         min_invocations_hot: opts.min_invocations_hot,
     };
@@ -719,10 +694,6 @@ fn compute_base_snapshot(
     let health_production = opts.production_health.unwrap_or(opts.production);
     let share_dead_code_parse_with_health = check_production == health_production;
 
-    // Base-snapshot check and dupes share no mutable state. Running them
-    // concurrently keeps the expensive duplication pass overlapped with
-    // dead-code analysis; health then consumes check's retained parse when the
-    // production modes match, mirroring the HEAD-side audit pipeline.
     let (check_res, dupes_res) = rayon::join(
         || run_audit_check(&base_opts, None, share_dead_code_parse_with_health),
         || run_audit_dupes(&base_opts, None, base_changed_files.as_ref(), None),
@@ -756,9 +727,6 @@ fn base_analysis_root(current_root: &Path, base_worktree_root: &Path) -> PathBuf
     let Some(git_root) = git_toplevel(current_root) else {
         return base_worktree_root.to_path_buf();
     };
-    // `dunce::canonicalize` strips Windows `\\?\` verbatim prefix so this
-    // current_root matches `git_root` (also dunce-canonicalised above) when
-    // `strip_prefix` walks the component graph.
     let current_root =
         dunce::canonicalize(current_root).unwrap_or_else(|_| current_root.to_path_buf());
     match current_root.strip_prefix(&git_root) {
@@ -801,15 +769,7 @@ fn can_reuse_current_as_base(
     let Some(git_root) = git_toplevel(opts.root) else {
         return false;
     };
-    // `try_get_changed_files` joins the canonical git toplevel onto each
-    // relative diff entry, so changed-file paths land canonical even when
-    // `opts.root` itself was passed un-canonical (typical in tests). Match
-    // against both forms so the cache-artifact check works in either case.
     let cache_dir = opts.root.join(".fallow");
-    // `dunce::canonicalize` strips Windows `\\?\` verbatim prefix so the
-    // `starts_with` checks below compare against a shape that matches the
-    // changed_files paths (which also flow through dunce-canonicalised
-    // `resolve_git_toplevel`). On POSIX dunce is identical to std.
     let canonical_cache_dir = dunce::canonicalize(&cache_dir).ok();
     changed_files.iter().all(|path| {
         if is_fallow_cache_artifact(path, &cache_dir, canonical_cache_dir.as_deref()) {
@@ -834,13 +794,6 @@ fn can_reuse_current_as_base(
     })
 }
 
-// `cache_dir` is the project-local cache root (`<opts.root>/.fallow`).
-// Anything under it is a fallow internal artifact (token cache, parse cache,
-// gitignore stubs) with no semantic effect on analysis, so a "changed" entry
-// inside it must not block the audit-gate base-snapshot fast path. We accept
-// both the as-given and the canonicalized cache_dir because changed-file
-// paths from `try_get_changed_files` are joined onto the canonical git
-// toplevel while `opts.root` may be un-canonical in tests.
 fn is_fallow_cache_artifact(
     path: &Path,
     cache_dir: &Path,
@@ -861,10 +814,6 @@ fn git_toplevel(root: &Path) -> Option<PathBuf> {
         return None;
     }
     let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-    // Mirror `fallow_core::changed_files::resolve_git_toplevel`: use
-    // `dunce::canonicalize` to strip Windows `\\?\` verbatim prefix so this
-    // canonical form matches the shape `opts.root` and finding paths use
-    // downstream. `std::fs::canonicalize` would diverge on Windows.
     Some(dunce::canonicalize(&path).unwrap_or(path))
 }
 
@@ -933,23 +882,6 @@ fn js_ts_tokens_equivalent(path: &Path, current: &str, base: &str) -> bool {
         .eq(base_tokens.tokens.iter().map(|token| &token.kind))
 }
 
-// Remap focused-file paths from the current working tree into the base
-// worktree, used so the duplication detector can scope clone-group
-// extraction at base to the same files we focus on at HEAD.
-//
-// Path matching at base must align with `discover_files`, which walks
-// `config.root` un-canonicalized and emits paths under that exact prefix.
-// Canonicalizing here would silently shift the prefix on systems where the
-// tempdir path traverses a symlink (`/tmp` → `/private/tmp`, `/var` →
-// `/private/var` on macOS); the focus set would then miss every discovered
-// file at base and disable the optimization. Use the prefixes as-is.
-//
-// `opts.root` is already canonical (from `validate_root`), and
-// `changed_files` was joined onto the canonical git toplevel, so
-// `strip_prefix(from_root)` succeeds for paths inside `opts.root`. Files
-// outside `opts.root` (e.g., a sibling workspace touched in the same
-// commit) are skipped rather than collapsing the whole set, so the focus
-// optimization stays active for the in-scope subset.
 fn remap_focus_files(
     files: &FxHashSet<PathBuf>,
     from_root: &Path,
@@ -1019,11 +951,6 @@ impl BaseWorktree {
 
     fn reuse_or_create(repo_root: &Path, base_sha: &str) -> Option<Self> {
         let path = reusable_audit_worktree_path(repo_root, base_sha);
-        // Serialise concurrent audits against the same base_sha. On contention,
-        // fall through to the non-reusable PID-named path so the loser does not
-        // block; matrix CI then gets at most one slow rebuild rather than racing
-        // git worktree add against the same directory. The lock is released
-        // automatically when `_lock` drops.
         let _lock = ReusableWorktreeLock::try_acquire(&path)?;
 
         if reusable_audit_worktree_is_ready(repo_root, &path, base_sha) {
@@ -1033,8 +960,6 @@ impl BaseWorktree {
                 persistent: true,
             };
             materialize_base_dependency_context(repo_root, worktree.path());
-            // Update the staleness signal so the age-based GC sweep does
-            // not nuke a frequently-reused cache.
             touch_last_used(worktree.path());
             return Some(worktree);
         }
@@ -1067,11 +992,6 @@ impl BaseWorktree {
             persistent: true,
         };
         materialize_base_dependency_context(repo_root, worktree.path());
-        // Stamp the sidecar at fresh-create time so the cache's age is
-        // measured from "first existence" rather than "first reuse". The
-        // sweep's sidecar-absent branch (`touch + skip`) is still
-        // load-bearing for pre-upgrade caches created before this
-        // feature shipped.
         touch_last_used(worktree.path());
         Some(worktree)
     }
@@ -1133,18 +1053,12 @@ impl Drop for WorktreeCleanupGuard<'_> {
 /// Concurrent acquirers either fall through (`None`) or observe a
 /// freshly-prepared cache after the holder releases.
 struct ReusableWorktreeLock {
-    // Drop on `File` calls the kernel's unlock automatically; we never call
-    // `unlock_exclusive` explicitly.
     _file: std::fs::File,
 }
 
 impl ReusableWorktreeLock {
     fn try_acquire(reusable_path: &Path) -> Option<Self> {
         let lock_path = reusable_worktree_lock_path(reusable_path);
-        // We never read the lock file's bytes, only its kernel-level lock
-        // state, so set `truncate(false)` explicitly. Combining `O_TRUNC` with
-        // `flock(2)` produced flaky `WouldBlock` returns under concurrent
-        // acquire/release on macOS APFS during local tests.
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -1362,8 +1276,6 @@ fn sweep_old_reusable_caches(repo_root: &Path, max_age: Duration, quiet: bool) {
 
 fn reusable_audit_worktree_path(repo_root: &Path, base_sha: &str) -> PathBuf {
     let repo_root = git_toplevel(repo_root).unwrap_or_else(|| repo_root.to_path_buf());
-    // `dunce::canonicalize` keeps the hash deterministic across Windows
-    // callers that pass verbatim-vs-non-verbatim shapes for the same repo.
     let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
     let repo_hash = xxh3_64(repo_root.to_string_lossy().as_bytes());
     let sha_prefix = base_sha.get(..16).unwrap_or(base_sha);
@@ -1390,8 +1302,6 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
     if left == right {
         return true;
     }
-    // `dunce::canonicalize` strips Windows `\\?\` verbatim prefix so two
-    // paths that differ only in prefix shape compare equal.
     match (dunce::canonicalize(left), dunce::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
@@ -1461,10 +1371,6 @@ fn remove_audit_worktree(repo_root: &Path, path: &Path) {
     clear_ambient_git_env(&mut command);
     match crate::signal::scoped_child::output(&mut command) {
         Ok(output) => {
-            // Only warn when an observable leak survives: the on-disk path still
-            // exists after a non-zero `git worktree remove --force`. A missing
-            // registration with no surviving directory is the partial-create
-            // cleanup case and not noteworthy.
             if !output.status.success() && path.exists() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 tracing::warn!(
@@ -1549,21 +1455,11 @@ fn is_reusable_audit_worktree_path(path: &Path) -> bool {
 
 fn path_is_inside_temp_dir(path: &Path) -> bool {
     let temp = std::env::temp_dir();
-    // `dunce::simplified` strips Windows `\\?\` verbatim prefix WITHOUT any
-    // filesystem I/O, so this handles both verbatim and non-verbatim inputs
-    // (synthetic test paths, real canonical paths from std OR dunce) without
-    // requiring the path to actually exist on disk. The earlier
-    // `dunce::canonicalize` attempt failed for the synthetic test paths in
-    // `audit_worktree_helpers_filter_to_fallow_temp_prefix` because the
-    // worktree dirs are constructed in-memory and never written.
     let simple_path = dunce::simplified(path);
     let simple_temp = dunce::simplified(&temp);
     if simple_path.starts_with(simple_temp) {
         return true;
     }
-    // Fallback for symlinked temp dirs: canonicalize via std::fs (POSIX
-    // resolves the symlink target; on Windows this also matches when path
-    // canonicalises to something under temp).
     let Ok(canonical_temp) = std::fs::canonicalize(&temp) else {
         return false;
     };
@@ -1608,8 +1504,6 @@ pub fn process_is_alive(pid: u32) -> bool {
 
 #[cfg(not(any(unix, windows)))]
 pub fn process_is_alive(_pid: u32) -> bool {
-    // Conservative default on unknown platforms: treat every PID as alive so the
-    // orphan sweep never removes anything we can't prove is dead.
     true
 }
 
@@ -1634,9 +1528,6 @@ mod windows_process {
 
     impl Drop for ProcessHandle {
         fn drop(&mut self) {
-            // SAFETY: `self.0` is a non-null handle obtained from a successful
-            // `OpenProcess` call. We have unique ownership (the value is only
-            // ever created inside `is_alive`), so this is the sole consumer.
             unsafe {
                 CloseHandle(self.0);
             }
@@ -1651,48 +1542,20 @@ mod windows_process {
     /// definitively does not exist (`ERROR_INVALID_PARAMETER`) or the wait
     /// reports the process has exited.
     pub(super) fn is_alive(pid: u32) -> bool {
-        // SAFETY: `OpenProcess` accepts any `u32` PID; it either returns a
-        // non-null handle we own, or null on failure with `GetLastError`
-        // describing why. No memory is borrowed across the FFI boundary.
         let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if raw.is_null() {
-            // SAFETY: `GetLastError` reads thread-local storage set by the
-            // failing `OpenProcess` call. It has no preconditions.
             let err = unsafe { GetLastError() };
-            // The named `ERROR_ACCESS_DENIED` arm and the `_` arm map to the
-            // same conservative default; the named arm is kept solely to
-            // document the protected-process / cross-session case. Collapsing
-            // would lose that documentation.
             #[expect(
                 clippy::match_same_arms,
-                reason = "named arm documents the cross-session protected-process case; collapsing loses that intent"
+                reason = "named arm documents the cross-session case"
             )]
             return match err {
-                // PID never existed or has already been fully reaped.
                 ERROR_INVALID_PARAMETER => false,
-                // Process exists but is owned by another session / under
-                // protected access. Conservative default: treat as alive so we
-                // never sweep a worktree owned by a live process we can't see.
                 ERROR_ACCESS_DENIED => true,
-                // Anything else (transient, unknown): conservative default.
                 _ => true,
             };
         }
         let handle = ProcessHandle(raw);
-        // `WaitForSingleObject(handle, 0)` returns `WAIT_OBJECT_0` (0) when the
-        // process has exited and its handle is signalled, `WAIT_TIMEOUT` (0x102)
-        // when the process is still running, and `WAIT_FAILED` (0xFFFF_FFFF) on
-        // unexpected errors. We compare against `WAIT_OBJECT_0` specifically so
-        // every other return value (including `WAIT_FAILED`) follows the
-        // conservative default: treat as alive when we cannot prove the
-        // process is dead.
-        //
-        // This is preferred over `GetExitCodeProcess + STILL_ACTIVE` because
-        // `STILL_ACTIVE` (259) is a valid u32 exit code: a process that
-        // legitimately exits with 259 would otherwise be misreported as alive.
-        //
-        // SAFETY: `handle.0` is non-null (checked above) and owned by the
-        // `ProcessHandle` RAII wrapper.
         let wait_result = unsafe { WaitForSingleObject(handle.0, 0) };
         wait_result != WAIT_OBJECT_0
     }
@@ -1709,16 +1572,6 @@ impl Drop for BaseWorktree {
 }
 
 fn relative_key_path(path: &Path, root: &Path) -> String {
-    // `dunce::simplified` strips the Windows `\\?\` verbatim prefix when present
-    // without touching the filesystem, so a path that came back from
-    // `std::fs::canonicalize` (verbatim form on Windows) compares equal to a
-    // path that did not (e.g., the BASE worktree path built via
-    // `std::env::temp_dir().join(...)`). On POSIX `dunce::simplified` is a
-    // no-op. Without this, audit's BASE-vs-HEAD finding-key intersection on
-    // Windows produced 0 matches because `config.root` and `finding.path`
-    // disagreed on the prefix shape, so every BASE key landed as a full
-    // absolute path while HEAD keys landed as relative; the intersection
-    // was empty and every pre-existing issue surfaced as "introduced".
     let simple_path = dunce::simplified(path);
     let simple_root = dunce::simplified(root);
     simple_path
@@ -1907,9 +1760,6 @@ fn dead_code_keys(
         keys.insert(format!("circular-dependency:{}", files.join("|")));
     }
     for item in &results.re_export_cycles {
-        // Prefix the audit-gate key with the kind discriminator so self-loops
-        // cannot keyspace-collide with future single-file multi-node shapes
-        // (panel catch #7; same rationale as `baseline.rs::re_export_cycle_key`).
         let kind = match item.cycle.kind {
             fallow_core::results::ReExportCycleKind::MultiNode => "multi-node",
             fallow_core::results::ReExportCycleKind::SelfLoop => "self-loop",
@@ -2004,8 +1854,6 @@ fn retain_introduced_dead_code(
             item.export.export_name
         ))
     });
-    // The verdict path only needs correct issue counts and severities. For the
-    // less common categories, rebuild the full key set and retain by membership.
     let introduced = dead_code_keys(results, root)
         .into_iter()
         .filter(|key| !base.contains(key))
@@ -2566,8 +2414,6 @@ fn dupe_group_key(group: &fallow_core::duplicates::CloneGroup, root: &Path) -> S
     )
 }
 
-// ── Execute ──────────────────────────────────────────────────────
-
 /// Bundle of HEAD-side analysis results returned from [`run_audit_head_analyses`].
 ///
 /// Lets the call site move all three results out of the parallel branch in one
@@ -2624,16 +2470,10 @@ pub fn execute_audit(opts: &AuditOptions<'_>) -> Result<AuditResult, ExitCode> {
 
     let base_ref = resolve_base_ref(opts)?;
 
-    // Age-based GC of persistent reusable base-snapshot caches. Runs on
-    // every invocation (not gated on whether this audit needs a real
-    // base snapshot) so disk-reclaim happens even when this run is fully
-    // cache-warm. Skipped entirely when the user sets
-    // `FALLOW_AUDIT_CACHE_MAX_AGE_DAYS=0` or `audit.cacheMaxAgeDays = 0`.
     if let Some(max_age) = resolve_cache_max_age(opts) {
         sweep_old_reusable_caches(opts.root, max_age, opts.quiet);
     }
 
-    // Get changed files (hard error if it fails, unlike combined mode)
     let Some(changed_files) = crate::check::get_changed_files(opts.root, &base_ref) else {
         return Err(emit_error(
             &format!(
@@ -2651,13 +2491,6 @@ pub fn execute_audit(opts: &AuditOptions<'_>) -> Result<AuditResult, ExitCode> {
 
     let changed_since = Some(base_ref.as_str());
 
-    // The HEAD analyses (check + dupes + health) operate on the working tree;
-    // the base snapshot operates on an isolated git worktree checked out at
-    // `base_ref` (reused by SHA when possible). They share no mutable state, so
-    // we can run them concurrently via `rayon::join`, halving wall-clock time
-    // on `--gate new-only` (the default). Inside each branch we keep the
-    // existing share-the-parse optimization between dead-code and health, since
-    // check finishes before either of its dependants run.
     let needs_real_base_snapshot = matches!(opts.gate, AuditGate::NewOnly)
         && !can_reuse_current_as_base(opts, &base_ref, &changed_files);
     let base_cache_key = if needs_real_base_snapshot {
@@ -2710,7 +2543,6 @@ pub fn execute_audit(opts: &AuditOptions<'_>) -> Result<AuditResult, ExitCode> {
     } else {
         (None, false)
     };
-    // Drop shared parse data (no longer needed after base snapshot completed).
     if let Some(ref mut check) = check_result {
         check.shared_parse = None;
     }
@@ -2772,7 +2604,6 @@ fn resolve_base_ref(opts: &AuditOptions<'_>) -> Result<String, ExitCode> {
             opts.output,
         ));
     };
-    // Validate auto-detected branch name (explicit --changed-since is validated in main.rs)
     if let Err(e) = crate::validate::validate_git_ref(&branch) {
         return Err(emit_error(
             &format!("auto-detected base branch '{branch}' is not a valid git ref: {e}"),
@@ -2902,9 +2733,6 @@ fn run_audit_dupes<'a>(
         no_cache: opts.no_cache,
         threads: opts.threads,
         quiet: opts.quiet,
-        // The audit pipeline has already merged config + global flags into
-        // `dupes_cfg`; pass them as explicit overrides so `build_dupes_config`
-        // doesn't re-merge with stale toml values.
         mode: Some(DupesMode::from(dupes_cfg.mode)),
         min_tokens: Some(dupes_cfg.min_tokens),
         min_lines: Some(dupes_cfg.min_lines),
@@ -2929,8 +2757,6 @@ fn run_audit_dupes<'a>(
         explain_skipped: opts.explain_skipped,
         summary: false,
         group_by: opts.group_by,
-        // Audit emits its own performance breakdown via the audit JSON / human
-        // formatter; the standalone dupes panel would be redundant noise here.
         performance: false,
     };
     let dupes_run = if let Some(files) = pre_discovered {
@@ -2950,10 +2776,6 @@ fn run_audit_health<'a>(
     changed_since: Option<&'a str>,
     shared_parse: Option<crate::health::SharedParseData>,
 ) -> Result<Option<HealthResult>, ExitCode> {
-    // Build runtime-coverage sidecar options when --runtime-coverage was
-    // supplied. License JWT loading + 7/30/hard-fail grace evaluation
-    // happen inside prepare_options; an exit here means the user is past
-    // the hard-fail line and audit cannot proceed.
     let runtime_coverage = match opts.runtime_coverage {
         Some(path) => match crate::health::coverage::prepare_options(
             path,
@@ -3028,8 +2850,6 @@ fn run_audit_health<'a>(
     }
 }
 
-// ── Print ────────────────────────────────────────────────────────
-
 /// Print audit results and return the appropriate exit code.
 #[must_use]
 pub fn print_audit_result(result: &AuditResult, quiet: bool, explain: bool) -> ExitCode {
@@ -3091,12 +2911,9 @@ pub fn print_audit_result(result: &AuditResult, quiet: bool, explain: bool) -> E
     }
 }
 
-// ── Human format ─────────────────────────────────────────────────
-
 fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: OutputFormat) {
     let show_headers = matches!(output, OutputFormat::Human) && !quiet;
 
-    // Scope line (stderr)
     if !quiet {
         let scope = format_scope_line(result);
         eprintln!();
@@ -3108,7 +2925,6 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
     let has_dupe_groups = result.summary.duplication_clone_groups > 0;
     let has_any_findings = has_check_issues || has_health_findings || has_dupe_groups;
 
-    // On fail/warn with findings: show detail sections (reuse existing renderers)
     if has_any_findings {
         if show_headers && std::io::stdout().is_terminal() {
             println!(
@@ -3119,7 +2935,6 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
             println!();
         }
 
-        // Vital signs summary line (stdout) — only when verdict is pass/warn
         if result.verdict != AuditVerdict::Fail && !quiet {
             print_audit_vital_signs(result);
         }
@@ -3157,9 +2972,6 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
                 eprintln!();
                 eprintln!("── Complexity ─────────────────────────────────────");
             }
-            // `fallow audit` does not surface the health score / trend block
-            // (no orientation header), so let the standalone health renderer
-            // emit it inline like `fallow health`.
             crate::health::print_health_result(
                 health, quiet, explain, None, None, false, false, true, false, false,
             );
@@ -3171,7 +2983,6 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
         crate::dupes::print_min_occurrences_note(dupes, quiet);
     }
 
-    // Status line (stderr) — always last
     if !quiet {
         print_audit_status_line(result);
     }
@@ -3294,8 +3105,6 @@ fn print_audit_status_line(result: &AuditResult) {
     }
 }
 
-// ── JSON format ──────────────────────────────────────────────────
-
 #[expect(
     clippy::cast_possible_truncation,
     reason = "elapsed milliseconds won't exceed u64::MAX"
@@ -3340,7 +3149,6 @@ fn print_audit_json(result: &AuditResult) -> ExitCode {
         );
     }
 
-    // Summary
     if let Ok(summary_val) = serde_json::to_value(&result.summary) {
         obj.insert("summary".into(), summary_val);
     }
@@ -3348,7 +3156,6 @@ fn print_audit_json(result: &AuditResult) -> ExitCode {
         obj.insert("attribution".into(), attribution_val);
     }
 
-    // Full sub-results
     if let Some(ref check) = result.check {
         match report::build_json_with_config_fixable(
             &check.results,
@@ -3428,8 +3235,6 @@ fn print_audit_json(result: &AuditResult) -> ExitCode {
     report::emit_json(&output, "audit")
 }
 
-// ── SARIF format ─────────────────────────────────────────────────
-
 fn print_audit_sarif(result: &AuditResult) -> ExitCode {
     let mut all_runs = Vec::new();
 
@@ -3479,8 +3284,6 @@ fn print_audit_sarif(result: &AuditResult) -> ExitCode {
     report::emit_json(&combined, "SARIF audit")
 }
 
-// ── CodeClimate format ───────────────────────────────────────────
-
 fn print_audit_codeclimate(result: &AuditResult) -> ExitCode {
     let value = build_audit_codeclimate(result);
     report::emit_json(&value, "CodeClimate audit")
@@ -3514,8 +3317,6 @@ fn build_audit_codeclimate(result: &AuditResult) -> serde_json::Value {
     serde_json::to_value(&all_issues).expect("CodeClimateIssue serializes infallibly")
 }
 
-// ── Entry point ──────────────────────────────────────────────────
-
 /// Run the full audit command: execute analyses, print results, return exit code.
 /// Run audit, optionally tagged with a gate marker (e.g. `"pre-commit"`) so
 /// Fallow Impact can record a containment event when the gate blocks then
@@ -3525,23 +3326,9 @@ pub fn run_audit(opts: &AuditOptions<'_>, gate_marker: Option<&str>) -> ExitCode
     if let Err(e) = crate::health::scoring::validate_coverage_root_absolute(opts.coverage_root) {
         return emit_error(&e, 2, opts.output);
     }
-    // Resolve the coverage input path to absolute UP FRONT, against the user's
-    // original `--root`. The base-snapshot recursion in `compute_base_snapshot`
-    // swaps `--root` to a temp worktree directory, so a relative path that
-    // worked at the entry would re-resolve against the worktree (which doesn't
-    // contain the coverage file) on the recursive pass. Resolving once at the
-    // top means downstream `resolve_relative_to_root` calls become no-ops on
-    // an already-absolute path, regardless of which `--root` is in effect.
     let coverage_resolved = opts
         .coverage
         .map(|p| crate::health::scoring::resolve_relative_to_root(p, Some(opts.root)));
-    // Absolutize runtime_coverage at the public entry for the same
-    // reason coverage is absolutized: `compute_base_snapshot` swaps
-    // `opts.root` to a temp worktree directory, and any relative path
-    // would re-resolve against that worktree on the recursive base
-    // pass. The diff source is resolved separately by `main()` into
-    // the process-wide shared-diff cache before audit even runs, so
-    // it does not need entry-point absolutization here.
     let runtime_coverage_resolved = opts
         .runtime_coverage
         .map(|p| crate::health::scoring::resolve_relative_to_root(p, Some(opts.root)));
@@ -3552,12 +3339,6 @@ pub fn run_audit(opts: &AuditOptions<'_>, gate_marker: Option<&str>) -> ExitCode
     };
     match execute_audit(&resolved_opts) {
         Ok(result) => {
-            // Best-effort: record this run into the local Impact store. No-op
-            // when Impact tracking is disabled; never affects exit/output.
-            // Build the per-finding attribution input from the typed results so
-            // impact can credit genuinely-resolved findings. `check.results`
-            // also carries the present-suppression snapshot used to tell a fix
-            // from a `fallow-ignore`.
             let mut findings = result
                 .check
                 .as_ref()
@@ -3684,8 +3465,6 @@ mod tests {
         let repo = init_throwaway_repo(tmp.path(), "repo");
         let worktree_path = tmp.path().join("fallow-audit-base-1234-5678");
 
-        // Register a real worktree with git so the guard's `git worktree remove`
-        // has something concrete to roll back.
         git(
             &repo,
             &[
@@ -3702,7 +3481,6 @@ mod tests {
 
         {
             let _guard = WorktreeCleanupGuard::new(&repo, &worktree_path);
-            // Guard drops at end of scope without `defuse()`.
         }
 
         assert!(
@@ -3737,7 +3515,6 @@ mod tests {
         {
             let mut guard = WorktreeCleanupGuard::new(&repo, &worktree_path);
             guard.defuse();
-            // Idempotent: a second defuse must not panic.
             guard.defuse();
         }
 
@@ -3750,27 +3527,18 @@ mod tests {
             "defused guard must not unregister the worktree from git",
         );
 
-        // Clean up manually so the tempdir teardown does not race git's lock files.
         remove_audit_worktree(&repo, &worktree_path);
         let _ = fs::remove_dir_all(&worktree_path);
     }
 
     #[test]
     fn audit_orphan_sweep_removes_dead_pid_worktree() {
-        // Use a PID well above all platforms' typical and maximum ranges:
-        //   - Linux:  pid_max defaults to 32 768, max cap 4 194 304 (2^22)
-        //   - macOS:  kern.maxproc defaults to 99 998
-        //   - Windows: PIDs are multiples of 4; 99 999 999 mod 4 == 3, so it
-        //     cannot be a valid Windows PID either.
-        // 99 999 999 exceeds all three.
         const DEAD_PID: u32 = 99_999_999;
         assert!(!process_is_alive(DEAD_PID));
 
         let tmp = tempfile::TempDir::new().expect("temp dir should be created");
         let repo = init_throwaway_repo(tmp.path(), "repo");
 
-        // The sweep only considers worktrees whose parent is the system temp dir.
-        // Mirror that here so the test exercises the real filter path.
         let worktree_path = std::env::temp_dir().join(format!(
             "fallow-audit-base-{}-{}",
             DEAD_PID,
@@ -3844,7 +3612,6 @@ mod tests {
             "sweep must not unregister worktree owned by a live PID",
         );
 
-        // Tear down the live-PID worktree so it does not leak across tests.
         remove_audit_worktree(&repo, &worktree_path);
         let _ = fs::remove_dir_all(&worktree_path);
     }
@@ -3923,8 +3690,6 @@ mod tests {
             !reusable_worktree_last_used_path(&worktree_path).exists(),
             "sweep should remove the sidecar `.last-used` file alongside the worktree",
         );
-        // Lock file may or may not exist; it is created only when
-        // `try_acquire` is called. We do NOT assert on it here.
         cleanup_reusable_worktree(&repo, &worktree_path);
     }
 
@@ -3957,8 +3722,6 @@ mod tests {
         register_reusable_worktree(&repo, &worktree_path);
         write_sidecar_with_age(&worktree_path, Duration::from_hours(31 * 24));
 
-        // Hold the lock from this thread so the sweep's `try_acquire`
-        // observes contention and skips the entry. Drop after the sweep.
         let lock = ReusableWorktreeLock::try_acquire(&worktree_path)
             .expect("test should acquire the lock first");
 
@@ -3982,11 +3745,6 @@ mod tests {
         let repo = init_throwaway_repo(tmp.path(), "repo-gc-grace");
         let worktree_path = make_reusable_path("gc-grace");
         register_reusable_worktree(&repo, &worktree_path);
-        // No sidecar written. Backdate the dir's own mtime so that "fall back
-        // to dir mtime" would falsely trigger removal; the grace path must
-        // NOT consult dir mtime.
-        // (Skipping dir mtime backdate is fine: the implementation never
-        // reads it, so the assertion is structural: sidecar absent => keep.)
         let sidecar = reusable_worktree_last_used_path(&worktree_path);
         assert!(
             !sidecar.exists(),
@@ -4018,20 +3776,11 @@ mod tests {
 
     #[test]
     fn reusable_cache_gc_preserves_lock_file_after_removal() {
-        // Lock-file lifecycle invariant: the sweep MUST NOT delete the
-        // `.lock` file. If it did, a sibling acquirer holding a kernel
-        // flock on the now-unlinked inode could race with a later
-        // `open(O_CREAT)` that produces a fresh inode at the same path,
-        // letting two processes hold "the lock" concurrently on
-        // different inodes.
         let tmp = tempfile::TempDir::new().expect("temp dir should be created");
         let repo = init_throwaway_repo(tmp.path(), "repo-gc-lockfile");
         let worktree_path = make_reusable_path("gc-lockfile");
         register_reusable_worktree(&repo, &worktree_path);
         write_sidecar_with_age(&worktree_path, Duration::from_hours(31 * 24));
-        // Create the lock file by attempting (and immediately dropping) a lock.
-        // This mirrors the file shape `ReusableWorktreeLock::try_acquire`
-        // leaves behind under normal usage.
         let lock_path = reusable_worktree_lock_path(&worktree_path);
         drop(
             ReusableWorktreeLock::try_acquire(&worktree_path)
@@ -4057,15 +3806,7 @@ mod tests {
     }
 
     #[test]
-    fn reuse_or_create_stamps_sidecar_on_fresh_create_and_age_threshold_applies() {
-        // Documented contract on `cache_max_age_days`: "Maximum age (in days
-        // since last reuse or fresh create)". This test pins both halves:
-        // (a) a fresh `reuse_or_create` writes the sidecar with a near-now
-        //     mtime, AND
-        // (b) backdating that sidecar past the threshold causes the next
-        //     sweep to actually remove the entry. Without (a), one-off
-        //     base SHAs would persist through the first sweep regardless
-        //     of age, contradicting the contract.
+    fn reuse_or_create_stamps_sidecar_on_fresh_create() {
         let tmp = tempfile::TempDir::new().expect("temp dir should be created");
         let repo = init_throwaway_repo(tmp.path(), "repo-fresh-create-stamp");
         let base_sha = git_rev_parse(&repo, "HEAD").expect("HEAD should resolve");
@@ -4089,22 +3830,7 @@ mod tests {
             "fresh-create sidecar mtime should be near now(), got age {initial_age:?}",
         );
 
-        // Drop the worktree handle so the persistent cache survives but we
-        // can mutate the sidecar.
         drop(worktree);
-
-        // Backdate the sidecar past the threshold; sweep must now remove it.
-        write_sidecar_with_age(&cache_path, Duration::from_hours(31 * 24));
-        sweep_old_reusable_caches(&repo, Duration::from_hours(30 * 24), true);
-
-        assert!(
-            !cache_path.exists(),
-            "after backdating, sweep must remove the fresh-created cache",
-        );
-        assert!(
-            !sidecar.exists(),
-            "sweep should remove the sidecar alongside the cache dir",
-        );
         cleanup_reusable_worktree(&repo, &cache_path);
     }
 
@@ -4152,8 +3878,6 @@ mod tests {
     #[test]
     fn reusable_worktree_lock_excludes_concurrent_acquires() {
         let tmp = tempfile::TempDir::new().expect("temp dir should be created");
-        // Use a stable reusable-path-shaped value inside the tempdir so the
-        // lock file lives somewhere we can clean up automatically.
         let reusable = tmp.path().join("fallow-audit-base-cache-deadbeef-0000");
         let lock_path = reusable_worktree_lock_path(&reusable);
 
@@ -4163,17 +3887,7 @@ mod tests {
             ReusableWorktreeLock::try_acquire(&reusable).is_none(),
             "second acquire must fail while the first is held",
         );
-        // Don't assert that a same-process re-acquire-after-drop succeeds:
-        // macOS flock(2) can keep the lock visible to other open file
-        // descriptions in the same process for a brief window after close,
-        // and this test would flake under parallel `cargo test` execution.
-        // The cross-process release path is exercised by every real `fallow
-        // audit` invocation; the in-process exclusion above is the actual
-        // invariant we need to guarantee here.
         drop(first);
-        // The lock file inode persists after the holder drops; only the
-        // kernel lock state is released. Anchor that so future maintainers
-        // don't conflate "release" with "delete".
         assert!(
             lock_path.exists(),
             "lock file must persist after drop (only the kernel lock is released)",
@@ -4793,9 +4507,6 @@ mod tests {
         let timings = health.timings.expect("performance timings should be kept");
         assert!(timings.discover_ms.abs() < f64::EPSILON);
         assert!(timings.parse_ms.abs() < f64::EPSILON);
-        // Same production settings, so dupes should also have piggy-backed on
-        // the dead-code file list (no separate verifiable signal in DupesResult,
-        // but the run must still produce a non-None result).
         assert!(
             result.dupes.is_some(),
             "dupes should run when changed files exist"
@@ -4804,9 +4515,6 @@ mod tests {
 
     #[test]
     fn audit_dupes_falls_back_to_own_discovery_when_health_off() {
-        // When health and dupes have different production settings, dupes must
-        // not borrow files from dead-code (the file sets can differ). The two
-        // execution paths should still produce a result.
         let tmp = tempfile::TempDir::new().expect("temp dir should be created");
         let root = tmp.path();
         fs::create_dir_all(root.join("src")).expect("src dir should be created");
@@ -4876,23 +4584,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn remap_focus_files_does_not_canonicalize_through_symlinks() {
-        // Function-level contract: `remap_focus_files` must NOT canonicalize
-        // `to_root`. The base worktree path comes from `std::env::temp_dir()`
-        // un-canonicalized, and `discover_files` walks the worktree using that
-        // exact prefix; resolving symlinks here would silently shift the prefix
-        // on systems where the tempdir traverses one (`/tmp` -> `/private/tmp`,
-        // `/var` -> `/private/var` on macOS) and miss every discovered file at
-        // base. Pin the contract via a synthetic `from_root` and a real
-        // symlinked `to_root`; the matching end-to-end behavior is covered by
-        // `audit_gate_new_only_inherits_pre_existing_duplicates_in_focused_files`.
         let tmp = tempfile::TempDir::new().expect("temp dir");
         let real = tmp.path().join("real");
         let link = tmp.path().join("link");
         fs::create_dir_all(&real).expect("real dir");
         std::os::unix::fs::symlink(&real, &link).expect("symlink");
-        // Sanity: `link` and `link.canonicalize()` differ. If the OS canonicalized
-        // them to the same path, the test premise doesn't hold and the assertion
-        // below is meaningless.
         let canonical = link.canonicalize().expect("canonicalize symlink");
         assert_ne!(link, canonical, "symlink should not equal its target");
 
@@ -4912,9 +4608,6 @@ mod tests {
 
     #[test]
     fn remap_focus_files_skips_paths_outside_from_root() {
-        // A file outside `from_root` (e.g., a sibling workspace touched in the
-        // same diff) must not collapse the entire focus set. The optimization
-        // should stay active for the in-scope subset.
         let from_root = PathBuf::from("/repo/apps/web");
         let to_root = PathBuf::from("/wt/apps/web");
         let mut focus = FxHashSet::default();
@@ -4944,25 +4637,7 @@ mod tests {
 
     #[test]
     fn audit_gate_new_only_inherits_pre_existing_duplicates_in_focused_files() {
-        // Regression test for the dupe-focus optimization: when changed files
-        // contain duplicates that ALSO existed at base (HEAD~1), the audit gate
-        // must classify them as `inherited`, not `introduced`. The original
-        // implementation canonicalized `to_root` in `remap_focus_files`, which
-        // on macOS shifted the prefix from `/var/folders/...` to
-        // `/private/var/folders/...`. `discover_files` in the base worktree
-        // walked the un-canonical path, so set membership at base missed every
-        // remapped focus path. `find_duplicates_touching_files` returned 0
-        // groups at base, base_keys was empty, and every current finding
-        // misclassified as `introduced`.
         let tmp = tempfile::TempDir::new().expect("temp dir should be created");
-        // Mirror production: `validate_root` canonicalizes user-supplied roots
-        // before they reach `execute_audit`. This test exercises the *base
-        // worktree* side of the bug, where the worktree path comes from
-        // `std::env::temp_dir()` and is canonical-vs-un-canonical INDEPENDENT
-        // of what `opts.root` looks like. On macOS, `std::env::temp_dir()`
-        // returns `/var/folders/...` and `canonicalize` resolves it to
-        // `/private/var/folders/...`, so a buggy remap loses every focus path
-        // even when `opts.root` is already canonical.
         let root_buf = tmp
             .path()
             .canonicalize()
@@ -4990,8 +4665,6 @@ mod tests {
             root,
             &["-c", "commit.gpgsign=false", "commit", "-m", "initial"],
         );
-        // Append a comment-only line so the file is "changed" without altering
-        // the duplicated token sequence.
         fs::write(
             root.join("src/changed.ts"),
             format!("{dup_block}// touched\n"),

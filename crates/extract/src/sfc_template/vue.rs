@@ -34,11 +34,6 @@ pub(super) fn collect_template_usage_with_bound_targets(
     imported_bindings: &FxHashSet<String>,
     bound_targets: &FxHashMap<String, String>,
 ) -> TemplateUsage {
-    // No early-return on empty imports: a Nuxt page may reference only convention
-    // auto-imported components (`<Card001 />`) with no import or bound target, and
-    // the scan still needs to capture those unmatched tags as auto-import
-    // candidates. With empty imports the used-binding / member-access outputs stay
-    // empty, so only unresolved tag-name capture is added. See issue #704.
     let comment_ranges: Vec<(usize, usize)> = HTML_COMMENT_RE
         .find_iter(source)
         .map(|m| (m.start(), m.end()))
@@ -424,8 +419,6 @@ mod tests {
             &imported(&["item"]),
         );
 
-        // The shadowed `item` import must not be credited. `<List>` is captured
-        // as an auto-import candidate (it matches no import), which is expected.
         assert!(usage.used_bindings.is_empty());
         assert!(usage.member_accesses.is_empty());
     }
@@ -503,9 +496,6 @@ mod tests {
             &imported(&["Item"]),
         );
 
-        // The locally-shadowed `Item` import must not be credited; `<Item>` is a
-        // slot-scope local so it is not captured. `<List>` (no import) is captured
-        // as an auto-import candidate, which is expected.
         assert!(usage.used_bindings.is_empty());
         assert!(usage.member_accesses.is_empty());
     }
@@ -581,18 +571,13 @@ mod tests {
         assert!(usage.used_bindings.contains("fallbackItem"));
     }
 
-    // --- typed destructuring (TypeScript annotations) ---
-
     #[test]
     fn v_for_typed_destructure_does_not_infinite_recurse() {
-        // Regression: `{ id, name }: Item` in v-for caused infinite recursion
-        // because the type annotation prevented strip_wrapping from matching.
         let usage = collect_template_usage(
             "<script setup>import { id } from './utils';</script><template><li v-for=\"({ id, name }: Item) in items\">{{ id }}</li></template>",
             &imported(&["id"]),
         );
 
-        // id is shadowed by the v-for binding
         assert!(usage.is_empty());
     }
 
@@ -603,8 +588,6 @@ mod tests {
             &imported(&["data"]),
         );
 
-        // data is shadowed by the slot binding, so the import is not credited.
-        // `<List>` (no import) is captured as an auto-import candidate.
         assert!(usage.used_bindings.is_empty());
         assert!(usage.member_accesses.is_empty());
     }
@@ -616,11 +599,8 @@ mod tests {
             &imported(&["items"]),
         );
 
-        // items is used as the iterable expression
         assert!(usage.used_bindings.contains("items"));
     }
-
-    // --- bound_targets remap (script-local instance bindings) ---
 
     #[test]
     fn event_handler_member_call_maps_script_instance_to_class() {

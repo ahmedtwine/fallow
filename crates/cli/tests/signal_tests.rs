@@ -104,7 +104,6 @@ fn spawn_signal_helper() -> (std::process::Child, u32) {
 #[test]
 fn sigint_kills_registered_child_and_exits_130() {
     let (mut fallow, sleep_pid) = spawn_signal_helper();
-    // Sanity: the inner sleep should be alive RIGHT NOW.
     assert!(
         !wait_for_pid_dead(sleep_pid, Duration::from_millis(100)),
         "inner sleep PID {sleep_pid} should be alive after helper start"
@@ -179,9 +178,6 @@ fn sigint_in_graceful_mode_drains_children_but_does_not_exit() {
     );
 }
 
-// Tiny polling-wait helper so we do not need to add `wait-timeout` as
-// a dev-dep. std::process::Child::wait blocks indefinitely; we poll
-// `try_wait` with a small sleep until the deadline.
 trait WaitTimeoutCompat {
     fn wait_timeout_compat(&mut self, dur: Duration) -> Option<std::process::ExitStatus>;
 }
@@ -195,7 +191,6 @@ impl WaitTimeoutCompat for std::process::Child {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        // Last-ditch: blocking wait so we do not leak a zombie.
         let _ = self.kill();
         self.wait().ok()
     }

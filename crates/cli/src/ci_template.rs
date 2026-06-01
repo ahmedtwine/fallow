@@ -8,11 +8,6 @@ struct VendoredFile {
     executable: bool,
 }
 
-// `include_str!` paths must resolve inside the crates.io tarball, which only
-// contains `crates/cli/`. In the source tree these template paths are symlinks
-// to the canonical workspace `ci/` files, so contributors edit one source of
-// truth. `cargo package` dereferences those symlinks into regular files, so the
-// published crate still contains self-contained templates.
 const GITLAB_TEMPLATE: &str = include_str!("../templates/ci/gitlab-ci.yml");
 
 const GITLAB_FILES: &[VendoredFile] = &[
@@ -140,9 +135,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(path).expect("read"), "custom");
     }
 
-    // gitlab-ci.yml hardcodes the same filenames in `for f in ...` cp loops
-    // that GITLAB_FILES bundles via include_str!. Drift between the two only
-    // surfaces when a real GitLab pipeline runs against the vendored bundle.
     #[test]
     fn gitlab_ci_template_for_loops_match_vendored_files() {
         let prefixes = ["ci/scripts/"];
@@ -156,8 +148,6 @@ mod tests {
                 continue;
             };
             let filenames: Vec<&str> = spec.split_whitespace().collect();
-            // Match the prefix used in the body of THIS loop by scanning the
-            // next handful of lines for the cp/curl path string.
             let prefix = lines
                 .iter()
                 .skip(idx + 1)

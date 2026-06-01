@@ -212,8 +212,6 @@ pub fn clone_fingerprint(instances: &[CloneInstance]) -> String {
 #[must_use]
 pub fn fingerprint_for_fragment(fragment: &str) -> String {
     let hash = hash_fragment(fragment);
-    // Low 32 bits give an 8-hex handle: ~4e9 space, ample for a single report's
-    // clone-group count while staying short enough to type after `--trace`.
     format!("{FINGERPRINT_PREFIX}{:08x}", hash as u32)
 }
 
@@ -354,38 +352,147 @@ fn identifier_words(source: &str) -> impl Iterator<Item = &str> {
 /// Identifiers too generic to make a useful extracted-function name, plus the
 /// reserved words that show up as bare tokens in a fragment.
 fn is_generic_identifier(word: &str) -> bool {
-    // Single-character names are never useful as an extracted-function name:
-    // loop counters (`i`, `n`), lambda params (`x`), and generic type params
-    // (`T`, `U`, `K`, `V`) all collapse here regardless of case.
     if word.chars().count() == 1 {
         return true;
     }
     matches!(
         word,
-        // generic value / collection names
-        "data" | "result" | "results" | "item" | "items" | "value" | "values" | "val"
-            | "obj" | "object" | "arr" | "array" | "list" | "map" | "set" | "key" | "keys"
-            | "tmp" | "temp" | "acc" | "cur" | "curr" | "prev" | "next" | "node" | "el"
-            | "elem" | "element" | "args" | "arg" | "opts" | "options" | "params" | "param"
-            | "props" | "ctx" | "context" | "res" | "req" | "err" | "error" | "fn" | "cb"
-            | "callback" | "out" | "input" | "output" | "name" | "id" | "index" | "idx"
-            // single-letter loop / lambda vars
-            | "x" | "y" | "z" | "i" | "j" | "k" | "n" | "m" | "a" | "b" | "c" | "e" | "_"
-            // JS / TS keywords that appear as bare words in fragments
-            | "const" | "let" | "var" | "function" | "return" | "if" | "else" | "for"
-            | "while" | "do" | "switch" | "case" | "break" | "continue" | "new" | "this"
-            | "true" | "false" | "null" | "undefined" | "void" | "typeof" | "instanceof"
-            | "in" | "of" | "class" | "extends" | "super" | "import" | "export" | "from"
-            | "default" | "async" | "await" | "yield" | "type" | "interface" | "enum"
-            | "as" | "is" | "keyof" | "readonly" | "public" | "private" | "protected"
-            | "static" | "get" | "delete" | "throw" | "try" | "catch" | "finally"
-            // TS primitive / utility type keywords (dominate type-heavy code like
-            // schema libraries, where they would otherwise win the frequency count)
-            | "string" | "number" | "boolean" | "any" | "unknown" | "never" | "bigint"
+        "data"
+            | "result"
+            | "results"
+            | "item"
+            | "items"
+            | "value"
+            | "values"
+            | "val"
+            | "obj"
+            | "object"
+            | "arr"
+            | "array"
+            | "list"
+            | "map"
+            | "set"
+            | "key"
+            | "keys"
+            | "tmp"
+            | "temp"
+            | "acc"
+            | "cur"
+            | "curr"
+            | "prev"
+            | "next"
+            | "node"
+            | "el"
+            | "elem"
+            | "element"
+            | "args"
+            | "arg"
+            | "opts"
+            | "options"
+            | "params"
+            | "param"
+            | "props"
+            | "ctx"
+            | "context"
+            | "res"
+            | "req"
+            | "err"
+            | "error"
+            | "fn"
+            | "cb"
+            | "callback"
+            | "out"
+            | "input"
+            | "output"
+            | "name"
+            | "id"
+            | "index"
+            | "idx"
+            | "x"
+            | "y"
+            | "z"
+            | "i"
+            | "j"
+            | "k"
+            | "n"
+            | "m"
+            | "a"
+            | "b"
+            | "c"
+            | "e"
+            | "_"
+            | "const"
+            | "let"
+            | "var"
+            | "function"
+            | "return"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "switch"
+            | "case"
+            | "break"
+            | "continue"
+            | "new"
+            | "this"
+            | "true"
+            | "false"
+            | "null"
+            | "undefined"
+            | "void"
+            | "typeof"
+            | "instanceof"
+            | "in"
+            | "of"
+            | "class"
+            | "extends"
+            | "super"
+            | "import"
+            | "export"
+            | "from"
+            | "default"
+            | "async"
+            | "await"
+            | "yield"
+            | "type"
+            | "interface"
+            | "enum"
+            | "as"
+            | "is"
+            | "keyof"
+            | "readonly"
+            | "public"
+            | "private"
+            | "protected"
+            | "static"
+            | "get"
+            | "delete"
+            | "throw"
+            | "try"
+            | "catch"
+            | "finally"
+            | "string"
+            | "number"
+            | "boolean"
+            | "any"
+            | "unknown"
+            | "never"
+            | "bigint"
             | "symbol"
-            // common JS globals that are never a useful extracted-function name
-            | "Math" | "JSON" | "Object" | "Array" | "Promise" | "BigInt" | "Number"
-            | "String" | "Boolean" | "Symbol" | "RegExp" | "Date"
+            | "Math"
+            | "JSON"
+            | "Object"
+            | "Array"
+            | "Promise"
+            | "BigInt"
+            | "Number"
+            | "String"
+            | "Boolean"
+            | "Symbol"
+            | "RegExp"
+            | "Date"
     )
 }
 
@@ -426,7 +533,6 @@ mod tests {
 
     #[test]
     fn fingerprint_is_sibling_stable() {
-        // Editing group B's content must not change group A's fingerprint.
         let group_a = group(&["computeInvoiceTotal(order)", "computeInvoiceTotal(o)"], 4);
         let before = clone_fingerprint(&group_a.instances);
         let _group_b_edited = group(&["totallyDifferentBody()"], 2);
@@ -551,9 +657,6 @@ mod tests {
 
     #[test]
     fn dominant_identifier_skips_ts_primitive_keywords_and_globals() {
-        // Type-heavy code (schema libraries) repeats `string`/`number`/`any`;
-        // they must never become the proposed name. The real domain identifier
-        // wins instead.
         let g = group(
             &["const parseUser = z.string(); parseUser(z.number()); parseUser.or(z.string());"],
             4,
@@ -567,7 +670,6 @@ mod tests {
 
     #[test]
     fn dominant_identifier_none_on_single_letter_type_param() {
-        // A generic type param repeated many times must not become the name.
         let g = group(
             &["function id<T>(x: T): T { const a: T = x; return a as T; }"],
             3,

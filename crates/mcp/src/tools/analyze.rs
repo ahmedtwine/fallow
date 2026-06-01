@@ -25,8 +25,6 @@ pub fn build_analyze_args(params: &AnalyzeParams) -> Result<Vec<String>, String>
     );
     push_scope(&mut args, params.production, params.workspace.as_deref());
 
-    // Add boundary_violations convenience param only if issue_types doesn't
-    // already include it — clap rejects duplicate boolean flags.
     let types_has_boundaries = params
         .issue_types
         .as_ref()

@@ -9,9 +9,6 @@ fn electron_vite_rollup_input_entries_keep_renderer_and_preload_trees_alive() {
 
     let unused_files = collect_unused_files(&root, &results);
 
-    // Acceptance criterion 1 + 4: multi-window renderer HTML entries declared in
-    // `renderer.build.rollupOptions.input` are treated as entry points, so the
-    // `<script src>` trees behind both windows stop reporting as unused.
     for credited in [
         "src/renderer/main-window.ts",
         "src/renderer/shared.ts",
@@ -23,9 +20,6 @@ fn electron_vite_rollup_input_entries_keep_renderer_and_preload_trees_alive() {
         );
     }
 
-    // Acceptance criterion 2: a preload entry declared in config at a path NOT
-    // covered by the static `src/preload/**` globs is seeded as an entry point,
-    // and its imported helper becomes reachable.
     for credited in ["electron/preload-bridge.ts", "electron/bridge-helper.ts"] {
         assert!(
             !unused_files.iter().any(|path| path == credited),
@@ -33,8 +27,6 @@ fn electron_vite_rollup_input_entries_keep_renderer_and_preload_trees_alive() {
         );
     }
 
-    // Scope guard: a renderer source file linked from no declared entry must stay
-    // reportable. The fix credits declared entries, not the whole renderer tree.
     assert!(
         unused_files
             .iter()

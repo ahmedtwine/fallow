@@ -51,7 +51,6 @@ impl ModuleGraph {
     ) {
         let visited = self.collect_reachable(entry_points, total_capacity);
 
-        // Reuse the overall BFS result when runtime roots are the same set.
         let runtime_same = runtime_entry_points == entry_points;
         let runtime_visited = if runtime_same {
             None
@@ -59,7 +58,6 @@ impl ModuleGraph {
             Some(self.collect_reachable(runtime_entry_points, total_capacity))
         };
 
-        // Skip BFS entirely when there are no test entry points.
         let test_visited = if test_entry_points.is_empty() {
             None
         } else {
@@ -177,7 +175,6 @@ mod tests {
             })
             .collect();
 
-        // Overall entry points = runtime + test (union)
         let mut all_entry_points = runtime_entry_points.clone();
         all_entry_points.extend(test_entry_points.iter().cloned());
 
@@ -190,28 +187,21 @@ mod tests {
         )
     }
 
-    // ── Basic reachability from entry points ────────────────────
-
     #[test]
     fn entry_point_is_reachable() {
-        // Single entry point, no edges.
         let graph = build_reachability_graph(1, &[], &[0], &[]);
         assert!(graph.modules[0].is_reachable());
     }
 
     #[test]
     fn direct_dependency_is_reachable() {
-        // A -> B, A is entry.
         let graph = build_reachability_graph(2, &[(0, 1)], &[0], &[]);
         assert!(graph.modules[0].is_reachable());
         assert!(graph.modules[1].is_reachable());
     }
 
-    // ── Chain reachability ──────────────────────────────────────
-
     #[test]
     fn chain_reachability_a_b_c() {
-        // A -> B -> C, A is entry. B and C should be reachable.
         let graph = build_reachability_graph(3, &[(0, 1), (1, 2)], &[0], &[]);
         assert!(graph.modules[0].is_reachable());
         assert!(graph.modules[1].is_reachable());
@@ -220,7 +210,6 @@ mod tests {
 
     #[test]
     fn deep_chain_all_reachable() {
-        // 0 -> 1 -> 2 -> 3 -> 4
         let graph = build_reachability_graph(5, &[(0, 1), (1, 2), (2, 3), (3, 4)], &[0], &[]);
         for i in 0..5 {
             assert!(
@@ -230,11 +219,8 @@ mod tests {
         }
     }
 
-    // ── Unreachable files ───────────────────────────────────────
-
     #[test]
     fn disconnected_file_is_unreachable() {
-        // A -> B, C is disconnected. A is entry.
         let graph = build_reachability_graph(3, &[(0, 1)], &[0], &[]);
         assert!(graph.modules[0].is_reachable());
         assert!(graph.modules[1].is_reachable());
@@ -243,17 +229,13 @@ mod tests {
 
     #[test]
     fn no_entry_points_all_unreachable() {
-        // Two files, an edge, but no entry points.
         let graph = build_reachability_graph(2, &[(0, 1)], &[], &[]);
         assert!(!graph.modules[0].is_reachable());
         assert!(!graph.modules[1].is_reachable());
     }
 
-    // ── Cycle handling ──────────────────────────────────────────
-
     #[test]
     fn cycle_both_reachable_when_entry() {
-        // A -> B -> A, A is entry. Both should be reachable.
         let graph = build_reachability_graph(2, &[(0, 1), (1, 0)], &[0], &[]);
         assert!(graph.modules[0].is_reachable());
         assert!(graph.modules[1].is_reachable());
@@ -261,7 +243,6 @@ mod tests {
 
     #[test]
     fn three_node_cycle_all_reachable() {
-        // A -> B -> C -> A, A is entry.
         let graph = build_reachability_graph(3, &[(0, 1), (1, 2), (2, 0)], &[0], &[]);
         for i in 0..3 {
             assert!(
@@ -273,44 +254,33 @@ mod tests {
 
     #[test]
     fn cycle_not_reachable_from_entry() {
-        // 0 is entry (no edges to cycle). 1 -> 2 -> 1 form a disconnected cycle.
         let graph = build_reachability_graph(3, &[(1, 2), (2, 1)], &[0], &[]);
         assert!(graph.modules[0].is_reachable());
         assert!(!graph.modules[1].is_reachable());
         assert!(!graph.modules[2].is_reachable());
     }
 
-    // ── Runtime vs test entry point separation ──────────────────
-
     #[test]
     fn runtime_reachable_only_from_runtime_entries() {
-        // 0 (runtime) -> 1, 2 (test) -> 3
         let graph = build_reachability_graph(4, &[(0, 1), (2, 3)], &[0], &[2]);
-        // File 0 and 1: runtime-reachable
         assert!(graph.modules[0].is_runtime_reachable());
         assert!(graph.modules[1].is_runtime_reachable());
-        // File 2 and 3: not runtime-reachable
         assert!(!graph.modules[2].is_runtime_reachable());
         assert!(!graph.modules[3].is_runtime_reachable());
     }
 
     #[test]
     fn test_reachable_only_from_test_entries() {
-        // 0 (runtime) -> 1, 2 (test) -> 3
         let graph = build_reachability_graph(4, &[(0, 1), (2, 3)], &[0], &[2]);
-        // File 0 and 1: not test-reachable
         assert!(!graph.modules[0].is_test_reachable());
         assert!(!graph.modules[1].is_test_reachable());
-        // File 2 and 3: test-reachable
         assert!(graph.modules[2].is_test_reachable());
         assert!(graph.modules[3].is_test_reachable());
     }
 
     #[test]
     fn overall_reachable_is_union_of_runtime_and_test() {
-        // 0 (runtime) -> 1, 2 (test) -> 3
         let graph = build_reachability_graph(4, &[(0, 1), (2, 3)], &[0], &[2]);
-        // All four files are overall-reachable (union of runtime + test)
         for i in 0..4 {
             assert!(
                 graph.modules[i].is_reachable(),
@@ -321,19 +291,14 @@ mod tests {
 
     #[test]
     fn shared_dependency_is_both_runtime_and_test_reachable() {
-        // 0 (runtime) -> 2, 1 (test) -> 2
         let graph = build_reachability_graph(3, &[(0, 2), (1, 2)], &[0], &[1]);
         assert!(graph.modules[2].is_runtime_reachable());
         assert!(graph.modules[2].is_test_reachable());
         assert!(graph.modules[2].is_reachable());
     }
 
-    // ── Short-circuit: runtime_entry_points == entry_points ─────
-
     #[test]
     fn runtime_same_as_overall_reuses_bfs() {
-        // When there are no test entry points, runtime == overall.
-        // All reachable files should be both overall-reachable and runtime-reachable.
         let graph = build_reachability_graph(3, &[(0, 1), (1, 2)], &[0], &[]);
         for i in 0..3 {
             assert_eq!(
@@ -344,11 +309,8 @@ mod tests {
         }
     }
 
-    // ── test_entry_points.is_empty() fast-path ──────────────────
-
     #[test]
     fn empty_test_entries_none_test_reachable() {
-        // No test entry points: no file should be test-reachable.
         let graph = build_reachability_graph(3, &[(0, 1), (1, 2)], &[0], &[]);
         for i in 0..3 {
             assert!(
@@ -360,24 +322,17 @@ mod tests {
 
     #[test]
     fn only_test_entries_runtime_unreachable() {
-        // Only test entry points, no runtime entries.
         let graph = build_reachability_graph(2, &[(0, 1)], &[], &[0]);
-        // Test reachability
         assert!(graph.modules[0].is_test_reachable());
         assert!(graph.modules[1].is_test_reachable());
-        // Runtime: no runtime entries, so nothing is runtime-reachable
         assert!(!graph.modules[0].is_runtime_reachable());
         assert!(!graph.modules[1].is_runtime_reachable());
-        // Overall reachability comes from test entries
         assert!(graph.modules[0].is_reachable());
         assert!(graph.modules[1].is_reachable());
     }
 
-    // ── Diamond and branching topologies ─────────────────────────
-
     #[test]
     fn diamond_dependency_all_reachable() {
-        // 0 -> 1, 0 -> 2, 1 -> 3, 2 -> 3 (diamond: 0 at top, 3 at bottom)
         let graph = build_reachability_graph(4, &[(0, 1), (0, 2), (1, 3), (2, 3)], &[0], &[]);
         for i in 0..4 {
             assert!(
@@ -389,7 +344,6 @@ mod tests {
 
     #[test]
     fn multiple_entry_points_reach_disjoint_subtrees() {
-        // 0 -> 1, 2 -> 3. Both 0 and 2 are runtime entries.
         let graph = build_reachability_graph(4, &[(0, 1), (2, 3)], &[0, 2], &[]);
         for i in 0..4 {
             assert!(

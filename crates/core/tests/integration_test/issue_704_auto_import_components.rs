@@ -39,8 +39,6 @@ fn flag_off_keeps_all_components_alive() {
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
     let unused = unused_file_paths(&results, &root);
 
-    // Additive guarantee: components/** stays an entry pattern, so even the
-    // unreferenced component is not reported as unused.
     assert!(
         !unused.contains(&"components/DeadCard.vue".to_string()),
         "flag off must not report any component as unused, got: {unused:?}"
@@ -56,16 +54,11 @@ fn flag_on_reports_unreferenced_component_and_keeps_referenced_ones() {
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
     let unused = unused_file_paths(&results, &root);
 
-    // The genuinely-unreferenced component now surfaces (the recall win).
     assert!(
         unused.contains(&"components/DeadCard.vue".to_string()),
         "flag on must report the unreferenced component as unused, got: {unused:?}"
     );
 
-    // Referenced components stay reachable through synthesized auto-import edges:
-    //   <Card001 />   -> components/Card001.vue           (flat name)
-    //   <BaseButton/> -> components/base/Button.vue        (directory-prefix name)
-    //   <LazyWidget/> -> components/Widget.vue             (Lazy variant)
     for reachable in [
         "components/Card001.vue",
         "components/base/Button.vue",

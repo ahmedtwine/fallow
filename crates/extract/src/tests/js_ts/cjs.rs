@@ -1,7 +1,5 @@
 use crate::tests::parse_ts as parse_source;
 
-// -- extract_destructured_names (tested indirectly) --
-
 #[test]
 fn require_destructured_empty_object() {
     let info = parse_source("const {} = require('./mod');");
@@ -32,7 +30,6 @@ fn require_destructured_with_rest_returns_empty() {
 
 #[test]
 fn require_destructured_computed_property_skipped() {
-    // Computed property keys have no static name, so they are filtered out
     let info = parse_source("const key = 'x';\nconst { [key]: val, b } = require('./mod');");
     assert_eq!(info.require_calls.len(), 1);
     assert_eq!(
@@ -44,7 +41,6 @@ fn require_destructured_computed_property_skipped() {
 
 #[test]
 fn require_destructured_aliased_properties() {
-    // `{ foo: localFoo }` — the key name "foo" is what gets extracted
     let info = parse_source("const { foo: localFoo, bar: localBar } = require('./mod');");
     assert_eq!(info.require_calls.len(), 1);
     assert_eq!(
@@ -86,8 +82,6 @@ fn dynamic_import_destructured_aliased_properties() {
     );
 }
 
-// -- try_extract_require (tested indirectly) --
-
 #[test]
 fn require_with_variable_arg_not_captured() {
     let info = parse_source("const x = require(someVariable);");
@@ -108,11 +102,7 @@ fn require_with_template_literal_arg_not_captured() {
 
 #[test]
 fn nested_require_inside_function_not_captured_as_declarator() {
-    // `doSomething(require('foo'))` — this is NOT a `const x = require(...)` pattern,
-    // but the visitor may still capture it as a bare require call
     let info = parse_source("doSomething(require('foo'));");
-    // The bare require call is handled by visit_call_expression, not try_extract_require.
-    // We verify the require is still detected through the general path.
     assert_eq!(info.require_calls.len(), 1);
     assert_eq!(info.require_calls[0].source, "foo");
     assert!(info.require_calls[0].local_name.is_none());
@@ -121,7 +111,6 @@ fn nested_require_inside_function_not_captured_as_declarator() {
 
 #[test]
 fn require_with_non_require_callee_not_captured() {
-    // A function called `notRequire` should not be treated as a require
     let info = parse_source("const x = notRequire('foo');");
     assert!(
         info.require_calls.is_empty(),

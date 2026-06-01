@@ -56,7 +56,6 @@ fn has_higher_precedence_sibling(config_path: &Path) -> bool {
         .any(|candidate| parent.join(candidate).exists())
 }
 
-// Matches Wrangler's current findWranglerConfig order.
 const WRANGLER_CONFIG_PRECEDENCE: &[&str] = &["wrangler.json", "wrangler.jsonc", "wrangler.toml"];
 
 fn extract_main_entries(config_path: &Path, source: &str, root: &Path) -> Vec<String> {
@@ -131,7 +130,6 @@ mod tests {
         let result = plugin.resolve_config(
             Path::new("/repo/apps/site/wrangler.jsonc"),
             r#"{
-                // top-level worker
                 "main": "src/worker.tsx",
                 "env": {
                     "staging": { "main": "worker/entry.ts" }

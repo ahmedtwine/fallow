@@ -60,11 +60,6 @@ fn storybook_story_files_are_skipped() {
     let config = create_private_type_leak_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // The fixture's Component.stories.ts uses the canonical
-    // `type Story = StoryObj<...>; export const Default: Story = ...`
-    // pattern. Without the storybook-suffix skip, every story export would
-    // be reported as a private-type-leak. Reverting `is_storybook_file`
-    // makes this assertion fail.
     let storybook_leaks: Vec<&str> = results
         .private_type_leaks
         .iter()
@@ -84,10 +79,6 @@ fn route_convention_files_are_skipped() {
     let config = create_private_type_leak_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Each fixture file declares a local type and uses it across 2+ exports,
-    // the canonical noise pattern for framework routing conventions. Without
-    // the route-convention skip these would generate multiple leaks each.
-    // Reverting `is_route_convention_file` makes any of these assertions fail.
     let convention_paths = [
         "app/blog/[slug]/page.tsx", // Next.js App Router
         "pages/[slug].tsx",         // Next.js Pages Router
@@ -115,9 +106,6 @@ fn route_convention_files_are_skipped() {
         );
     }
 
-    // Counter-check: non-route files in the same fixture must still be
-    // analyzed. Locks the skip predicate as path-scoped so a regression that
-    // makes `is_route_convention_file` always-true would fail here.
     let index_leaks: Vec<&str> = results
         .private_type_leaks
         .iter()
@@ -135,10 +123,6 @@ fn route_convention_files_are_skipped() {
         "non-route src/index.ts must still be analyzed, expected Component leak in {index_leaks:?}"
     );
 
-    // Co-located helper inside `app/routes/<segment>/` is NOT a route file and
-    // its leak must still be reported. Locks down the `literal_separator(true)`
-    // contract on `**/routes/*.{ts,tsx,...}`; without that flag a single `*`
-    // would cross `/` and silently swallow this file.
     let helper_leaks: Vec<&str> = results
         .private_type_leaks
         .iter()

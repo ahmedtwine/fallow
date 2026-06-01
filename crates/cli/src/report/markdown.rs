@@ -41,12 +41,10 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
 
     let _ = write!(out, "## Fallow: {total} issue{} found\n\n", plural(total));
 
-    // ── Unused files ──
     markdown_section(&mut out, &results.unused_files, "Unused files", |file| {
         vec![format!("- `{}`", rel(&file.file.path))]
     });
 
-    // ── Unused exports ──
     markdown_grouped_section(
         &mut out,
         &results.unused_exports,
@@ -56,7 +54,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         |e: &UnusedExportFinding| format_export(&e.export),
     );
 
-    // ── Unused types ──
     markdown_grouped_section(
         &mut out,
         &results.unused_types,
@@ -75,7 +72,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         format_private_type_leak,
     );
 
-    // ── Unused dependencies ──
     markdown_section(
         &mut out,
         &results.unused_dependencies,
@@ -90,7 +86,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Unused devDependencies ──
     markdown_section(
         &mut out,
         &results.unused_dev_dependencies,
@@ -105,7 +100,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Unused optionalDependencies ──
     markdown_section(
         &mut out,
         &results.unused_optional_dependencies,
@@ -120,7 +114,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Unused enum members ──
     markdown_grouped_section(
         &mut out,
         &results.unused_enum_members,
@@ -130,7 +123,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         |m: &UnusedEnumMemberFinding| format_member(&m.member),
     );
 
-    // ── Unused class members ──
     markdown_grouped_section(
         &mut out,
         &results.unused_class_members,
@@ -140,7 +132,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         |m: &UnusedClassMemberFinding| format_member(&m.member),
     );
 
-    // ── Unresolved imports ──
     markdown_grouped_section(
         &mut out,
         &results.unresolved_imports,
@@ -156,7 +147,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Unlisted dependencies ──
     markdown_section(
         &mut out,
         &results.unlisted_dependencies,
@@ -164,7 +154,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         |dep| vec![format!("- `{}`", escape_backticks(&dep.dep.package_name))],
     );
 
-    // ── Duplicate exports ──
     markdown_section(
         &mut out,
         &results.duplicate_exports,
@@ -184,7 +173,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Type-only dependencies ──
     markdown_section(
         &mut out,
         &results.type_only_dependencies,
@@ -192,7 +180,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         |dep| format_dependency(&dep.dep.package_name, &dep.dep.path, &[], root),
     );
 
-    // ── Test-only dependencies ──
     markdown_section(
         &mut out,
         &results.test_only_dependencies,
@@ -200,7 +187,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         |dep| format_dependency(&dep.dep.package_name, &dep.dep.path, &[], root),
     );
 
-    // ── Circular dependencies ──
     markdown_section(
         &mut out,
         &results.circular_dependencies,
@@ -228,7 +214,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Re-export cycles ──
     markdown_section(
         &mut out,
         &results.re_export_cycles,
@@ -251,7 +236,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Boundary violations ──
     markdown_section(
         &mut out,
         &results.boundary_violations,
@@ -268,7 +252,6 @@ pub fn build_markdown(results: &AnalysisResults, root: &Path) -> String {
         },
     );
 
-    // ── Stale suppressions ──
     markdown_section(
         &mut out,
         &results.stale_suppressions,
@@ -412,10 +395,6 @@ pub(super) fn print_grouped_markdown(groups: &[ResultGroup], root: &Path) {
             escape_backticks(&group.key),
             plural(count)
         );
-        // Section-mode: surface the section's default owners under the heading
-        // so PR comment dashboards can see who approves without re-opening
-        // CODEOWNERS. `owners` is `None` outside of `--group-by section` and
-        // empty for the `(no section)` / `(unowned)` buckets.
         if let Some(ref owners) = group.owners
             && !owners.is_empty()
         {
@@ -426,10 +405,7 @@ pub(super) fn print_grouped_markdown(groups: &[ResultGroup], root: &Path) {
                 .join(" ");
             println!("Owners: {joined}\n");
         }
-        // build_markdown already emits its own `## Fallow: N issues found` header;
-        // we re-use the section-level rendering by extracting just the section body.
         let body = build_markdown(&group.results, root);
-        // Skip the first `## Fallow: ...` line from build_markdown and print the rest.
         let sections = body
             .strip_prefix("## Fallow: no issues found\n")
             .or_else(|| body.find("\n\n").map(|pos| &body[pos + 2..]))
@@ -545,8 +521,6 @@ fn markdown_grouped_section<'a, T>(
     out.push('\n');
 }
 
-// ── Duplication markdown output ──────────────────────────────────
-
 pub(super) fn print_duplication_markdown(report: &DuplicationReport, root: &Path) {
     println!("{}", build_duplication_markdown(report, root));
 }
@@ -593,7 +567,6 @@ pub fn build_duplication_markdown(report: &DuplicationReport, root: &Path) -> St
         out.push('\n');
     }
 
-    // Clone families
     if !report.clone_families.is_empty() {
         out.push_str("### Clone Families\n\n");
         for (i, family) in report.clone_families.iter().enumerate() {
@@ -623,7 +596,6 @@ pub fn build_duplication_markdown(report: &DuplicationReport, root: &Path) -> St
         }
     }
 
-    // Summary line
     let _ = writeln!(
         out,
         "**Summary:** {} duplicated lines ({:.1}%) across {} file{}",
@@ -635,8 +607,6 @@ pub fn build_duplication_markdown(report: &DuplicationReport, root: &Path) -> St
 
     out
 }
-
-// ── Health markdown output ──────────────────────────────────────────
 
 pub(super) fn print_health_markdown(report: &crate::health_types::HealthReport, root: &Path) {
     println!("{}", build_health_markdown(report, root));
@@ -761,9 +731,6 @@ fn write_runtime_coverage_section(
     let Some(ref production) = report.runtime_coverage else {
         return;
     };
-    // Prepend a blank line so the heading is not concatenated to the previous
-    // section (GFM requires a blank line before headings to avoid the heading
-    // being parsed as a paragraph continuation).
     if !out.is_empty() && !out.ends_with("\n\n") {
         out.push('\n');
     }
@@ -936,10 +903,6 @@ fn write_vital_signs_section(out: &mut String, report: &crate::health_types::Hea
         let _ = writeln!(out, "| Maintainability (avg) | {v:.1} |");
     }
     if let Some(v) = vs.hotspot_count {
-        // Carry the analysis window in the metric label so the count stays
-        // meaningful at zero hotspots, where the Hotspots section is omitted.
-        // No suffix when the churn pipeline did not run (`hotspot_summary` is
-        // absent). Mirrors the human `■ Metrics:` line (issue #552).
         let label = report.hotspot_summary.as_ref().map_or_else(
             || "Hotspots".to_string(),
             |summary| format!("Hotspots (since {})", summary.since),
@@ -1209,7 +1172,6 @@ fn write_hotspots_section(
         },
     );
     let _ = writeln!(out, "{header}");
-    // Add ownership columns when at least one entry has ownership data.
     let any_ownership = report.hotspots.iter().any(|e| e.ownership.is_some());
     if any_ownership {
         out.push_str(
@@ -1562,8 +1524,6 @@ mod tests {
         assert!(md.contains("pkg\\`name"));
     }
 
-    // ── Duplication markdown ──
-
     #[test]
     fn duplication_markdown_empty() {
         let report = DuplicationReport::default();
@@ -1662,8 +1622,6 @@ mod tests {
         assert!(md.contains("~15 lines saved"));
     }
 
-    // ── Health markdown ──
-
     #[test]
     fn health_markdown_empty_no_findings() {
         let root = PathBuf::from("/project");
@@ -1721,7 +1679,6 @@ mod tests {
         assert!(md.contains("25 **!**"));
         assert!(md.contains("30 **!**"));
         assert!(md.contains("| 80 |"));
-        // CRAP column renders `-` when the finding didn't trigger on CRAP.
         assert!(md.contains("| - |"));
     }
 
@@ -1877,9 +1834,7 @@ mod tests {
             ..Default::default()
         };
         let md = build_health_markdown(&report, &root);
-        // Cyclomatic 15 is below threshold 20, no marker
         assert!(md.contains("| 15 |"));
-        // Cognitive 20 exceeds threshold 15, has marker
         assert!(md.contains("20 **!**"));
     }
 
@@ -1929,7 +1884,6 @@ mod tests {
         };
         let md = build_health_markdown(&report, &root);
 
-        // Should have refactoring targets section
         assert!(
             md.contains("Refactoring Targets"),
             "should contain targets heading"
@@ -1992,8 +1946,6 @@ mod tests {
         assert!(md.contains("`src/app.ts`:12 `loader`"));
     }
 
-    // ── Dependency in workspace package ──
-
     #[test]
     fn markdown_dep_in_workspace_shows_package_label() {
         let root = PathBuf::from("/project");
@@ -2008,7 +1960,6 @@ mod tests {
                 used_in_workspaces: Vec::new(),
             }));
         let md = build_markdown(&results, &root);
-        // Non-root package.json should show the label
         assert!(md.contains("(packages/core/package.json)"));
     }
 
@@ -2048,8 +1999,6 @@ mod tests {
         assert!(!md.contains("(package.json; imported in packages/consumer)"));
     }
 
-    // ── Multiple exports same file grouped ──
-
     #[test]
     fn markdown_exports_grouped_by_file() {
         let root = PathBuf::from("/project");
@@ -2088,15 +2037,11 @@ mod tests {
                 is_re_export: false,
             }));
         let md = build_markdown(&results, &root);
-        // File header should appear only once for utils.ts
         let utils_count = md.matches("- `src/utils.ts`").count();
         assert_eq!(utils_count, 1, "file header should appear once per file");
-        // Both exports should be under it as sub-items
         assert!(md.contains(":5 `alpha`"));
         assert!(md.contains(":10 `beta`"));
     }
-
-    // ── Multiple issues plural header ──
 
     #[test]
     fn markdown_multiple_issues_plural() {
@@ -2115,8 +2060,6 @@ mod tests {
         let md = build_markdown(&results, &root);
         assert!(md.starts_with("## Fallow: 2 issues found\n"));
     }
-
-    // ── Duplication markdown with zero estimated savings ──
 
     #[test]
     fn duplication_markdown_zero_savings_no_suffix() {
@@ -2157,8 +2100,6 @@ mod tests {
         assert!(md.contains("Extract function"));
         assert!(!md.contains("lines saved"));
     }
-
-    // ── Health markdown vital signs ──
 
     #[test]
     fn health_markdown_vital_signs_table() {
@@ -2205,7 +2146,6 @@ mod tests {
         assert!(md.contains("| Dead Files | 5.0% |"));
         assert!(md.contains("| Dead Exports | 10.2% |"));
         assert!(md.contains("| Maintainability (avg) | 72.3 |"));
-        // The analysis window travels in the metric label (issue #552).
         assert!(md.contains("| Hotspots (since 6 months) | 3 |"));
         assert!(md.contains("| Circular Deps | 1 |"));
         assert!(md.contains("| Unused Deps | 2 |"));
@@ -2213,7 +2153,6 @@ mod tests {
 
     #[test]
     fn health_markdown_hotspots_without_summary_omits_window() {
-        // No churn pipeline (`hotspot_summary` absent): the label stays bare.
         let root = PathBuf::from("/project");
         let report = crate::health_types::HealthReport {
             vital_signs: Some(crate::health_types::VitalSigns {
@@ -2230,8 +2169,6 @@ mod tests {
         assert!(md.contains("| Hotspots | 0 |"));
         assert!(!md.contains("Hotspots (since"));
     }
-
-    // ── Health markdown file scores ──
 
     #[test]
     fn health_markdown_file_scores_table() {
@@ -2288,8 +2225,6 @@ mod tests {
         assert!(md.contains("| `src/utils.ts` | 72.5 | 5 | 3 | 25% | 0.80 |"));
         assert!(md.contains("**Average maintainability index:** 65.0/100"));
     }
-
-    // ── Health markdown hotspots ──
 
     #[test]
     fn health_markdown_hotspots_table() {
@@ -2353,8 +2288,6 @@ mod tests {
         assert!(md.contains("*5 files excluded (< 3 commits)*"));
     }
 
-    // ── Health markdown metric legend ──
-
     #[test]
     fn health_markdown_metric_legend_with_scores() {
         let root = PathBuf::from("/project");
@@ -2411,8 +2344,6 @@ mod tests {
         assert!(md.contains("Full metric reference"));
     }
 
-    // ── Health markdown truncated findings ──
-
     #[test]
     fn health_markdown_truncated_findings_shown_count() {
         let root = PathBuf::from("/project");
@@ -2450,8 +2381,6 @@ mod tests {
         assert!(md.contains("5 high complexity functions (1 shown)"));
     }
 
-    // ── escape_backticks ──
-
     #[test]
     fn escape_backticks_handles_multiple() {
         assert_eq!(escape_backticks("a`b`c"), "a\\`b\\`c");
@@ -2461,8 +2390,6 @@ mod tests {
     fn escape_backticks_no_backticks_unchanged() {
         assert_eq!(escape_backticks("hello"), "hello");
     }
-
-    // ── Unresolved import in markdown ──
 
     #[test]
     fn markdown_unresolved_import_grouped_by_file() {
@@ -2483,8 +2410,6 @@ mod tests {
         assert!(md.contains(":3 `./missing`"));
     }
 
-    // ── Markdown optional dep ──
-
     #[test]
     fn markdown_unused_optional_dep() {
         let root = PathBuf::from("/project");
@@ -2504,8 +2429,6 @@ mod tests {
         assert!(md.contains("### Unused optionalDependencies (1)"));
         assert!(md.contains("- `fsevents`"));
     }
-
-    // ── Health markdown no hotspot exclusion message when 0 excluded ──
 
     #[test]
     fn health_markdown_hotspots_no_excluded_message() {
@@ -2566,8 +2489,6 @@ mod tests {
         let md = build_health_markdown(&report, &root);
         assert!(!md.contains("files excluded"));
     }
-
-    // ── Duplication markdown plural ──
 
     #[test]
     fn duplication_markdown_single_group_no_plural() {

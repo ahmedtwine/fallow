@@ -506,7 +506,6 @@ mod tests {
             ],
         };
         let finding = CloneFamilyFinding::with_actions(family);
-        // 1 extract-shared + 2 apply-suggestion + 1 suppress-line = 4
         assert_eq!(finding.actions.len(), 4);
         assert_eq!(
             finding.actions[0].kind,
@@ -524,8 +523,6 @@ mod tests {
         );
         assert_eq!(finding.actions[2].description, "Extract module");
         assert_eq!(finding.actions[3].kind, CloneFamilyActionType::SuppressLine);
-        // Issue #393 regression: every nested clone group inside a family
-        // must also carry its own typed actions array.
         assert_eq!(finding.groups.len(), 2);
         for inner in &finding.groups {
             assert_eq!(inner.actions.len(), 2);
@@ -569,11 +566,9 @@ mod tests {
         let payload = DupesReportPayload::from_report(&report);
         assert_eq!(payload.clone_groups.len(), 2);
         assert_eq!(payload.clone_families.len(), 1);
-        // Sanity check: every group has the canonical 2-action array.
         for finding in &payload.clone_groups {
             assert_eq!(finding.actions.len(), 2);
         }
-        // Sanity check: family with zero suggestions has 2 actions.
         assert_eq!(payload.clone_families[0].actions.len(), 2);
     }
 

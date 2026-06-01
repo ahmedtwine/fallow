@@ -683,7 +683,6 @@ pub fn filter_new_clone_groups(
         !baseline_keys.contains(key.as_str())
     });
 
-    // Re-generate families from the filtered groups
     report.clone_families =
         fallow_core::duplicates::families::group_into_families(&report.clone_groups, root);
     report.mirrored_directories = fallow_core::duplicates::families::detect_mirrored_directories(
@@ -691,7 +690,6 @@ pub fn filter_new_clone_groups(
         root,
     );
 
-    // Re-compute stats for the filtered groups
     report.stats = recompute_stats(&report);
 
     report
@@ -738,8 +736,6 @@ pub fn recompute_stats(report: &DuplicationReport) -> fallow_core::duplicates::D
         clone_groups_below_min_occurrences: report.stats.clone_groups_below_min_occurrences,
     }
 }
-
-// ── Health baseline ─────────────────────────────────────────────────
 
 /// Baseline data for health (complexity) comparison.
 ///
@@ -970,8 +966,6 @@ fn overflowing_severities(current: [usize; 3], baseline: [usize; 3]) -> [bool; 3
     let mut available = baseline;
     let mut overflow = [false; 3];
 
-    // Match lower severities first with the least-flexible compatible baseline
-    // slots so ambiguous cases still leave worse current severities visible.
     for severity_idx in 0..3 {
         let compatible = available[severity_idx..].iter().sum::<usize>();
         overflow[severity_idx] = compatible < current[severity_idx];
@@ -1059,12 +1053,6 @@ fn runtime_coverage_finding_key(
     finding: &crate::health_types::RuntimeCoverageFinding,
     _root: &Path,
 ) -> String {
-    // Writer key. Prefer the cross-surface join key (`fallow:fn:<hash>`) when
-    // present so the baseline keys on the same identity the cloud and the other
-    // coverage surfaces use; fall back to the legacy per-finding suppression id
-    // (`fallow:prod:<hash>`) for 0.5-shape findings that carry no identity. Both
-    // forms hash the function's start line, so a moved function gets a new key
-    // under either; the grace-window reader accepts both forms.
     finding
         .stable_id
         .clone()
@@ -1137,13 +1125,6 @@ pub fn filter_new_runtime_coverage_findings(
         .map(String::as_str)
         .collect();
     findings.retain(|finding| {
-        // Grace window: a finding counts as baselined if ANY of three keys
-        // match: its stable_id (baselines written on this version), its legacy
-        // `fallow:prod:` id (baselines written before the upgrade), or the
-        // line-move-tolerant `path\0name\0source_hash` composite (so a
-        // moved-but-unedited function stays suppressed). Retain (report as new)
-        // only when NONE matches. A finding with no `source_hash` simply relies
-        // on the stable_id / legacy keys.
         let suppressed_by_stable_id = finding
             .stable_id
             .as_deref()
@@ -1251,8 +1232,6 @@ mod tests {
             ..Default::default()
         }
     }
-
-    // ── BaselineData round-trip ──────────────────────────────────
 
     #[test]
     fn baseline_from_results_captures_all_fields() {
@@ -1378,8 +1357,6 @@ mod tests {
             baseline.unused_dev_dependencies
         );
     }
-
-    // ── filter_new_issues ────────────────────────────────────────
 
     #[test]
     fn filter_removes_baseline_issues() {
@@ -1542,8 +1519,6 @@ mod tests {
         assert_eq!(filtered.unused_exports[0].export.export_name, "helperB");
     }
 
-    // ── DuplicationBaselineData ──────────────────────────────────
-
     fn make_clone_group(instances: Vec<(&str, usize, usize)>) -> CloneGroup {
         CloneGroup {
             instances: instances
@@ -1597,7 +1572,6 @@ mod tests {
     #[test]
     fn clone_group_key_is_sorted() {
         let root = Path::new("/project");
-        // Order of instances in group shouldn't matter for the key
         let group_ab = make_clone_group(vec![
             ("/project/src/a.ts", 1, 10),
             ("/project/src/b.ts", 5, 15),
@@ -1709,8 +1683,6 @@ mod tests {
         let stats = super::recompute_stats(&report);
         assert!((stats.duplication_percentage - 0.0).abs() < f64::EPSILON);
     }
-
-    // ── HealthBaselineData ──────────────────────────────────────────
 
     fn make_health_finding(
         root: &Path,
@@ -1968,8 +1940,6 @@ mod tests {
         assert_eq!(filtered.len(), 1);
     }
 
-    // ── circular_dep_key sort stability ─────────────────────────
-
     #[test]
     fn circular_dep_key_is_order_independent() {
         use fallow_core::results::CircularDependency;
@@ -2050,8 +2020,6 @@ mod tests {
             super::circular_dep_key(&dep_cab.cycle, Path::new("")),
         );
     }
-
-    // ── filter_new_issues: extended issue types ────────────────
 
     fn make_full_results() -> AnalysisResults {
         use fallow_core::extract::MemberKind;
@@ -2210,7 +2178,6 @@ mod tests {
             ..BaselineData::from_results(&AnalysisResults::default(), Path::new(""))
         };
         let mut results = AnalysisResults::default();
-        // One in baseline, one new
         results
             .circular_dependencies
             .push(CircularDependencyFinding::with_actions(
@@ -2271,8 +2238,6 @@ mod tests {
         assert_eq!(filtered.boundary_violations.len(), 1);
     }
 
-    // ── filter_new_health_targets ──────────────────────────────
-
     #[test]
     fn health_targets_baseline_filters_known() {
         let root = PathBuf::from("/project");
@@ -2305,8 +2270,6 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].path, root.join("src/new-issue.ts"));
     }
-
-    // ── duplicate_export_key ───────────────────────────────────
 
     #[test]
     fn duplicate_export_key_is_sorted() {
@@ -2347,8 +2310,6 @@ mod tests {
         );
     }
 
-    // ── boundary_violation_key ─────────────────────────────────
-
     #[test]
     fn boundary_violation_key_format() {
         use fallow_core::results::BoundaryViolation;
@@ -2364,8 +2325,6 @@ mod tests {
         let key = super::boundary_violation_key(&v, Path::new(""));
         assert_eq!(key, "src/ui/btn.ts->src/db/query.ts");
     }
-
-    // ── cross-machine baseline portability (#87) ──────────────
 
     /// Build results with absolute paths rooted at the given prefix.
     fn make_absolute_results(root: &str) -> AnalysisResults {
@@ -2462,7 +2421,6 @@ mod tests {
         let results = make_absolute_results("/Users/dev/project");
         let baseline = BaselineData::from_results(&results, local_root);
 
-        // Keys should be relative
         assert_eq!(baseline.unused_files, vec!["src/old.ts"]);
         assert_eq!(baseline.unused_exports, vec!["src/utils.ts:helper"]);
         assert_eq!(
@@ -2485,7 +2443,6 @@ mod tests {
         assert_eq!(baseline.unresolved_imports, vec!["src/app.ts:./missing"]);
         assert_eq!(baseline.duplicate_exports, vec!["Config|src/a.ts|src/b.ts"]);
 
-        // Simulate loading baseline on CI (different absolute root, same relative structure)
         let ci_root = Path::new("/home/runner/work/project/project");
         let ci_results = make_absolute_results("/home/runner/work/project/project");
 
@@ -2534,9 +2491,6 @@ mod tests {
 
     #[test]
     fn legacy_prod_baseline_still_suppresses_finding() {
-        // A baseline written before the v2 upgrade holds only `fallow:prod:`
-        // ids. A finding carrying a stable_id MUST still be suppressed by its
-        // legacy id during the grace window.
         let baseline = HealthBaselineData {
             runtime_coverage_findings: vec!["fallow:prod:deadbeef".to_owned()],
             ..HealthBaselineData::default()
@@ -2554,12 +2508,6 @@ mod tests {
 
     #[test]
     fn source_hash_baseline_survives_line_move() {
-        // A baseline written on this version holds the line-move-tolerant
-        // `path\0name\0source_hash` composite. After the function moves lines,
-        // a real producer emits a DIFFERENT `fallow:prod:` id AND a different
-        // `fallow:fn:` stable_id (both hash the start line), but the SAME
-        // content digest (`source_hash`). The finding MUST stay suppressed via
-        // the source_hash match alone.
         let root = Path::new("/repo");
         let baselined = runtime_finding(
             "fallow:prod:deadbeef",
@@ -2568,10 +2516,8 @@ mod tests {
             Some("0123456789abcdef"),
         );
         let baseline = HealthBaselineData::from_findings(&[], &[baselined], &[], root);
-        // Sanity: the composite key was written.
         assert_eq!(baseline.runtime_coverage_source_hashes.len(), 1);
 
-        // Moved from line 14 to 40: new prod id, new stable_id, SAME source_hash.
         let findings = vec![runtime_finding(
             "fallow:prod:99999999",
             Some("fallow:fn:cafe0002"),

@@ -1,7 +1,5 @@
 use super::common::{create_config, fixture_path};
 
-// ── Vue SFC parsing ────────────────────────────────────────────
-
 #[test]
 fn vue_project_discovers_vue_files() {
     let root = fixture_path("vue-project");
@@ -21,7 +19,6 @@ fn vue_project_discovers_vue_files() {
         })
         .collect();
 
-    // App.vue is imported by main.ts, should NOT be unused
     assert!(
         !unused_file_names.contains(&"App.vue".to_string()),
         "App.vue should be reachable via import from main.ts, unused: {unused_file_names:?}"
@@ -31,7 +28,6 @@ fn vue_project_discovers_vue_files() {
         "FancyCard.vue is only used via a Vue component tag and should stay reachable: {unused_file_names:?}"
     );
 
-    // Orphan.vue is not imported by anything, should be unused
     assert!(
         unused_file_names.contains(&"Orphan.vue".to_string()),
         "Orphan.vue should be detected as unused file, found: {unused_file_names:?}"
@@ -50,7 +46,6 @@ fn vue_imports_mark_exports_used() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // formatDate is only used from the Vue template via <script setup>
     assert!(
         !unused_export_names.contains(&"formatDate"),
         "formatDate should be used from the Vue template, found: {unused_export_names:?}"
@@ -72,7 +67,6 @@ fn vue_imports_mark_exports_used() {
         "dynamicEvent should be used from a Vue dynamic v-on argument, found: {unused_export_names:?}"
     );
 
-    // unusedUtil is not imported anywhere, should be unused
     assert!(
         unused_export_names.contains(&"unusedUtil"),
         "unusedUtil should be detected as unused export, found: {unused_export_names:?}"
@@ -238,8 +232,6 @@ fn vue_split_value_type_exports_are_tracked_across_script_setup_usage() {
     );
 }
 
-// ── Svelte SFC parsing ─────────────────────────────────────────
-
 #[test]
 fn svelte_project_discovers_svelte_files() {
     let root = fixture_path("svelte-project");
@@ -259,7 +251,6 @@ fn svelte_project_discovers_svelte_files() {
         })
         .collect();
 
-    // App.svelte is imported by main.ts, should NOT be unused
     assert!(
         !unused_file_names.contains(&"App.svelte".to_string()),
         "App.svelte should be reachable via import from main.ts, unused: {unused_file_names:?}"
@@ -269,7 +260,6 @@ fn svelte_project_discovers_svelte_files() {
         "FancyButton.svelte is only used via a Svelte component tag and should stay reachable: {unused_file_names:?}"
     );
 
-    // Orphan.svelte is not imported, should be unused
     assert!(
         unused_file_names.contains(&"Orphan.svelte".to_string()),
         "Orphan.svelte should be detected as unused file, found: {unused_file_names:?}"
@@ -288,7 +278,6 @@ fn svelte_imports_mark_exports_used() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // formatName is only used from the Svelte template via a namespace import
     assert!(
         !unused_export_names.contains(&"formatName"),
         "formatName should be used from the Svelte template, found: {unused_export_names:?}"
@@ -318,7 +307,6 @@ fn svelte_imports_mark_exports_used() {
         "inSpread should be used from a Svelte inline spread object, found: {unused_export_names:?}"
     );
 
-    // unusedUtil is not imported anywhere, should be unused
     assert!(
         unused_export_names.contains(&"unusedUtil"),
         "unusedUtil should be detected as unused export, found: {unused_export_names:?}"
@@ -360,12 +348,6 @@ fn svelte_template_event_handlers_mark_class_members_used() {
     );
 }
 
-// Regression for knip #1670: a `<script lang="ts">` block whose only use of
-// an imported name is a type annotation must keep the upstream type export
-// reachable. Knip's "real svelte compiler" mode strips types before
-// analysis, so the type vanishes from its view; fallow extracts the raw
-// script body and parses it with oxc, so type-only imports survive the SFC
-// boundary and downstream `unused-types` does not fire on the source.
 #[test]
 fn svelte_type_only_import_keeps_upstream_type_used() {
     let root = fixture_path("svelte-project");
@@ -401,8 +383,6 @@ fn svelte_type_only_import_keeps_upstream_type_used() {
     );
 }
 
-// ── SvelteKit virtual modules ─────────────────────────────────
-
 #[test]
 fn sveltekit_virtual_modules_not_unlisted() {
     let root = fixture_path("sveltekit-project");
@@ -415,7 +395,6 @@ fn sveltekit_virtual_modules_not_unlisted() {
         .map(|d| d.dep.package_name.as_str())
         .collect();
 
-    // $app and $env are SvelteKit virtual modules — must not be flagged as unlisted
     assert!(
         !unlisted_names.contains(&"$app"),
         "$app should not be unlisted (virtual module), found: {unlisted_names:?}"
@@ -438,9 +417,6 @@ fn sveltekit_generated_types_not_unresolved() {
         .map(|u| u.import.specifier.as_str())
         .collect();
 
-    // ./$types and ./$types.js are SvelteKit generated route types — must not be flagged.
-    // This includes files inside route groups with parentheses like (app)/(admin),
-    // which was reported as a false positive source in issue #54.
     assert!(
         !unresolved_specs.contains(&"./$types"),
         "./$types should not be unresolved (generated import), found: {unresolved_specs:?}"
@@ -450,8 +426,6 @@ fn sveltekit_generated_types_not_unresolved() {
         "./$types.js should not be unresolved (generated import), found: {unresolved_specs:?}"
     );
 }
-
-// ── Monorepo workspace: generated imports propagate ──────────
 
 #[test]
 fn sveltekit_workspace_types_not_unresolved() {
@@ -465,7 +439,6 @@ fn sveltekit_workspace_types_not_unresolved() {
         .map(|u| u.import.specifier.as_str())
         .collect();
 
-    // ./$types in a workspace SvelteKit project must not be flagged as unresolved
     assert!(
         !unresolved_specs.contains(&"./$types"),
         "./$types should not be unresolved in workspace mode, found: {unresolved_specs:?}"
@@ -516,8 +489,6 @@ fn sveltekit_layout_reset_routes_are_entry_points() {
 
     let unused = unused_file_names(&results);
 
-    // `+page@.svelte` / `+layout@named.svelte` break out of the parent layout chain
-    // but are still route entry points; they must not be reported as unused (issue #791).
     assert!(
         !unused.contains(&"+page@.svelte".to_string()),
         "layout-reset page (`+page@.svelte`) should be an entry point: {unused:?}"
@@ -526,9 +497,6 @@ fn sveltekit_layout_reset_routes_are_entry_points() {
         !unused.contains(&"+layout@named.svelte".to_string()),
         "layout-reset layout (`+layout@named.svelte`) should be an entry point: {unused:?}"
     );
-    // The group form `+page@(group).svelte` targets a named group layout. It proves
-    // the `*` glob matches the literal parens (not glob metacharacters in globset),
-    // which is the riskiest assumption in the `+page@*.svelte` entry pattern.
     assert!(
         !unused.contains(&"+page@(checkout).svelte".to_string()),
         "group-form layout-reset page (`+page@(checkout).svelte`) should be an entry point: {unused:?}"
@@ -575,18 +543,14 @@ fn sveltekit_remote_files_are_reachable() {
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
     let files = unused_file_names(&results);
 
-    // Generated-binding-only remote file: reachable only as an entry point.
     assert!(
         !files.contains(&"posts.remote.ts".to_string()),
         "generated-binding-only remote file must not be unused: {files:?}"
     );
-    // Imported-by-a-route remote file.
     assert!(
         !files.contains(&"data.remote.ts".to_string()),
         "imported remote file must not be unused: {files:?}"
     );
-    // Control: a non-remote orphan stays flagged, proving the credit is scoped
-    // to *.remote.* rather than applied project-wide.
     assert!(
         files.contains(&"orphan.ts".to_string()),
         "non-remote orphan file must still report as unused: {files:?}"
@@ -617,9 +581,6 @@ fn sveltekit_remote_exports_are_credited() {
 fn sveltekit_remote_exports_credited_under_include_entry_exports() {
     let root = fixture_path("sveltekit-remote-functions");
     let mut config = create_config(root);
-    // --include-entry-exports disables the entry-point skip, so this run proves
-    // the `used_exports: ["*"]` rule (not just entry-point status) keeps the
-    // user-named remote functions exempt.
     config.include_entry_exports = true;
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
     let exports = unused_export_pairs(&results);

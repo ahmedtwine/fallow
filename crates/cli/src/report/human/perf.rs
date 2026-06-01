@@ -114,21 +114,12 @@ pub(in crate::report) fn build_performance_human_lines(t: &PipelineTimings) -> V
             .to_string(),
     );
     if let Some(duplication_ms) = t.duplication_ms {
-        // In combined mode (`fallow` with no subcommand) duplication runs
-        // CONCURRENTLY with the whole check pipeline via rayon::join, so it
-        // overlaps the stages above rather than following them. It is shown as
-        // an informational overlay and deliberately excluded from `(other)` /
-        // TOTAL, which reconcile the sequential check pipeline. When dupes runs
-        // longer than the check pipeline this row legitimately exceeds TOTAL.
         lines.push(
             format!("│  duplication:      {duplication_ms:>8.1}ms  (concurrent)")
                 .dimmed()
                 .to_string(),
         );
     }
-    // `duplication_ms` is excluded: it is a concurrent overlay (see above), and
-    // `total_ms` is the sequential check pipeline's wall-clock, which does not
-    // include the parallel dupes pass.
     let stages_sum = t.discover_files_ms
         + t.workspaces_ms
         + t.plugins_ms
@@ -188,9 +179,6 @@ fn build_health_performance_lines(t: &crate::health_types::HealthTimings) -> Vec
             .dimmed()
             .to_string(),
     );
-    // In combined mode the dead-code (check) pass already discovered and
-    // parsed these files; health reuses that work, so the cost is shown in
-    // the `Pipeline Performance` box above rather than double-counted here.
     let discover_line = if t.shared_parse {
         "│  discover files:   (measured above)".to_string()
     } else {
@@ -245,8 +233,6 @@ fn build_health_performance_lines(t: &crate::health_types::HealthTimings) -> Vec
             .dimmed()
             .to_string(),
     );
-    // Reused stages contribute 0.0 here and are excluded from TOTAL, so the
-    // displayed rows (including this one) sum to TOTAL in every mode.
     let stages_sum = t.config_ms
         + t.discover_ms
         + t.parse_ms
@@ -335,7 +321,6 @@ mod tests {
         assert!(text.contains("(other)"));
         assert!(text.contains("TOTAL"));
         assert!(text.contains("102.7"));
-        // parse_cpu_ms == parse_extract_ms here (ratio 1.0), so no annotation.
         assert!(!text.contains("parallel"));
     }
 
@@ -423,10 +408,6 @@ mod tests {
 
     #[test]
     fn combined_duplication_is_concurrent_and_excluded_from_reconciliation() {
-        // Combined mode runs check + dupes via rayon::join, so duplication
-        // overlaps the check pipeline. It is marked (concurrent) and excluded
-        // from (other)/TOTAL, which reconcile the sequential check stages.
-        // Sequential stages sum to 46.8ms; TOTAL 50.0 leaves 3.2ms of glue.
         let mut t = pipeline_timings_with_parse(20.0, 20.0);
         t.total_ms = 50.0;
         t.duplication_ms = Some(500.0); // concurrent, far exceeds TOTAL
@@ -443,7 +424,6 @@ mod tests {
 
     #[test]
     fn parse_stage_annotated_when_cpu_dominates_wall() {
-        // 340ms wall, 5440ms CPU -> ~16x parallelism, well above the floor.
         let text = plain(&build_performance_human_lines(
             &pipeline_timings_with_parse(340.0, 5440.0),
         ));
@@ -455,7 +435,6 @@ mod tests {
 
     #[test]
     fn parse_stage_not_annotated_below_wall_floor() {
-        // Trivial 3ms stage: never annotated even though CPU >> wall.
         let text = plain(&build_performance_human_lines(
             &pipeline_timings_with_parse(3.0, 40.0),
         ));
@@ -467,7 +446,6 @@ mod tests {
 
     #[test]
     fn parse_stage_not_annotated_when_ratio_low() {
-        // Warm/incremental: little real parse work, ratio under threshold.
         let text = plain(&build_performance_human_lines(
             &pipeline_timings_with_parse(50.0, 60.0),
         ));
@@ -502,10 +480,8 @@ mod tests {
             text.matches("(measured above)").count() == 2,
             "discover + parse should both read (measured above): {text}"
         );
-        // The reused stages must not render a misleading 0.0ms number.
         assert!(!text.contains("discover files:      0.0ms"));
         assert!(!text.contains("parse/extract:       0.0ms"));
-        // config is health-loaded, not reused, so it keeps a real number.
         assert!(text.contains("config"));
         assert!(text.contains("(other)"));
     }

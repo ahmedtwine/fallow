@@ -149,9 +149,6 @@ pub(super) fn compute_hotspots(
     let churn_result = churn_fetch.result;
     let since = churn_fetch.since;
 
-    // Warn about shallow clones (read from churn result to avoid redundant git call).
-    // Also surfaces an authorship-inflation warning when ownership is requested:
-    // squash merges and shallow clones distort author attribution.
     let shallow_clone = churn_result.shallow_clone;
     if shallow_clone && !opts.quiet {
         eprintln!(
@@ -170,8 +167,6 @@ pub(super) fn compute_hotspots(
     let (max_weighted, max_density) =
         compute_normalization_maxima(file_scores, &churn_result.files, min_commits);
 
-    // Compile ownership inputs once. When --ownership is off, skip discovery
-    // entirely so users without git authorship data pay no setup cost.
     let ownership_cfg = &config.health.ownership;
     let bot_globs_owned: Option<globset::GlobSet> = opts.ownership.then(|| {
         compile_bot_globs(&ownership_cfg.bot_patterns).unwrap_or_else(|e| {
@@ -183,20 +178,17 @@ pub(super) fn compute_hotspots(
     });
     let codeowners_owned: Option<crate::codeowners::CodeOwners> = opts
         .ownership
-        .then(|| {
-            match crate::codeowners::CodeOwners::load(&config.root, None) {
+        .then(
+            || match crate::codeowners::CodeOwners::load(&config.root, None) {
                 Ok(co) => Some(co),
                 Err(e) => {
-                    // Don't hard-fail --ownership when CODEOWNERS is unparsable
-                    // or absent: the feature still works from git authorship alone.
-                    // Surface the error so silent nulls don't confuse users.
                     if !opts.quiet && !e.contains("no CODEOWNERS file found") {
                         eprintln!("Warning: failed to parse CODEOWNERS: {e}");
                     }
                     None
                 }
-            }
-        })
+            },
+        )
         .flatten();
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -210,7 +202,6 @@ pub(super) fn compute_hotspots(
         now_secs,
     });
 
-    // Build hotspot entries
     let mut hotspot_entries = Vec::new();
     let mut files_excluded: usize = 0;
 
@@ -252,14 +243,12 @@ pub(super) fn compute_hotspots(
         });
     }
 
-    // Sort by score descending (highest risk first)
     hotspot_entries.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Compute summary BEFORE --top truncation
     let files_analyzed = hotspot_entries.len();
     let summary = HotspotSummary {
         since: since.display,
@@ -269,7 +258,6 @@ pub(super) fn compute_hotspots(
         shallow_clone,
     };
 
-    // Apply --top to hotspots
     if let Some(top) = opts.top {
         hotspot_entries.truncate(top);
     }
@@ -281,41 +269,32 @@ pub(super) fn compute_hotspots(
 mod tests {
     use super::*;
 
-    // --- compute_hotspot_score ---
-
     #[test]
     fn hotspot_score_both_maxima_zero() {
-        // When both maxima are zero, avoid division by zero -> score 0
         assert!((compute_hotspot_score(0.0, 0.0, 0.0, 0.0)).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hotspot_score_max_weighted_zero() {
-        // Churn dimension zero, complexity present -> score 0
         assert!((compute_hotspot_score(5.0, 0.0, 0.5, 1.0)).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hotspot_score_max_density_zero() {
-        // Complexity dimension zero, churn present -> score 0
         assert!((compute_hotspot_score(5.0, 10.0, 0.0, 0.0)).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hotspot_score_equal_normalization() {
-        // File equals both maxima -> normalized values both 1.0 -> score 100
         let score = compute_hotspot_score(10.0, 10.0, 2.0, 2.0);
         assert!((score - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hotspot_score_half_values() {
-        // Half of each maximum -> 0.5 * 0.5 * 100 = 25.0
         let score = compute_hotspot_score(5.0, 10.0, 1.0, 2.0);
         assert!((score - 25.0).abs() < f64::EPSILON);
     }
-
-    // --- is_excluded_from_hotspots ---
 
     #[test]
     fn excluded_no_filters() {
@@ -377,8 +356,6 @@ mod tests {
 
         assert!(!is_excluded_from_hotspots(path, root, &ignore_set, None));
     }
-
-    // --- compute_normalization_maxima ---
 
     #[test]
     fn normalization_maxima_empty_input() {
@@ -461,7 +438,6 @@ mod tests {
             },
         );
 
-        // File has only 2 commits, below min_commits=3 -> excluded
         let (max_w, max_d) = compute_normalization_maxima(&scores, &churn_files, 3);
         assert!((max_w).abs() < f64::EPSILON);
         assert!((max_d).abs() < f64::EPSILON);
@@ -505,47 +481,35 @@ mod tests {
         assert!((max_d).abs() < f64::EPSILON);
     }
 
-    // --- compute_hotspot_score: additional edge cases ---
-
     #[test]
     fn hotspot_score_high_churn_low_complexity() {
-        // File at maximum churn but only 10% complexity -> 10.0
         let score = compute_hotspot_score(10.0, 10.0, 0.1, 1.0);
         assert!((score - 10.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hotspot_score_low_churn_high_complexity() {
-        // File at 10% churn but maximum complexity -> 10.0
         let score = compute_hotspot_score(1.0, 10.0, 2.0, 2.0);
         assert!((score - 10.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hotspot_score_rounding() {
-        // 0.33 * 0.33 * 100 = 10.89 -> should round to one decimal
         let score = compute_hotspot_score(1.0, 3.0, 1.0, 3.0);
-        // 1/3 * 1/3 * 100 = 11.111... -> rounded to 11.1
         assert!((score - 11.1).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hotspot_score_very_small_values() {
-        // Both values are tiny fractions of their maxima
         let score = compute_hotspot_score(0.01, 100.0, 0.001, 10.0);
-        // 0.0001 * 0.0001 * 100 = 0.001 -> rounds to 0.0
         assert!((score).abs() < 0.1);
     }
 
     #[test]
     fn hotspot_score_weighted_exceeds_max() {
-        // Edge case: weighted_commits > max_weighted (shouldn't happen but be robust)
         let score = compute_hotspot_score(15.0, 10.0, 1.0, 2.0);
-        // 1.5 * 0.5 * 100 = 75.0
         assert!((score - 75.0).abs() < f64::EPSILON);
     }
-
-    // --- compute_normalization_maxima: additional edge cases ---
 
     #[test]
     fn normalization_maxima_multiple_files_picks_max() {
@@ -641,8 +605,6 @@ mod tests {
 
     #[test]
     fn normalization_maxima_mixed_above_and_below_threshold() {
-        // Two files: one above min_commits, one below.
-        // Only the above-threshold file should contribute.
         let scores = vec![
             FileHealthScore {
                 path: std::path::PathBuf::from("/src/frequent.ts"),
@@ -703,14 +665,12 @@ mod tests {
         );
 
         let (max_w, max_d) = compute_normalization_maxima(&scores, &churn_files, 5);
-        // Only frequent.ts qualifies
         assert!((max_w - 7.0).abs() < f64::EPSILON);
         assert!((max_d - 0.4).abs() < f64::EPSILON);
     }
 
     #[test]
     fn normalization_maxima_file_score_without_churn() {
-        // File exists in scores but has no churn data -> ignored
         let scores = vec![FileHealthScore {
             path: std::path::PathBuf::from("/src/no_churn.ts"),
             fan_in: 0,
@@ -735,7 +695,6 @@ mod tests {
 
     #[test]
     fn normalization_maxima_min_commits_zero() {
-        // min_commits=0 means every file qualifies
         let scores = vec![FileHealthScore {
             path: std::path::PathBuf::from("/src/foo.ts"),
             fan_in: 0,
@@ -767,7 +726,6 @@ mod tests {
             },
         );
 
-        // commits=0 >= min_commits=0, so file is included
         let (max_w, max_d) = compute_normalization_maxima(&scores, &churn_files, 0);
         assert!((max_w).abs() < f64::EPSILON);
         assert!((max_d - 0.3).abs() < f64::EPSILON);
@@ -775,7 +733,6 @@ mod tests {
 
     #[test]
     fn normalization_maxima_exactly_at_threshold() {
-        // File has exactly min_commits -> should be included
         let scores = vec![FileHealthScore {
             path: std::path::PathBuf::from("/src/foo.ts"),
             fan_in: 0,
@@ -812,11 +769,8 @@ mod tests {
         assert!((max_d - 1.5).abs() < f64::EPSILON);
     }
 
-    // --- is_excluded_from_hotspots: additional edge cases ---
-
     #[test]
     fn excluded_workspace_and_glob_combined() {
-        // File matches workspace but also matches ignore glob -> excluded
         let path = std::path::Path::new("/project/packages/a/src/generated/types.ts");
         let root = std::path::Path::new("/project");
         let ws_roots = [std::path::PathBuf::from("/project/packages/a")];
@@ -834,7 +788,6 @@ mod tests {
 
     #[test]
     fn excluded_workspace_match_but_glob_no_match() {
-        // File is in workspace and doesn't match ignore -> not excluded
         let path = std::path::Path::new("/project/packages/a/src/index.ts");
         let root = std::path::Path::new("/project");
         let ws_roots = [std::path::PathBuf::from("/project/packages/a")];
@@ -852,7 +805,6 @@ mod tests {
 
     #[test]
     fn excluded_path_equals_root() {
-        // Path is the root itself (edge case for strip_prefix)
         let path = std::path::Path::new("/project");
         let root = std::path::Path::new("/project");
         let ignore_set = globset::GlobSet::empty();
@@ -862,16 +814,12 @@ mod tests {
 
     #[test]
     fn excluded_path_outside_root() {
-        // Path not under root -> strip_prefix falls back to full path
         let path = std::path::Path::new("/other/src/foo.ts");
         let root = std::path::Path::new("/project");
         let mut builder = globset::GlobSetBuilder::new();
-        // Glob matches relative path, but strip_prefix fails so full path is used
         builder.add(globset::Glob::new("src/foo.ts").unwrap());
         let ignore_set = builder.build().unwrap();
 
-        // strip_prefix fails -> uses full path "/other/src/foo.ts"
-        // which doesn't match "src/foo.ts"
         assert!(!is_excluded_from_hotspots(path, root, &ignore_set, None));
     }
 

@@ -1,39 +1,21 @@
 //! MCP tool parameter structs.
 //!
-//! Field descriptions live in `///` doc comments. They flow into the published
-//! JSON Schema via schemars and into rustdoc identically, so there is one
-//! canonical source.
-//!
-//! Use `#[schemars(description = "...")]` only when the schema text must differ
-//! from rustdoc (e.g. a richer agent-facing string than what makes sense in the
-//! Rust API docs). Never combine both forms on the same field: the explicit
-//! attribute wins and a later edit to the `///` comment silently fails to
-//! reach the schema. A drift gate in `crates/mcp/src/server/tests/server_info.rs`
-//! fails the build when both forms co-occur.
+//! Doc comments feed both rustdoc and the published JSON Schema.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-/// Privacy mode for author emails emitted by the `--ownership` health flag.
-///
-/// Mirrors `fallow_config::EmailMode` but lives in the MCP crate so the JSON
-/// Schema published to agents lists the exact set of accepted values and
-/// rejects typos at the protocol layer instead of the CLI subprocess.
+/// Privacy mode for author emails emitted by `--ownership`.
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EmailModeParam {
-    /// Show full email addresses as recorded in git history.
     Raw,
-    /// Show local-part only (default). Unwraps GitHub-style noreply prefixes.
     Handle,
-    /// Show stable non-cryptographic pseudonyms (`xxh3:<hex>`).
     Anonymized,
-    /// Legacy spelling for anonymized output.
     Hash,
 }
 
 impl EmailModeParam {
-    /// Render as the corresponding CLI flag value.
     pub const fn as_cli(self) -> &'static str {
         match self {
             Self::Raw => "raw",
@@ -46,413 +28,249 @@ impl EmailModeParam {
 
 #[derive(Default, Deserialize, JsonSchema)]
 pub struct AnalyzeParams {
-    /// Root directory of the project to analyze. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file (.fallowrc.json, .fallowrc.jsonc, fallow.toml, or .fallow.toml).
     pub config: Option<String>,
 
-    /// Only analyze production code (excludes tests, stories, dev files).
     pub production: Option<bool>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation
-    /// (e.g. `"web,admin"`, `"apps/*"`, `"apps/*,!apps/legacy"`). Patterns match
-    /// against both the package name and the workspace path relative to the repo
-    /// root. Passed through to the CLI's `--workspace` flag.
     pub workspace: Option<String>,
 
-    /// Issue types to include. When set, only these types are reported.
-    /// Valid values: unused-files, unused-exports, unused-types,
-    /// private-type-leaks, unused-deps, unused-enum-members, unused-class-members, unresolved-imports,
-    /// unlisted-deps, duplicate-exports, circular-deps, re-export-cycles,
-    /// boundary-violations,
-    /// stale-suppressions, unused-catalog-entries (catalog declares packages no
-    /// consumer references; dead config), empty-catalog-groups (named pnpm
-    /// catalog groups with no entries), unresolved-catalog-references
-    /// (consumer references catalogs that do not declare the package; broken
-    /// config that pnpm install will reject), unused-dependency-overrides
-    /// (pnpm.overrides targets a package no workspace package declares and
-    /// pnpm-lock.yaml does not resolve), misconfigured-dependency-overrides
-    /// (pnpm.overrides key/value is unparsable; pnpm install will reject).
     pub issue_types: Option<Vec<String>>,
 
-    /// Set to true to check only boundary violations. Convenience alias for
-    /// `issue_types: ["boundary-violations"]`.
+    /// Analyze only architecture boundary violations.
     pub boundary_violations: Option<bool>,
 
-    /// Compare results against a saved baseline file. Only new issues (not in the baseline) are reported.
     pub baseline: Option<String>,
 
-    /// Save current results as a baseline file for future comparisons.
     pub save_baseline: Option<String>,
 
-    /// Fail if issue counts regressed compared to the regression baseline.
     pub fail_on_regression: Option<bool>,
 
-    /// Regression tolerance. Accepts a percentage ("2%") or absolute count ("5").
     pub tolerance: Option<String>,
 
-    /// Path to a regression baseline file to compare against.
     pub regression_baseline: Option<String>,
 
-    /// Save current results as a regression baseline file for future comparisons.
     pub save_regression_baseline: Option<String>,
 
-    /// Group results by CODEOWNERS ownership, directory, workspace package, or
-    /// GitLab CODEOWNERS section. Values: "owner", "directory", "package",
-    /// "section". The `section` mode produces distinct groups per `[Section]`
-    /// header even when sections share a default reviewer, and attaches an
-    /// `owners: string[]` array to each group in the JSON output (populated
-    /// from the section's default owners). The `owners` field is absent for
-    /// Owner/Directory/Package modes.
     pub group_by: Option<String>,
 
-    /// Only report issues in the specified file(s). Useful for lint-staged pre-commit hooks.
-    /// Dependency-level issues are suppressed in file mode.
     pub file: Option<Vec<String>>,
 
-    /// Report unused exports in entry files instead of auto-marking them as used.
-    /// Catches typos in framework exports (e.g., `meatdata` instead of `metadata`).
     pub include_entry_exports: Option<bool>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct CheckChangedParams {
-    /// Root directory of the project to analyze. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Git ref to compare against (e.g., "main", "HEAD~5", a commit SHA).
-    /// Only files changed since this ref are reported.
     pub since: String,
 
-    /// Path to fallow config file.
     pub config: Option<String>,
 
-    /// Only analyze production code.
     pub production: Option<bool>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation
-    /// (e.g. `"web,admin"`, `"apps/*"`, `"apps/*,!apps/legacy"`). Patterns match
-    /// against both the package name and the workspace path relative to the repo
-    /// root. Passed through to the CLI's `--workspace` flag.
     pub workspace: Option<String>,
 
-    /// Compare results against a saved baseline file. Only new issues (not in the baseline) are reported.
     pub baseline: Option<String>,
 
-    /// Save current results as a baseline file for future comparisons.
     pub save_baseline: Option<String>,
 
-    /// Fail if issue counts regressed compared to the regression baseline.
     pub fail_on_regression: Option<bool>,
 
-    /// Regression tolerance. Accepts a percentage ("2%") or absolute count ("5").
     pub tolerance: Option<String>,
 
-    /// Path to a regression baseline file to compare against.
     pub regression_baseline: Option<String>,
 
-    /// Save current results as a regression baseline file for future comparisons.
     pub save_regression_baseline: Option<String>,
 
-    /// Report unused exports in entry files instead of auto-marking them as used.
     pub include_entry_exports: Option<bool>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
 #[derive(Default, Deserialize, JsonSchema)]
 pub struct FindDupesParams {
-    /// Root directory of the project to analyze. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file (.fallowrc.json, .fallowrc.jsonc, fallow.toml, or .fallow.toml).
     pub config: Option<String>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation
-    /// (e.g. `"web,admin"`, `"apps/*"`, `"apps/*,!apps/legacy"`). Patterns match
-    /// against both the package name and the workspace path relative to the repo
-    /// root. Passed through to the CLI's `--workspace` flag.
     pub workspace: Option<String>,
 
-    /// Detection mode: "strict" (exact tokens), "mild" (normalized identifiers),
-    /// "weak" (structural only), or "semantic" (type-aware). Defaults to "mild".
     pub mode: Option<String>,
 
-    /// Minimum token count for a clone to be reported. Default: 50.
     pub min_tokens: Option<u32>,
 
-    /// Minimum line count for a clone to be reported. Default: 5.
     pub min_lines: Option<u32>,
 
-    /// Minimum number of occurrences before a clone group is reported.
-    /// Increase to focus on widespread copy-paste worth refactoring and skip
-    /// 2-instance noise. Must be at least 2. Default: 2.
     #[schemars(range(min = 2))]
     pub min_occurrences: Option<u32>,
 
-    /// Fail if duplication percentage exceeds this value. 0 = no limit.
     pub threshold: Option<f64>,
 
-    /// Skip file-local duplicates, only report cross-file clones.
     pub skip_local: Option<bool>,
 
-    /// Enable cross-language detection (strip TS type annotations for TS<->JS matching).
     pub cross_language: Option<bool>,
 
-    /// Exclude import declarations from clone detection (reduces noise from sorted import blocks).
     pub ignore_imports: Option<bool>,
 
-    /// Show a per-pattern breakdown for default duplicates ignores.
-    /// Human-format only (human/markdown CLI output); MCP JSON responses suppress the note.
     pub explain_skipped: Option<bool>,
 
-    /// Show only the N largest clone groups.
     pub top: Option<usize>,
 
-    /// Compare results against a saved baseline file. Only new issues (not in the baseline) are reported.
     pub baseline: Option<String>,
 
-    /// Save current results as a baseline file for future comparisons.
     pub save_baseline: Option<String>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 
-    /// Only report issues in files changed since this git ref (branch, tag,
-    /// or commit SHA).
+    /// Git ref to compare against when limiting duplication to changed files.
     pub changed_since: Option<String>,
 
-    /// Group clone families by CODEOWNERS ownership, directory, workspace
-    /// package, or GitLab CODEOWNERS section. Values: "owner", "directory",
-    /// "package", "section". `section` attaches an `owners: string[]` array
-    /// to each group. Passed through to the CLI's `--group-by` flag.
     pub group_by: Option<String>,
 }
 
 #[derive(Default, Deserialize, JsonSchema)]
 pub struct FixParams {
-    /// Root directory of the project. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file.
     pub config: Option<String>,
 
-    /// Only analyze production code (excludes tests, stories, dev files).
     pub production: Option<bool>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation
-    /// (e.g. `"web,admin"`, `"apps/*"`, `"apps/*,!apps/legacy"`). Patterns match
-    /// against both the package name and the workspace path relative to the repo
-    /// root. Passed through to the CLI's `--workspace` flag.
     pub workspace: Option<String>,
 
-    /// Refuse to create a new `.fallowrc.json` when none exists. By default,
-    /// `fallow fix` creates a fresh config file (using `fallow init`'s
-    /// framework-aware scaffolding) and layers `ignoreExports` rules on top
-    /// when it finds duplicate-export findings in a project with no fallow
-    /// config. Set this to `true` to opt out: the duplicate-export
-    /// config-add path is skipped with an explanatory entry; source-file
-    /// edits proceed normally. Recommended for agent flows where silently
-    /// materialising a new top-level file would surprise the user.
-    /// Forwards the CLI's `--no-create-config` flag.
     pub no_create_config: Option<bool>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
 #[derive(Default, Deserialize, JsonSchema)]
 pub struct ProjectInfoParams {
-    /// Root directory of the project. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file.
     pub config: Option<String>,
 
-    /// Show detected entry points.
+    /// Include entry-point patterns in the response.
     pub entry_points: Option<bool>,
 
-    /// Show all discovered source files.
+    /// Include discovered source files in the response.
     pub files: Option<bool>,
 
-    /// Show active framework plugins.
+    /// Include active framework plugins in the response.
     pub plugins: Option<bool>,
 
-    /// Show architecture boundary zones, rules, and per-zone file counts.
+    /// Include discovered architecture boundary zones in the response.
     pub boundaries: Option<bool>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct TraceExportParams {
-    /// File containing the export to trace, relative to the project root.
     #[schemars(length(min = 1))]
     pub file: String,
 
-    /// Export name to trace (use "default" for default exports).
     #[schemars(length(min = 1))]
     pub export_name: String,
 
-    /// Root directory of the project. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file.
     pub config: Option<String>,
 
-    /// Only analyze production code (excludes tests, stories, dev files).
     pub production: Option<bool>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation.
     pub workspace: Option<String>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct TraceFileParams {
-    /// File to trace, relative to the project root.
     #[schemars(length(min = 1))]
     pub file: String,
 
-    /// Root directory of the project. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file.
     pub config: Option<String>,
 
-    /// Only analyze production code (excludes tests, stories, dev files).
     pub production: Option<bool>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation.
     pub workspace: Option<String>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct TraceDependencyParams {
-    /// Package name to trace (for example "react" or "@scope/pkg").
     #[schemars(length(min = 1))]
     pub package_name: String,
 
-    /// Root directory of the project. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file.
     pub config: Option<String>,
 
-    /// Only analyze production code (excludes tests, stories, dev files).
     pub production: Option<bool>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation.
     pub workspace: Option<String>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
 #[derive(Default, Deserialize, JsonSchema)]
 pub struct TraceCloneParams {
-    /// File containing the clone candidate, relative to the project root.
-    /// Provide `file` + `line` to trace a location, OR `fingerprint` to trace a
-    /// clone group by id; exactly one of the two addressing forms is required.
     #[serde(default)]
     pub file: Option<String>,
 
-    /// 1-based line number inside the clone candidate. Required with `file`.
     #[serde(default)]
     pub line: Option<usize>,
 
-    /// Stable clone-group fingerprint from a prior `find_dupes` result
-    /// (`clone_groups[].fingerprint`). Usually `dup:<8hex>`, widened only when
-    /// a report collision requires it. Deep-dives that group directly: returns
-    /// its locations, an extract-function suggestion with estimated savings,
-    /// and a best-effort suggested name. Use instead of `file` + `line`.
     #[serde(default)]
     pub fingerprint: Option<String>,
 
-    /// Root directory of the project. Defaults to current working directory.
     pub root: Option<String>,
 
-    /// Path to fallow config file (.fallowrc.json, .fallowrc.jsonc, fallow.toml, or .fallow.toml).
     pub config: Option<String>,
 
-    /// Scope analysis to one or more workspaces. Accepts a single package name
-    /// for the common case, or a comma-separated list with globs and `!` negation.
     pub workspace: Option<String>,
 
-    /// Detection mode: "strict" (exact tokens), "mild" (normalized identifiers),
-    /// "weak" (structural only), or "semantic" (type-aware). Defaults to "mild".
     pub mode: Option<String>,
 
-    /// Minimum token count for a clone to be reported. Default: 50.
     pub min_tokens: Option<u32>,
 
-    /// Minimum line count for a clone to be reported. Default: 5.
     pub min_lines: Option<u32>,
 
-    /// Minimum number of occurrences before a clone group is reported.
-    /// Increase to focus on widespread copy-paste worth refactoring and skip
-    /// 2-instance noise. Must be at least 2. Default: 2.
     #[schemars(range(min = 2))]
     pub min_occurrences: Option<u32>,
 
-    /// Fail if duplication percentage exceeds this value. 0 = no limit.
     pub threshold: Option<f64>,
 
-    /// Skip file-local duplicates, only report cross-file clones.
     pub skip_local: Option<bool>,
 
-    /// Enable cross-language detection (strip TS type annotations for TS<->JS matching).
     pub cross_language: Option<bool>,
 
-    /// Exclude import declarations from clone detection (reduces noise from sorted import blocks).
     pub ignore_imports: Option<bool>,
 
-    /// Disable the incremental parse cache. Forces a full re-parse of all files.
     pub no_cache: Option<bool>,
 
-    /// Number of parser threads. Defaults to available CPU cores.
     pub threads: Option<usize>,
 }
 
@@ -821,10 +639,6 @@ pub struct ListBoundariesParams {
 }
 
 /// Parameters for the `impact` value-report tool.
-//
-// Intentionally `root`-only: `fallow impact` runs no analysis and reads only
-// `.fallow/impact.json` under `root`, so the config / no_cache / threads knobs
-// the analysis tools expose would be inert here and only confuse an agent.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ImpactParams {
     /// Project root directory whose local `.fallow/impact.json` value report to

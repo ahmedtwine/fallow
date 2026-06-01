@@ -79,8 +79,6 @@ export const Layout = () => html`
 
 #[test]
 fn html_tagged_template_bare_src_normalized() {
-    // Bare specifiers become `./foo.js` so the resolver doesn't treat them
-    // as npm packages — same behavior as the HTML parser.
     let info = parse_ts(
         r#"import { html } from "hono/html";
 export const Layout = () => html`
@@ -149,8 +147,6 @@ export const Layout = () => html`
 
 #[test]
 fn html_tagged_template_comments_stripped() {
-    // HTML comments must not produce asset imports — the commented-out script
-    // is dead markup that should never reach the graph.
     let info = parse_ts(
         r#"import { html } from "hono/html";
 export const Layout = () => html`
@@ -166,9 +162,6 @@ export const Layout = () => html`
 
 #[test]
 fn html_tagged_template_interpolated_asset_across_boundary_skipped() {
-    // An asset reference split across an interpolation boundary can't be
-    // statically resolved, so both halves are ignored — preventing bogus
-    // imports like `./${base}.js` from flooding the resolver.
     let info = parse_ts(
         r#"import { html } from "hono/html";
 const base = "/static";
@@ -181,8 +174,6 @@ export const Layout = () => html`
 
 #[test]
 fn html_tagged_template_rel_icon_ignored() {
-    // Only stylesheet/modulepreload rel values are tracked — matching the
-    // HTML parser's whitelist.
     let info = parse_ts(
         r#"import { html } from "hono/html";
 export const Layout = () => html`
@@ -200,9 +191,6 @@ export const Layout = () => html`
 
 #[test]
 fn non_html_tag_ignored() {
-    // `css`, `sql`, `gql`, `styled.div` tagged templates are completely
-    // outside the scope of this override. No asset imports should be
-    // emitted, even though their text could match the HTML regex.
     let info = parse_ts(
         r#"const css = (strings: TemplateStringsArray, ...values: unknown[]) => "";
 const style = css`
@@ -218,8 +206,6 @@ const style = css`
 
 #[test]
 fn html_tagged_template_in_jsx_file_also_works() {
-    // Layouts can live in .tsx files and still use the html`` tag — make sure
-    // the override fires regardless of source type.
     let info = crate::tests::parse_tsx(
         r#"import { html } from "hono/html";
 export const Layout = () => html`

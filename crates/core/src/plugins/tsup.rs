@@ -29,7 +29,6 @@ define_plugin! {
             result.referenced_dependencies.push(dep);
         }
 
-        // entry -> source entry points for the library
         let entries = config_parser::extract_config_string_array(source, config_path, &["entry"]);
         result.extend_entry_patterns(entries);
 

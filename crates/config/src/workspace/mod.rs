@@ -16,9 +16,6 @@ pub use diagnostics::{
     stash_workspace_diagnostics, workspace_diagnostics_for,
 };
 use diagnostics::{emit_diagnostics, is_skip_listed_dir};
-// `emit_diagnostics` is wired only at the top-level `discover_workspaces_with_diagnostics`
-// call below; the collector helpers populate `Vec<WorkspaceDiagnostic>` without
-// emitting so the legacy `discover_workspaces` back-compat path stays silent.
 pub use package_json::PackageJson;
 pub use parsers::parse_tsconfig_root_dir;
 use parsers::{
@@ -115,15 +112,6 @@ pub fn discover_workspaces_with_diagnostics(
 ) -> Result<(Vec<WorkspaceInfo>, Vec<WorkspaceDiagnostic>), WorkspaceLoadError> {
     let (workspaces, diagnostics) = collect_workspaces_and_diagnostics(root, ignore_patterns)?;
 
-    // Emit tracing warnings only at the diagnostics-aware entry point. The
-    // collector function returns the diagnostics vec without emitting, so
-    // the legacy `discover_workspaces(root)` back-compat path (which passes
-    // an empty `ignore_patterns` set and only needs the workspace list)
-    // stays silent. Without this split, sibling analyze / file-discovery
-    // callers that go through `discover_workspaces` would re-emit
-    // `tracing::warn!` on paths the user already excluded via
-    // `ignorePatterns`, because those callers have no access to the
-    // resolved globset.
     emit_diagnostics(root, &diagnostics);
 
     Ok((workspaces, diagnostics))
@@ -197,11 +185,6 @@ pub fn find_undeclared_workspaces_with_ignores(
     declared: &[WorkspaceInfo],
     ignore_patterns: &globset::GlobSet,
 ) -> Vec<WorkspaceDiagnostic> {
-    // Only run when workspaces are declared. A malformed root package.json
-    // is a discovery-blocking error (surfaced at exit 2 via
-    // discover_workspaces_with_diagnostics); this back-compat helper treats
-    // it as "no patterns" so the undeclared-workspace warning does not fire
-    // on top of the hard error.
     let patterns = collect_workspace_patterns(root).unwrap_or_default();
     if patterns.is_empty() {
         return Vec::new();
@@ -216,7 +199,6 @@ pub fn find_undeclared_workspaces_with_ignores(
 
     let mut undeclared = Vec::new();
 
-    // Walk first two levels of directories
     let Ok(top_entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
@@ -233,7 +215,6 @@ pub fn find_undeclared_workspaces_with_ignores(
             continue;
         }
 
-        // Check this directory itself
         check_undeclared(
             &path,
             root,
@@ -243,7 +224,6 @@ pub fn find_undeclared_workspaces_with_ignores(
             &mut undeclared,
         );
 
-        // Check immediate children (second level)
         let Ok(child_entries) = std::fs::read_dir(&path) else {
             continue;
         };
@@ -287,7 +267,6 @@ fn check_undeclared(
         return;
     }
     let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    // Skip the project root itself
     if canonical == *canonical_root {
         return;
     }
@@ -295,9 +274,6 @@ fn check_undeclared(
         return;
     }
     let relative = dir.strip_prefix(root).unwrap_or(dir);
-    // Honor user-supplied ignorePatterns: directories explicitly excluded should not
-    // trigger an undeclared-workspace warning. Match using forward-slash normalized
-    // relative path so cross-platform globs (`references/*`) work on Windows.
     let relative_str = relative.to_string_lossy().replace('\\', "/");
     if ignore_patterns.is_match(relative_str.as_str())
         || ignore_patterns.is_match(format!("{relative_str}/package.json").as_str())
@@ -315,12 +291,6 @@ fn check_undeclared(
 fn collect_workspace_patterns(root: &Path) -> Result<Vec<String>, WorkspaceLoadError> {
     let mut patterns = Vec::new();
 
-    // Check root package.json for workspace patterns. A malformed root is
-    // unrecoverable: without a parseable package.json there is no declared
-    // workspace surface and downstream analysis would be fiction. Promote to
-    // a hard error so the CLI exits 2 (mirrors validate_resolved_boundaries
-    // from issue #468). When the file is simply absent, fall through: many
-    // projects use only pnpm-workspace.yaml or tsconfig references.
     let pkg_path = root.join("package.json");
     if pkg_path.exists() {
         match PackageJson::load(&pkg_path) {
@@ -334,9 +304,6 @@ fn collect_workspace_patterns(root: &Path) -> Result<Vec<String>, WorkspaceLoadE
         }
     }
 
-    // Check pnpm-workspace.yaml. Yaml read/parse failures stay silent here:
-    // pnpm itself surfaces them at install time and adding a fallow-side
-    // diagnostic would double-report the error.
     let pnpm_workspace = root.join("pnpm-workspace.yaml");
     if pnpm_workspace.exists()
         && let Ok(content) = std::fs::read_to_string(&pnpm_workspace)
@@ -364,9 +331,6 @@ fn expand_patterns_to_workspaces(
 
     let mut workspaces = Vec::new();
 
-    // Separate positive and negated patterns.
-    // Negated patterns (e.g., `!**/test/**`) are used as exclusion filters —
-    // the `glob` crate does not support `!` prefixed patterns natively.
     let (positive, negative): (Vec<&String>, Vec<&String>) =
         patterns.iter().partition(|p| !p.starts_with('!'));
     let negation_matchers: Vec<globset::GlobMatcher> = negative
@@ -380,23 +344,12 @@ fn expand_patterns_to_workspaces(
         .collect();
 
     for pattern in &positive {
-        // Normalize the pattern for directory matching:
-        // - `packages/*` → glob for `packages/*` (find all subdirs)
-        // - `packages/` → glob for `packages/*` (trailing slash means "contents of")
-        // - `apps`       → glob for `apps` (exact directory)
         let glob_pattern = if pattern.ends_with('/') {
             format!("{pattern}*")
-        } else if !pattern.contains('*') && !pattern.contains('?') && !pattern.contains('{') {
-            // Bare directory name — treat as exact match
-            (*pattern).clone()
         } else {
             (*pattern).clone()
         };
 
-        // Walk directories matching the glob. The with_diagnostics variant
-        // surfaces glob matches that resolve to directories without
-        // package.json as WorkspaceDiagnosticKind::GlobMatchedNoPackageJson
-        // (filtered through the skip list + ignore_patterns).
         let matched_dirs = expand_workspace_glob_with_diagnostics(
             root,
             pattern,
@@ -406,14 +359,10 @@ fn expand_patterns_to_workspaces(
             diagnostics,
         );
         for (dir, canonical_dir) in matched_dirs {
-            // Skip workspace entries that point to the project root itself
-            // (e.g. pnpm-workspace.yaml listing `.` as a workspace)
             if canonical_dir == *canonical_root {
                 continue;
             }
 
-            // Check against negation patterns. Directories that match any
-            // negated pattern are skipped.
             let relative = dir.strip_prefix(root).unwrap_or(&dir);
             let relative_str = relative.to_string_lossy();
             if negation_matchers
@@ -423,11 +372,6 @@ fn expand_patterns_to_workspaces(
                 continue;
             }
 
-            // package.json existence already checked in
-            // expand_workspace_glob_with_diagnostics. A parse failure HERE is
-            // the declared-workspace malformed case: emit a diagnostic and
-            // continue (the user's own pnpm/npm install would fail too, but
-            // fallow stays useful so the user can fix the typo).
             let ws_pkg_path = dir.join("package.json");
             match PackageJson::load(&ws_pkg_path) {
                 Ok(pkg) => {
@@ -475,15 +419,10 @@ fn collect_tsconfig_workspaces(
 
     for dir in parse_tsconfig_references_with_diagnostics(root, ignore_patterns, diagnostics) {
         let canonical_dir = dunce::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-        // Security: skip references pointing to project root or outside it
         if canonical_dir == *canonical_root || !canonical_dir.starts_with(canonical_root) {
             continue;
         }
 
-        // Read package.json if available; otherwise use directory name.
-        // A package.json that EXISTS but fails to parse is a declared-workspace
-        // malformed case: emit a diagnostic and fall back to directory-name
-        // semantics so the TypeScript-only composite project still resolves.
         let ws_pkg_path = dir.join("package.json");
         let (name, dep_names) = if ws_pkg_path.exists() {
             match PackageJson::load(&ws_pkg_path) {
@@ -503,9 +442,6 @@ fn collect_tsconfig_workspaces(
                 }
             }
         } else {
-            // No package.json: use directory name, no deps. Valid for
-            // TypeScript-only composite projects; stays silent (tsc itself
-            // does not require a package.json for project references).
             (dir_name(&dir), Vec::new())
         };
 
@@ -595,11 +531,6 @@ fn collect_shallow_workspace_candidate(
 }
 
 fn should_skip_workspace_scan_dir(name: &str) -> bool {
-    // Delegate to the shared skip list so the shallow-scan fallback honors
-    // the same exclusions as the glob-matched-no-package.json filter
-    // (`dist`, `coverage`, `.cache`, `.next`, `.turbo`, etc.). Build
-    // artifacts and tooling caches are conventionally NOT workspace
-    // packages; pnpm/npm/yarn silently filter the same set.
     is_skip_listed_dir(name)
 }
 
@@ -609,7 +540,6 @@ fn should_skip_workspace_scan_dir(name: &str) -> bool {
 /// directory) are collapsed. npm-discovered entries take precedence (they appear first).
 /// Workspaces depended on by other workspaces are marked as `is_internal_dependency`.
 fn mark_internal_dependencies(workspaces: &mut Vec<(WorkspaceInfo, Vec<String>)>) {
-    // Deduplicate by canonical path
     {
         let mut seen = rustc_hash::FxHashSet::default();
         workspaces.retain(|(ws, _)| {
@@ -618,9 +548,6 @@ fn mark_internal_dependencies(workspaces: &mut Vec<(WorkspaceInfo, Vec<String>)>
         });
     }
 
-    // Mark workspaces that are depended on by other workspaces.
-    // Uses dep names collected during initial package.json load
-    // to avoid re-reading all workspace package.json files.
     let all_dep_names: rustc_hash::FxHashSet<String> = workspaces
         .iter()
         .flat_map(|(_, deps)| deps.iter().cloned())
@@ -648,21 +575,18 @@ mod tests {
         std::fs::create_dir_all(temp_dir.join("packages/core")).unwrap();
         std::fs::create_dir_all(temp_dir.join("packages/ui")).unwrap();
 
-        // No package.json workspaces — only tsconfig references
         std::fs::write(
             temp_dir.join("tsconfig.json"),
             r#"{"references": [{"path": "./packages/core"}, {"path": "./packages/ui"}]}"#,
         )
         .unwrap();
 
-        // core has package.json with a name
         std::fs::write(
             temp_dir.join("packages/core/package.json"),
             r#"{"name": "@project/core"}"#,
         )
         .unwrap();
 
-        // ui has NO package.json — name should fall back to directory name
         let workspaces = discover_workspaces(&temp_dir);
         assert_eq!(workspaces.len(), 2);
         assert!(workspaces.iter().any(|ws| ws.name == "@project/core"));
@@ -676,7 +600,6 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("fallow-test-tsconfig-outside");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(temp_dir.join("project/packages/core")).unwrap();
-        // "outside" is a sibling of "project", not inside it
         std::fs::create_dir_all(temp_dir.join("outside")).unwrap();
 
         std::fs::write(
@@ -685,7 +608,6 @@ mod tests {
         )
         .unwrap();
 
-        // Security: "../outside" points outside the project root and should be rejected
         let workspaces = discover_workspaces(&temp_dir.join("project"));
         assert_eq!(
             workspaces.len(),
@@ -702,8 +624,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    // ── dir_name ────────────────────────────────────────────────────
-
     #[test]
     fn dir_name_extracts_last_component() {
         assert_eq!(dir_name(Path::new("/project/packages/core")), "core");
@@ -712,11 +632,8 @@ mod tests {
 
     #[test]
     fn dir_name_empty_for_root_path() {
-        // Root path has no file_name component
         assert_eq!(dir_name(Path::new("/")), "");
     }
-
-    // ── WorkspaceConfig deserialization ──────────────────────────────
 
     #[test]
     fn workspace_config_deserialize_json() {
@@ -739,8 +656,6 @@ mod tests {
         assert!(config.patterns.is_empty());
     }
 
-    // ── WorkspaceInfo ───────────────────────────────────────────────
-
     #[test]
     fn workspace_info_default_not_internal() {
         let ws = WorkspaceInfo {
@@ -750,8 +665,6 @@ mod tests {
         };
         assert!(!ws.is_internal_dependency);
     }
-
-    // ── mark_internal_dependencies ──────────────────────────────────
 
     #[test]
     fn mark_internal_deps_detects_cross_references() {
@@ -782,7 +695,6 @@ mod tests {
 
         mark_internal_dependencies(&mut workspaces);
 
-        // "b" is depended on by "a", so it should be marked as internal
         let ws_a = workspaces
             .iter()
             .find(|(ws, _)| ws.name == "@scope/a")
@@ -865,8 +777,6 @@ mod tests {
         );
     }
 
-    // ── collect_workspace_patterns ──────────────────────────────────
-
     #[test]
     fn collect_patterns_from_package_json() {
         let dir = tempfile::tempdir().expect("create temp dir");
@@ -918,8 +828,6 @@ mod tests {
         let patterns = collect_workspace_patterns(dir.path()).expect("no root package.json");
         assert!(patterns.is_empty());
     }
-
-    // ── discover_workspaces integration ─────────────────────────────
 
     #[test]
     fn discover_workspaces_from_package_json() {
@@ -1013,7 +921,6 @@ mod tests {
     #[test]
     fn discover_workspaces_skips_root_as_workspace() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        // pnpm-workspace.yaml listing "." should not add root as workspace
         std::fs::write(
             dir.path().join("pnpm-workspace.yaml"),
             "packages:\n  - '.'\n",
@@ -1039,7 +946,6 @@ mod tests {
             r#"{"workspaces": ["packages/*"]}"#,
         )
         .unwrap();
-        // package.json without a name field
         std::fs::write(pkg_a.join("package.json"), "{}").unwrap();
 
         let workspaces = discover_workspaces(dir.path());
@@ -1074,8 +980,6 @@ mod tests {
         );
     }
 
-    // ── find_undeclared_workspaces ─────────────────────────────────
-
     #[test]
     fn undeclared_workspace_detected() {
         let dir = tempfile::tempdir().expect("create temp dir");
@@ -1084,7 +988,6 @@ mod tests {
         std::fs::create_dir_all(&pkg_a).unwrap();
         std::fs::create_dir_all(&pkg_b).unwrap();
 
-        // Only packages/a is declared as a workspace
         std::fs::write(
             dir.path().join("package.json"),
             r#"{"workspaces": ["packages/a"]}"#,
@@ -1133,7 +1036,6 @@ mod tests {
         let sub = dir.path().join("lib");
         std::fs::create_dir_all(&sub).unwrap();
 
-        // No workspaces field at all, non-monorepo project
         std::fs::write(dir.path().join("package.json"), r#"{"name": "app"}"#).unwrap();
         std::fs::write(sub.join("package.json"), r#"{"name": "lib"}"#).unwrap();
 
@@ -1157,7 +1059,6 @@ mod tests {
             r#"{"workspaces": ["packages/*"]}"#,
         )
         .unwrap();
-        // Put package.json in node_modules and hidden dirs
         std::fs::write(nm.join("package.json"), r#"{"name": "nm-pkg"}"#).unwrap();
         std::fs::write(hidden.join("package.json"), r#"{"name": "hidden"}"#).unwrap();
 
@@ -1178,8 +1079,6 @@ mod tests {
 
     #[test]
     fn undeclared_skips_dirs_matching_ignore_patterns() {
-        // Reproduces issue #193: a `references/*` directory containing package.json
-        // should not be reported as undeclared workspace when listed in ignorePatterns.
         let dir = tempfile::tempdir().expect("create temp dir");
         let pkg_a = dir.path().join("packages").join("a");
         let vitest_ref = dir.path().join("references").join("vitest");
@@ -1228,7 +1127,6 @@ mod tests {
         std::fs::write(pkg_b.join("package.json"), r#"{"name": "b"}"#).unwrap();
 
         let declared = discover_workspaces(dir.path());
-        // ignore pattern is unrelated to packages/b
         let ignore = build_globset(&["references/*"]);
         let undeclared = find_undeclared_workspaces_with_ignores(dir.path(), &declared, &ignore);
         assert_eq!(
@@ -1240,9 +1138,6 @@ mod tests {
 
     #[test]
     fn undeclared_skips_dirs_matching_package_json_glob() {
-        // Some users write ignore patterns as `references/*/package.json`
-        // (matching the file rather than the directory). Both styles should silence
-        // the undeclared-workspace warning.
         let dir = tempfile::tempdir().expect("create temp dir");
         let pkg_a = dir.path().join("packages").join("a");
         let vitest_ref = dir.path().join("references").join("vitest");
@@ -1272,7 +1167,6 @@ mod tests {
 
     #[test]
     fn undeclared_skips_dirs_matching_doublestar_ignore() {
-        // `references/**` should also cover `references/<name>` candidates.
         let dir = tempfile::tempdir().expect("create temp dir");
         let pkg_a = dir.path().join("packages").join("a");
         let nested_ref = dir.path().join("references").join("vitest");
@@ -1300,8 +1194,6 @@ mod tests {
         );
     }
 
-    // ── Issue #473: loud workspace discovery diagnostics ────────────
-
     #[test]
     fn malformed_workspace_package_json_emits_diagnostic() {
         let dir = tempfile::tempdir().expect("create temp dir");
@@ -1315,7 +1207,6 @@ mod tests {
         )
         .unwrap();
         std::fs::write(pkg_a.join("package.json"), r#"{"name": "a"}"#).unwrap();
-        // Trailing comma makes this not valid JSON.
         std::fs::write(pkg_bad.join("package.json"), r#"{"name": "bad",}"#).unwrap();
 
         let (result, captured) = capture_workspace_warnings(|| {
@@ -1397,14 +1288,11 @@ mod tests {
         )
         .unwrap();
         std::fs::write(pkg_a.join("package.json"), r#"{"name": "a"}"#).unwrap();
-        // packages/.cache and packages/scratch have NO package.json.
 
         let result = discover_workspaces_with_diagnostics(dir.path(), &globset::GlobSet::empty());
         let (workspaces, diagnostics) = result.expect("root package.json is valid");
 
         assert_eq!(workspaces.len(), 1);
-        // `.cache` should be in the skip list (silent); `scratch` is not, so
-        // it produces a glob-matched-no-package-json diagnostic.
         let kinds: Vec<&str> = diagnostics.iter().map(|d| d.kind.id()).collect();
         assert!(
             kinds.contains(&"glob-matched-no-package-json"),
@@ -1452,8 +1340,6 @@ mod tests {
             r#"{"workspaces": ["packages/*"]}"#,
         )
         .unwrap();
-        // tsconfig with trailing-comma-after-trailing-comma (invalid even as
-        // JSONC) so jsonc parsing fails.
         std::fs::write(dir.path().join("tsconfig.json"), r#"{"references": [,,,]}"#).unwrap();
 
         let result = discover_workspaces_with_diagnostics(dir.path(), &globset::GlobSet::empty());
@@ -1490,7 +1376,6 @@ mod tests {
     #[test]
     fn missing_tsconfig_is_silent() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        // No tsconfig.json at all. Many JS-only projects look like this.
 
         let result = discover_workspaces_with_diagnostics(dir.path(), &globset::GlobSet::empty());
         let (_, diagnostics) = result.expect("no root package.json is OK");
@@ -1505,10 +1390,6 @@ mod tests {
 
     #[test]
     fn shallow_scan_malformed_package_json_stays_silent() {
-        // Severity policy: when the user has not declared workspaces and
-        // fallow falls back to shallow scanning, a malformed nested
-        // package.json must NOT produce a diagnostic. The user did not
-        // declare the directory; the heuristic should not generate noise.
         let dir = tempfile::tempdir().expect("create temp dir");
         let scratch = dir.path().join("scratch");
         std::fs::create_dir_all(&scratch).unwrap();
@@ -1551,9 +1432,6 @@ mod tests {
 
     #[test]
     fn discover_workspaces_back_compat_drops_diagnostics_and_errors() {
-        // The legacy wrapper preserves byte-identical behavior for callers
-        // that have not migrated: malformed root collapses to empty result,
-        // workspace-level diagnostics are dropped silently.
         let dir = tempfile::tempdir().expect("create temp dir");
         std::fs::write(dir.path().join("package.json"), r"{bad json").unwrap();
 

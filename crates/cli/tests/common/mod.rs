@@ -1,4 +1,3 @@
-// Shared test harness — not all functions are used by every test file.
 #![allow(dead_code, reason = "shared harness included by multiple test crates")]
 
 use std::path::{Path, PathBuf};

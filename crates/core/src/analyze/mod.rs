@@ -11,11 +11,6 @@ mod unused_files;
 mod unused_members;
 mod unused_overrides;
 
-// Re-exported for cross-module test helpers that share the unused-dep filter
-// logic. Today only `crate::plugins::ember::tests::is_covered` consumes it
-// (a `#[cfg(test)]` site), so gate the re-export the same way to avoid an
-// `unused_imports` warning in release builds. Drop the cfg if a non-test
-// consumer appears.
 #[cfg(test)]
 pub(crate) use unused_deps::matches_virtual_prefix;
 
@@ -352,7 +347,6 @@ fn find_circular_dependencies(
                 .map(|&id| graph.modules[id.0 as usize].path.clone())
                 .collect();
             let length = files.len();
-            // Look up the import span from cycle[0] -> cycle[1] for precise location.
             let (line, col) =
                 cycle_edge_line_col(graph, line_offsets_map, &cycle, 0).unwrap_or((1, 0));
             Some(CircularDependency {
@@ -365,7 +359,6 @@ fn find_circular_dependencies(
         })
         .collect();
 
-    // Mark cycles that cross workspace package boundaries.
     if !workspaces.is_empty() {
         for dep in &mut dependencies {
             dep.is_cross_package = is_cross_package_cycle(&dep.files, workspaces);
@@ -446,27 +439,19 @@ pub fn find_dead_code_full(
 ) -> AnalysisResults {
     let _span = tracing::info_span!("find_dead_code").entered();
 
-    // Build suppression context: tracks which suppressions are consumed by detectors
     let suppressions = crate::suppress::SuppressionContext::new(modules);
 
-    // Build line offset index: FileId -> pre-computed line start offsets.
-    // Eliminates redundant file reads for byte-to-line/col conversion.
     let line_offsets_by_file: LineOffsetsMap<'_> = modules
         .iter()
         .filter(|m| !m.line_offsets.is_empty())
         .map(|m| (m.file_id, m.line_offsets.as_slice()))
         .collect();
 
-    // Build merged dependency set from root + all workspace package.json files
     let pkg_path = config.root.join("package.json");
     let pkg = PackageJson::load(&pkg_path).ok();
     let public_api_entry_points =
         public_api_package_entry_points(graph, config, pkg.as_ref(), workspaces);
 
-    // Credit `@iconify-json/<prefix>` packages used only through static icon
-    // strings (`<Icon name="jam:github" />`) so they are not reported as unused
-    // dependencies. Gated on the project declaring an Iconify-ecosystem dep, so
-    // the clone below only happens for Iconify projects. See issue #608.
     let iconify_referenced =
         iconify::collect_iconify_referenced_deps(modules, pkg.as_ref(), workspaces);
     let augmented_plugin_result;
@@ -479,9 +464,6 @@ pub fn find_dead_code_full(
         Some(&augmented_plugin_result)
     };
 
-    // Merge the top-level config rules with any plugin-contributed rules.
-    // Plain string entries behave like the old global allowlist; scoped object
-    // entries only apply to classes that match `extends` / `implements`.
     let mut user_class_members = config.used_class_members.clone();
     if let Some(plugin_result) = plugin_result {
         user_class_members.extend(plugin_result.used_class_members.iter().cloned());
@@ -574,7 +556,6 @@ pub fn find_dead_code_full(
                             .map(PrivateTypeLeakFinding::with_actions)
                             .collect();
                         }
-                        // @expected-unused tags that became stale (export is now used).
                         if config.rules.stale_suppressions != Severity::Off {
                             results.stale_suppressions.extend(stale_expected);
                         }
@@ -667,8 +648,6 @@ pub fn find_dead_code_full(
                                     .collect();
                                 }
 
-                                // In production mode, detect dependencies that are only used via
-                                // type-only imports.
                                 if config.production {
                                     results.type_only_dependencies =
                                         find_type_only_dependencies(graph, pkg, config, workspaces)
@@ -677,8 +656,6 @@ pub fn find_dead_code_full(
                                             .collect();
                                 }
 
-                                // In non-production mode, detect production deps only imported by
-                                // test/dev files.
                                 if !config.production
                                     && config.rules.test_only_dependencies != Severity::Off
                                 {
@@ -816,8 +793,6 @@ pub fn find_dead_code_full(
         ..AnalysisResults::default()
     };
 
-    // Filter out exported API surface from public packages.
-    // Public packages are workspace packages whose exports are intended for external consumers.
     let public_roots = public_workspace_roots(&config.public_packages, workspaces);
     if !public_roots.is_empty() {
         results.unused_exports.retain(|e| {
@@ -842,22 +817,14 @@ pub fn find_dead_code_full(
         });
     }
 
-    // Detect stale suppression comments (must run after all detectors)
     if config.rules.stale_suppressions != Severity::Off {
         results
             .stale_suppressions
             .extend(suppressions.find_stale(graph, config));
     }
     results.suppression_count = suppressions.used_count();
-    // Capture every present suppression (all kinds) so the Fallow Impact value
-    // report can tell a genuinely resolved finding from one silenced by a
-    // newly-added `fallow-ignore`. Internal: `#[serde(skip)]`, read in-process
-    // by `fallow impact`, never in the public JSON output.
     results.active_suppressions = suppressions.all_suppressions(graph);
 
-    // Detect pnpm catalog issues (purely off package.json + pnpm-workspace.yaml).
-    // Catalog detectors share the YAML parse and consumer walk; gather state
-    // once and run each detector gated on its own rule severity.
     let need_unused_catalogs = config.rules.unused_catalog_entries != Severity::Off;
     let need_empty_catalog_groups = config.rules.empty_catalog_groups != Severity::Off;
     let need_unresolved_refs = config.rules.unresolved_catalog_references != Severity::Off;
@@ -888,11 +855,6 @@ pub fn find_dead_code_full(
         }
     }
 
-    // Detect pnpm dependency-override issues (off pnpm-workspace.yaml +
-    // root package.json's pnpm.overrides). Mirrors the catalog detector: one
-    // parse + workspace walk feeds both unused-dependency-overrides and
-    // misconfigured-dependency-overrides; each detector gated on its own
-    // rule severity.
     let need_unused_overrides = config.rules.unused_dependency_overrides != Severity::Off;
     let need_misconfigured_overrides =
         config.rules.misconfigured_dependency_overrides != Severity::Off;
@@ -914,9 +876,6 @@ pub fn find_dead_code_full(
         }
     }
 
-    // Sort all result arrays for deterministic output ordering.
-    // Parallel collection and FxHashMap iteration don't guarantee order,
-    // so without sorting the same project can produce different orderings.
     results.sort();
 
     results
@@ -930,13 +889,10 @@ pub fn find_dead_code_full(
 mod tests {
     use fallow_types::extract::{byte_offset_to_line_col, compute_line_offsets};
 
-    // Helper: compute line offsets from source and convert byte offset
     fn line_col(source: &str, byte_offset: u32) -> (u32, u32) {
         let offsets = compute_line_offsets(source);
         byte_offset_to_line_col(&offsets, byte_offset)
     }
-
-    // ── compute_line_offsets ─────────────────────────────────────
 
     #[test]
     fn compute_offsets_empty() {
@@ -967,8 +923,6 @@ mod tests {
     fn compute_offsets_consecutive_newlines() {
         assert_eq!(compute_line_offsets("\n\n"), vec![0, 1, 2]);
     }
-
-    // ── byte_offset_to_line_col ─────────────────────────────────
 
     #[test]
     fn byte_offset_empty_source() {
@@ -1032,8 +986,6 @@ mod tests {
         map.insert(FileId(0), &offsets);
         assert_eq!(super::byte_offset_to_line_col(&map, FileId(0), 5), (2, 1));
     }
-
-    // ── find_dead_code orchestration ──────────────────────────────
 
     mod orchestration {
         use super::super::*;
@@ -1188,7 +1140,6 @@ mod tests {
             let rules = RulesConfig::default();
             let config = make_config_with_rules(rules);
 
-            // Without collect_usages
             let results_no_collect = find_dead_code_full(
                 &graph,
                 &config,
@@ -1203,7 +1154,6 @@ mod tests {
                 "export_usages should be empty when collect_usages is false"
             );
 
-            // With collect_usages
             let results_with_collect = find_dead_code_full(
                 &graph,
                 &config,
@@ -1259,9 +1209,7 @@ mod tests {
             let graph = ModuleGraph::build(&resolved, &entry_points, &files);
             let config = make_config_with_rules(RulesConfig::default());
 
-            // find_dead_code is a thin wrapper — verify it doesn't panic and returns results
             let results = find_dead_code(&graph, &config);
-            // The entry point export analysis is skipped, so these should be empty
             assert!(results.unused_exports.is_empty());
         }
 
@@ -1312,7 +1260,6 @@ mod tests {
                 .collect::<Vec<_>>();
             let graph = ModuleGraph::build(&resolved, &entry_points, &files);
 
-            // Create module info with a file-level suppression for unused files
             let modules = vec![ModuleInfo {
                 file_id: FileId(1),
                 exports: vec![],
@@ -1354,10 +1301,6 @@ mod tests {
 
             let results = find_dead_code_full(&graph, &config, &[], None, &[], &modules, false);
 
-            // The suppression should prevent utils.ts from being reported as unused
-            // (it would normally be unused since only entry.ts is an entry point).
-            // Note: unused_files also checks if the file exists on disk, so it
-            // may still be filtered out. The key is the suppression path is exercised.
             assert!(
                 !results.unused_files.iter().any(|f| f
                     .file

@@ -25,7 +25,6 @@ fn preset_declared_plugins_are_credited() {
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
     let unused = unused_dev_deps(&results);
 
-    // The preset declares these as (peer) dependencies; they must be credited.
     assert!(
         !unused.contains(&"eslint-plugin-alpha"),
         "eslint-plugin-alpha is a peerDependency of @scope/eslint-config and must \
@@ -40,9 +39,6 @@ fn preset_declared_plugins_are_credited() {
 
 #[test]
 fn plugin_not_declared_by_preset_stays_flagged() {
-    // Non-vacuous control: a genuinely-unused eslint plugin the preset does NOT
-    // declare must remain reported, proving the credit is scoped to the preset's
-    // declared set rather than blanket-crediting every eslint plugin.
     let root = fixture_path("issue-754-eslint-meta-preset");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -57,9 +53,6 @@ fn plugin_not_declared_by_preset_stays_flagged() {
 
 #[test]
 fn preset_non_eslint_dependency_stays_flagged() {
-    // The preset declares `picocolors` as a regular dependency. It is not an
-    // eslint-ecosystem package, so crediting it would risk masking a genuinely
-    // unused general-purpose dep the user declared independently.
     let root = fixture_path("issue-754-eslint-meta-preset");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");

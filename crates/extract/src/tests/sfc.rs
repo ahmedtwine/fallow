@@ -661,11 +661,6 @@ const items = ref<T[]>([]);
     assert_eq!(info.imports[0].source, "vue");
 }
 
-// Imports referenced ONLY inside `generic="T extends Test<boolean>"` (not
-// inside the script body itself) must still be classified as
-// type-referenced, otherwise the upstream `export type Test` is falsely
-// reported as `unused_types`. The augmented-source probe in
-// `merge_script_into_module` is what makes this work.
 #[test]
 fn vue_generic_attr_marks_type_only_import_as_type_referenced() {
     let info = parse_sfc(
@@ -690,8 +685,6 @@ defineProps<{ item: T }>();
     );
 }
 
-// Multi-parameter generic constraints must credit every distinct identifier
-// in the constraint, not just the first one.
 #[test]
 fn vue_generic_attr_marks_each_constraint_identifier() {
     let info = parse_sfc(
@@ -713,8 +706,6 @@ defineProps<{ key: K; value: V }>();
     }
 }
 
-// Svelte's `generics="..."` attribute is the equivalent knob and must walk
-// the same augmented-source path.
 #[test]
 fn svelte_generics_attr_marks_type_only_import_as_type_referenced() {
     let info = parse_sfc(
@@ -739,7 +730,6 @@ export let items: T[] = [];
     );
 }
 
-// Single-quoted attribute values must be recognised the same as double.
 #[test]
 fn vue_generic_attr_handles_single_quotes() {
     let info = parse_sfc(
@@ -754,8 +744,6 @@ fn vue_generic_attr_handles_single_quotes() {
     );
 }
 
-// Empty / whitespace-only generic attributes must not produce a parse error
-// or otherwise mark unrelated imports as type-referenced.
 #[test]
 fn vue_generic_attr_empty_value_is_inert() {
     let info = parse_sfc(
@@ -767,7 +755,6 @@ const x = ref(0);
 "#,
         "EmptyGeneric.vue",
     );
-    // ref is value-referenced (used as `ref(0)`) and must not be type-referenced
     assert!(
         !info
             .type_referenced_import_bindings
@@ -813,9 +800,6 @@ fn vue_script_src_attribute() {
 
 #[test]
 fn vue_script_src_bare_filename_normalized() {
-    // Vue/Svelte <script src="..."> resolves relative to the SFC file, so a
-    // bare `logic.ts` must be normalized to `./logic.ts` and not reported as
-    // an unlisted npm package. Same bug shape as Angular templateUrl (#99).
     let info = parse_sfc(
         r#"<script src="logic.ts" lang="ts"></script><template><div/></template>"#,
         "App.vue",
@@ -894,13 +878,6 @@ export let items: T[] = [];
     assert_eq!(info.imports[0].source, "svelte");
 }
 
-// Regression for the knip #1670 reproduction shape: a type-only import in a
-// `<script lang="ts">` block whose binding is only consumed as a type
-// annotation. Knip's "real svelte compiler" mode strips types before
-// analysis, so the import vanishes from its view; fallow extracts the raw
-// script body and parses it with oxc, so type-position bindings stay
-// classified as type-referenced and the upstream `export type` is not
-// flagged unused.
 #[test]
 fn svelte_script_keeps_type_only_imports_used_as_annotations() {
     let info = parse_sfc(
@@ -1009,11 +986,6 @@ const items = ref<T>();
     assert_eq!(info.imports[0].source, "vue");
 }
 
-// Regression for the knip #1714 reproduction shape: a `generic` attribute
-// whose constraint references a single user type with a primitive type
-// argument. Knip's parser-driven path drops the entire script body in that
-// case, fallow's regex-based attrs scan keeps the body intact and oxc
-// parses it normally.
 #[test]
 fn vue_script_with_generic_type_argument() {
     let info = parse_sfc(
@@ -1112,8 +1084,6 @@ import { good } from 'vue';
     assert_eq!(info.imports[0].source, "vue");
 }
 
-// --- TypeScript typed template bindings (regression: infinite recursion) ---
-
 #[test]
 fn vue_v_for_typed_destructure_full_pipeline() {
     let info = parse_sfc(
@@ -1127,7 +1097,6 @@ import type { Item } from './types';
         "TypedVFor.vue",
     );
 
-    // items is used in the template (iterable), so it should NOT be in unused_import_bindings
     assert!(
         !info.unused_import_bindings.contains(&"items".to_string()),
         "items should be marked as used in v-for iterable, got unused: {:?}",
@@ -1148,13 +1117,11 @@ import List from './List.vue';
         "TypedSlot.vue",
     );
 
-    // data is shadowed by the slot binding, so it should be in unused_import_bindings
     assert!(
         info.unused_import_bindings.contains(&"data".to_string()),
         "data should be shadowed by v-slot binding, got unused: {:?}",
         info.unused_import_bindings
     );
-    // List component is used
     assert!(
         !info.unused_import_bindings.contains(&"List".to_string()),
         "List component should be used"
@@ -1239,7 +1206,6 @@ type Props = { href?: string; content?: string };
         "TypedSnippet.svelte",
     );
 
-    // cn is imported but never used in the template
     assert!(
         info.unused_import_bindings.contains(&"cn".to_string()),
         "cn should be unused, got unused: {:?}",
@@ -1292,12 +1258,8 @@ fn sfc_vue_with_leading_bom_produces_same_script_line_numbers_as_without_bom() {
     );
 }
 
-// --- convention auto-import candidate capture (issue #704) ---
-
 #[test]
 fn captures_unresolved_pascal_tags_with_zero_imports() {
-    // A Nuxt page may reference only convention auto-imported components, with
-    // no `import` statement at all.
     let info = parse_sfc(
         r#"
 <script setup lang="ts"></script>
@@ -1315,7 +1277,6 @@ fn captures_unresolved_pascal_tags_with_zero_imports() {
         info.auto_import_candidates
             .contains(&"BaseButton".to_string())
     );
-    // Native lowercase HTML elements are never captured.
     assert!(!info.auto_import_candidates.contains(&"div".to_string()));
     assert!(!info.auto_import_candidates.contains(&"span".to_string()));
 }
@@ -1329,7 +1290,6 @@ fn captures_kebab_tag_as_pascal_candidate() {
 "#,
         "pages/about.vue",
     );
-    // Only the canonical Pascal form is captured, not the raw kebab or camel form.
     assert!(
         info.auto_import_candidates
             .contains(&"BaseButton".to_string())
@@ -1357,7 +1317,5 @@ import Card001 from './Card001.vue';
 "#,
         "pages/index.vue",
     );
-    // An explicitly imported tag is credited as a used import, not captured as
-    // an auto-import candidate.
     assert!(!info.auto_import_candidates.contains(&"Card001".to_string()));
 }

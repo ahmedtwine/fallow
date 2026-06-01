@@ -1,7 +1,5 @@
 use super::helpers::*;
 
-// ---- find_unresolved_imports tests ----
-
 fn unresolved_import(specifier: &str) -> ResolvedImport {
     ResolvedImport {
         info: ImportInfo {
@@ -655,7 +653,6 @@ fn unresolved_import_suppressed_by_inline_comment() {
     }];
 
     let config = test_config(PathBuf::from("/project"));
-    // Suppress unresolved imports on line 1 (byte offset 0 => line 1 without offsets)
     let supps = vec![Suppression {
         line: 1,
         comment_line: 0,
@@ -774,7 +771,6 @@ fn unresolved_import_file_level_suppression() {
     }];
 
     let config = test_config(PathBuf::from("/project"));
-    // File-level suppression (line 0)
     let supps = vec![Suppression {
         line: 0,
         comment_line: 1,
@@ -866,8 +862,6 @@ fn resolved_import_not_reported_as_unresolved() {
     );
 }
 
-// ---- Additional coverage: find_unresolved_imports with empty input ----
-
 #[test]
 fn no_resolved_modules_produces_no_unresolved() {
     let resolved_modules: Vec<ResolvedModule> = vec![];
@@ -890,8 +884,6 @@ fn no_resolved_modules_produces_no_unresolved() {
         "empty resolved_modules should produce no unresolved imports"
     );
 }
-
-// ---- Additional coverage: find_unresolved_imports suppression does not suppress wrong kind ----
 
 #[test]
 fn unresolved_import_not_suppressed_by_wrong_kind() {
@@ -925,7 +917,6 @@ fn unresolved_import_not_suppressed_by_wrong_kind() {
     }];
 
     let config = test_config(PathBuf::from("/project"));
-    // Suppress a DIFFERENT issue kind on line 1 -- should NOT suppress unresolved import
     let supps = vec![Suppression {
         line: 1,
         comment_line: 0,

@@ -23,7 +23,6 @@ define_plugin!(
     struct AngularPlugin => "angular",
     enablers: &["@angular/core", "ng-packagr"],
     entry_patterns: &[
-        // Standard Angular CLI layout
         "src/main.ts",
         "src/app/**/*.component.ts",
         "src/app/**/*.module.ts",
@@ -33,7 +32,6 @@ define_plugin!(
         "src/app/**/*.directive.ts",
         "src/app/**/*.resolver.ts",
         "src/app/**/*.interceptor.ts",
-        // Nx monorepo layout (apps and libs under arbitrary paths)
         "**/src/main.ts",
         "**/src/app/**/*.component.ts",
         "**/src/app/**/*.module.ts",
@@ -55,7 +53,6 @@ define_plugin!(
         ".angular.json",
         "src/polyfills.ts",
         "src/environments/**/*.ts",
-        // Angular 17+ standalone app bootstrap config (runtime, not tool config)
         "src/app/app.config.ts",
         "src/app/app.config.server.ts",
     ],
@@ -65,14 +62,9 @@ define_plugin!(
         "@angular/compiler-cli",
         "@angular/compiler",
         "@angular/build",
-        // ng-packagr is a build tool invoked via `ng build` / scripts, never
-        // imported in source; without this, a library that activates the plugin
-        // via `ng-packagr` would report `ng-packagr` itself as unused.
         "ng-packagr",
         "zone.js",
         "tslib",
-        // Peer dependencies of @angular/core that may not be directly imported
-        // but are required by the Angular framework at runtime
         "rxjs",
         "@angular/common",
         "@angular/platform-browser",
@@ -81,11 +73,6 @@ define_plugin!(
     resolve_config(config_path, source, _root) {
         let mut result = PluginResult::default();
 
-        // ng-package.json / ng-package.prod.json: ng-packagr library entry files.
-        // Treat `lib.entryFile` (default `src/public_api.ts`) as the package's
-        // public API entry point, resolved relative to the config directory.
-        // Nested secondary-entry-point configs in the package subtree (which the
-        // non-recursive config discovery never reaches) are scanned too.
         if is_ng_package_config(config_path) {
             for entry in resolve_ng_package_entries(config_path, source, _root) {
                 result.push_entry_pattern(entry);
@@ -93,8 +80,6 @@ define_plugin!(
             return result;
         }
 
-        // angular.json: projects.*.architect.build.options.styles -> entry patterns
-        // These are CSS/SCSS files loaded by the Angular CLI build system.
         let styles = config_parser::extract_config_object_nested_string_or_array(
             source,
             config_path,
@@ -106,7 +91,6 @@ define_plugin!(
             result.push_entry_pattern(path.to_string());
         }
 
-        // angular.json: projects.*.architect.build.options.scripts -> entry patterns
         let scripts = config_parser::extract_config_object_nested_string_or_array(
             source,
             config_path,
@@ -118,8 +102,6 @@ define_plugin!(
             result.push_entry_pattern(path.to_string());
         }
 
-        // angular.json: projects.*.architect.build.options.main -> entry patterns
-        // Also check "browser" -- newer Angular CLI uses "browser" instead of "main"
         for field in &["main", "browser"] {
             let mains = config_parser::extract_config_object_nested_strings(
                 source,
@@ -133,8 +115,6 @@ define_plugin!(
             }
         }
 
-        // angular.json: projects.*.architect.build.options.polyfills -> entry patterns
-        // Can be a string or array
         let polyfills = config_parser::extract_config_object_nested_string_or_array(
             source,
             config_path,
@@ -143,15 +123,11 @@ define_plugin!(
         );
         for polyfill in &polyfills {
             let trimmed = polyfill.trim_start_matches("./");
-            // Skip npm package references like "zone.js" -- only add file paths.
-            // File paths contain "/" (directory separators) or start with "src/", etc.
-            // Bare package names like "zone.js" have no "/" and shouldn't be entry points.
             if trimmed.contains('/') {
                 result.push_entry_pattern(trimmed.to_string());
             }
         }
 
-        // angular.json: projects.*.architect.test.options.main -> entry patterns
         let test_mains = config_parser::extract_config_object_nested_strings(
             source,
             config_path,
@@ -163,12 +139,6 @@ define_plugin!(
             result.push_entry_pattern(path.to_string());
         }
 
-        // angular.json: projects.*.architect.build.options.stylePreprocessorOptions.includePaths
-        // Angular CLI resolves bare SCSS imports (`@import 'variables'`) by
-        // searching these directories. Without threading them into fallow's
-        // SCSS resolver, the imports become false-positive unresolved imports.
-        // Paths are resolved relative to the workspace/project root per the
-        // Angular workspace configuration reference. See issue #103.
         let include_paths = config_parser::extract_config_object_nested_string_or_array(
             source,
             config_path,
@@ -236,11 +206,6 @@ fn resolve_ng_package_entries(config_path: &Path, source: &str, root: &Path) -> 
         entries.push(entry);
     }
 
-    // Secondary entry points live in nested `ng-package.json` files in
-    // subdirectories that the non-recursive config discovery never reaches, so
-    // scan the package subtree ourselves. Same-directory sibling configs (e.g.
-    // a `ng-package.prod.json` next to the primary) are left to discovery,
-    // which surfaces them as their own `resolve_config` calls.
     if let Some(base) = config_path.parent() {
         let mut nested = Vec::new();
         collect_nested_ng_package_configs(base, 0, &mut nested);
@@ -354,9 +319,6 @@ mod tests {
 
     #[test]
     fn resolve_config_extracts_styles_object_form() {
-        // Angular CLI schema: `styles` entries can be `{ input, bundleName, inject }`.
-        // Used for vendor stylesheets that must opt out of auto-injection.
-        // Previously silently dropped. See #126.
         let source = r#"{
             "projects": {
                 "my-app": {
@@ -465,9 +427,6 @@ mod tests {
 
     #[test]
     fn resolve_config_extracts_scss_include_paths() {
-        // Issue #103: stylePreprocessorOptions.includePaths must be threaded
-        // through to the SCSS resolver. On-disk existence is checked in the
-        // plugin so the test creates the directory.
         let tmp = tempfile::tempdir().expect("create temp dir");
         let root = tmp.path();
         std::fs::create_dir_all(root.join("src/styles")).unwrap();
@@ -501,8 +460,6 @@ mod tests {
 
     #[test]
     fn resolve_config_scss_include_paths_skips_missing_dirs() {
-        // Missing directories are filtered out so they don't trigger pointless
-        // filesystem lookups during SCSS resolution.
         let tmp = tempfile::tempdir().expect("create temp dir");
         let root = tmp.path();
         std::fs::create_dir_all(root.join("src/styles")).unwrap();
@@ -530,8 +487,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_entry_file() {
-        // ng-package.json lib.entryFile is credited as an entry point, resolved
-        // relative to the config directory.
         let source = r#"{
             "$schema": "./node_modules/ng-packagr/ng-package.schema.json",
             "dest": "./dist",
@@ -550,9 +505,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_entry_file_nested_dir() {
-        // In a monorepo, the entry file resolves relative to the directory
-        // containing ng-package.json (workspace-package root), not the project
-        // root. The registry prefixes the pattern back with the workspace prefix.
         let source = r#"{
             "lib": { "entryFile": "src/public-api.ts" }
         }"#;
@@ -570,7 +522,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_entry_file_default_when_omitted() {
-        // ng-packagr defaults lib.entryFile to src/public_api.ts (underscore).
         let source = r#"{ "dest": "./dist", "lib": {} }"#;
         let plugin = AngularPlugin;
         let result = plugin.resolve_config(
@@ -583,7 +534,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_default_when_lib_absent() {
-        // No `lib` key at all still falls back to the documented default.
         let source = r#"{ "$schema": "x", "dest": "./dist" }"#;
         let plugin = AngularPlugin;
         let result = plugin.resolve_config(
@@ -596,7 +546,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_prod_variant() {
-        // ng-package.prod.json is handled identically.
         let source = r#"{ "lib": { "entryFile": "src/prod-api.ts" } }"#;
         let plugin = AngularPlugin;
         let result = plugin.resolve_config(
@@ -609,7 +558,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_empty_entry_file_uses_default() {
-        // An explicitly empty entryFile is treated as omitted.
         let source = r#"{ "lib": { "entryFile": "" } }"#;
         let plugin = AngularPlugin;
         let result = plugin.resolve_config(
@@ -622,7 +570,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_malformed_does_not_panic() {
-        // Malformed JSON yields no entry pattern and does not panic.
         let source = "{ this is not valid json";
         let plugin = AngularPlugin;
         let result = plugin.resolve_config(
@@ -630,15 +577,11 @@ mod tests {
             source,
             Path::new("/project"),
         );
-        // The default fallback still applies since the named config matched; a
-        // malformed body simply means entryFile extraction returns None.
         assert!(has_entry_pattern(&result, "src/public_api.ts"));
     }
 
     #[test]
     fn resolve_config_ng_package_collects_nested_secondary_entries() {
-        // ng-packagr secondary entry points live in nested ng-package.json
-        // files; each entryFile resolves relative to its own directory.
         let tmp = tempfile::tempdir().expect("temp dir");
         let root = tmp.path();
         std::fs::create_dir_all(root.join("client")).unwrap();
@@ -653,8 +596,6 @@ mod tests {
             r#"{ "lib": { "entryFile": "src/public_api.ts" } }"#,
         )
         .unwrap();
-        // Secondary entry omitting entryFile falls back to the default
-        // (ng-packagr's `src/public_api.ts`, underscore).
         std::fs::write(root.join("server/ng-package.json"), r"{}").unwrap();
 
         let source = std::fs::read_to_string(root.join("ng-package.json")).unwrap();
@@ -668,7 +609,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_skips_node_modules_nested_configs() {
-        // A vendored ng-package.json inside node_modules must not be collected.
         let tmp = tempfile::tempdir().expect("temp dir");
         let root = tmp.path();
         std::fs::create_dir_all(root.join("node_modules/some-lib")).unwrap();
@@ -697,9 +637,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_same_dir_sibling_left_to_discovery() {
-        // A same-directory ng-package.prod.json is surfaced by config discovery
-        // as its own resolve_config call, so the primary's subtree scan (which
-        // only collects depth >= 1) must not also emit its entry here.
         let tmp = tempfile::tempdir().expect("temp dir");
         let root = tmp.path();
         std::fs::write(
@@ -723,8 +660,6 @@ mod tests {
 
     #[test]
     fn resolve_config_ng_package_does_not_run_angular_json_extractors() {
-        // ng-package.json must not pick up angular.json `projects.*` style/main
-        // extraction; only the entry-file pattern is emitted.
         let source = r#"{ "lib": { "entryFile": "src/public-api.ts" } }"#;
         let plugin = AngularPlugin;
         let result = plugin.resolve_config(
@@ -754,9 +689,7 @@ mod tests {
         let plugin = AngularPlugin;
         let result =
             plugin.resolve_config(Path::new("angular.json"), source, Path::new("/project"));
-        // zone.js is a package, not a file — should be skipped
         assert!(!has_entry_pattern(&result, "zone.js"));
-        // src/polyfills.ts is a file path — should be included
         assert!(has_entry_pattern(&result, "src/polyfills.ts"));
     }
 
@@ -764,10 +697,6 @@ mod tests {
     fn ng_packagr_is_enabler_and_tooling_dependency() {
         let plugin = AngularPlugin;
         assert!(plugin.enablers().contains(&"ng-packagr"));
-        // ng-packagr is a build tool invoked via `ng build` / scripts, never
-        // imported in source. It must be credited as a tooling dependency so a
-        // library that activates the plugin via `ng-packagr` does not then
-        // report `ng-packagr` itself as an unused dependency.
         assert!(plugin.tooling_dependencies().contains(&"ng-packagr"));
     }
 }

@@ -16,9 +16,6 @@ fn analysis_never_runs_package_json_lifecycle_scripts() {
     let root = dir.path();
     let sentinel = root.join("LIFECYCLE_SCRIPT_RAN");
 
-    // A package.json whose preinstall / postinstall / prepare scripts would each
-    // write the sentinel file if a package manager ever executed them. fallow
-    // must never run these.
     fs::write(
         root.join("package.json"),
         r#"{
@@ -35,8 +32,6 @@ fn analysis_never_runs_package_json_lifecycle_scripts() {
     )
     .expect("write package.json");
 
-    // index.ts is the package `main` (an entry point), so it reaches used.ts;
-    // orphan.ts is reachable from no entry point.
     fs::write(
         root.join("index.ts"),
         "import { used } from './used';\nconsole.log(used);\n",
@@ -48,19 +43,12 @@ fn analysis_never_runs_package_json_lifecycle_scripts() {
     let config = create_config(root.to_path_buf());
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Load-bearing assertion: fallow never executed a lifecycle script.
     assert!(
         !sentinel.exists(),
         "fallow executed a package.json lifecycle script during analysis: the sentinel \
          file was created. Static analysis must never run the analyzed project's code.",
     );
 
-    // Non-vacuity: prove the full pipeline (discovery, parse, graph, reachability)
-    // actually ran over this project, so the negative assertion above is meaningful.
-    // With index.ts as the entry point, used.ts is reachable (NOT unused) and
-    // orphan.ts is not (unused). The used.ts assertion specifically requires the
-    // import graph to have been traversed: if BFS were skipped, used.ts would also
-    // appear unused and the assertion would fail.
     let unused_files: Vec<String> = results
         .unused_files
         .iter()

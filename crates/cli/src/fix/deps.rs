@@ -6,18 +6,10 @@ use fallow_core::results::UnusedDependency;
 
 use super::plan::{CapturedHashes, FixPlan};
 
-/// Apply dependency fixes to package.json files (root and workspace),
-/// returning JSON fix entries.
+/// Apply dependency fixes to package.json files and return JSON fix entries.
 ///
-/// Stages every per-file rewrite on `plan`; the orchestrator commits the
-/// plan after all fixers run, so a single stage failure in any fixer
-/// leaves the project untouched. `hashes` is accepted for signature
-/// uniformity across fixers; package.json files are NOT in the captured
-/// hash map (extract does not parse JSON), so the per-file hash check is
-/// a no-op for the dep fixer. The dep modify path re-reads + reparses
-/// each package.json before stage time, which is the natural safety net
-/// for this file kind (key lookup is self-validating; missing keys are a
-/// no-op fix).
+/// `hashes` is accepted for signature uniformity; `package.json` files are
+/// re-read and reparsed here, so the hash check is a no-op.
 pub(super) fn apply_dependency_fixes(
     root: &Path,
     results: &fallow_core::results::AnalysisResults,
@@ -36,7 +28,6 @@ pub(super) fn apply_dependency_fixes(
         return;
     }
 
-    // Group all unused deps by their package.json path so we can batch edits per file
     let mut deps_by_pkg: FxHashMap<&Path, Vec<(&str, &str)>> = FxHashMap::default();
     for dep in &results.unused_dependencies {
         queue_dependency_removal(&mut deps_by_pkg, &dep.dep, "dependencies");
@@ -95,11 +86,6 @@ pub(super) fn apply_dependency_fixes(
                         plan.stage(pkg_path.to_path_buf(), pkg_content.into_bytes());
                     }
                     Err(e) => {
-                        // Serialization failure is rare: package.json was
-                        // already parsed once into the same Value shape.
-                        // Surface as a per-path failure entry so the
-                        // orchestrator can flag it; we do NOT stage so
-                        // the commit step never sees a half-built buffer.
                         eprintln!("Error: failed to serialize {}: {e}", pkg_path.display());
                         for entry in fixes.iter_mut() {
                             let matches = entry
@@ -134,11 +120,6 @@ fn queue_dependency_removal<'a>(
 mod tests {
     use super::*;
 
-    /// Thin wrapper preserving the pre-#454 test API surface: builds a
-    /// FixPlan + CapturedHashes around `apply_dependency_fixes` and
-    /// commits, returning whether the commit produced any per-path
-    /// failure. Tests that assert no error path on the dry-run / no-op
-    /// case keep working unchanged.
     fn run_fix_deps(
         root: &Path,
         results: &fallow_core::results::AnalysisResults,
@@ -178,7 +159,6 @@ mod tests {
         let mut fixes = Vec::new();
         run_fix_deps(root, &results, OutputFormat::Json, true, &mut fixes);
 
-        // package.json should not change
         assert_eq!(std::fs::read_to_string(&pkg_path).unwrap(), original);
         assert_eq!(fixes.len(), 1);
         assert_eq!(fixes[0]["type"], "remove_dependency");
@@ -428,7 +408,6 @@ mod tests {
         let had_error = run_fix_deps(root, &results, OutputFormat::Human, false, &mut fixes);
 
         assert!(!had_error);
-        // No fix was applied (dep not found)
         assert!(fixes.is_empty());
     }
 
@@ -454,7 +433,6 @@ mod tests {
         let mut fixes = Vec::new();
         run_fix_deps(root, &results, OutputFormat::Human, true, &mut fixes);
 
-        // File should not be modified
         assert_eq!(std::fs::read_to_string(&pkg_path).unwrap(), original);
         assert_eq!(fixes.len(), 1);
         assert!(fixes[0].get("applied").is_none());
@@ -481,7 +459,6 @@ mod tests {
         let mut fixes = Vec::new();
         let had_error = run_fix_deps(root, &results, OutputFormat::Human, false, &mut fixes);
 
-        // Invalid JSON: the let-chain fails, so this path is just skipped
         assert!(!had_error);
         assert!(fixes.is_empty());
     }
@@ -533,7 +510,6 @@ mod tests {
         let had_error = run_fix_deps(root, &results, OutputFormat::Human, false, &mut fixes);
 
         assert!(!had_error);
-        // No dependencies section -> no fix
         assert!(fixes.is_empty());
     }
 

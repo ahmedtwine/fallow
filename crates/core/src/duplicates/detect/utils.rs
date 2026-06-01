@@ -17,7 +17,6 @@ pub(super) fn build_clone_instance_fast(
         return None;
     }
 
-    // Map from hashed token indices back to source token spans.
     let first_hashed = &tokens[token_offset];
     let last_hashed = &tokens[token_offset + token_length - 1];
 
@@ -27,8 +26,6 @@ pub(super) fn build_clone_instance_fast(
     let start_byte = first_source.span.start as usize;
     let end_byte = last_source.span.end as usize;
 
-    // Guard against inverted spans that can occur when normalization reorders
-    // token original_index values for very small windows.
     if start_byte > end_byte {
         return None;
     }
@@ -37,7 +34,6 @@ pub(super) fn build_clone_instance_fast(
     let (start_line, start_col) = byte_offset_to_line_col_fast(source, start_byte, line_table);
     let (end_line, end_col) = byte_offset_to_line_col_fast(source, end_byte, line_table);
 
-    // Extract the fragment, snapping to valid char boundaries.
     let fragment = if end_byte <= source.len() {
         let mut sb = start_byte;
         while sb > 0 && !source.is_char_boundary(sb) {
@@ -70,11 +66,9 @@ pub(super) fn byte_offset_to_line_col_fast(
     line_table: &[usize],
 ) -> (usize, usize) {
     let mut offset = byte_offset.min(source.len());
-    // Snap to a valid char boundary (byte_offset may land inside a multi-byte char)
     while offset > 0 && !source.is_char_boundary(offset) {
         offset -= 1;
     }
-    // Binary search: find the number of newlines before this offset.
     let line_idx = line_table.partition_point(|&nl_pos| nl_pos < offset);
     let line = line_idx + 1; // 1-based
     let line_start = if line_idx == 0 {

@@ -224,7 +224,6 @@ fn find_duplicates_inner(
         })
         .unwrap_or_default();
 
-    // Resolve normalization: mode defaults + user overrides
     let normalization =
         fallow_config::ResolvedNormalization::resolve(config.mode, &config.normalization);
 
@@ -240,11 +239,9 @@ fn find_duplicates_inner(
     let cache_root = cache_root.filter(|_| files.len() >= config.min_corpus_size_for_token_cache);
     let token_cache = cache_root.map(TokenCache::load);
 
-    // Step 1 & 2: Tokenize and normalize all files in parallel, also parse suppressions
     let mut file_data: Vec<TokenizedFile> = files
         .par_iter()
         .filter_map(|file| {
-            // Apply extra ignore patterns
             let relative = file.path.strip_prefix(root).unwrap_or(&file.path);
             if let Some(ref ignores) = extra_ignores {
                 if let Some(index) = ignores.default_match_index(relative) {
@@ -276,7 +273,6 @@ fn find_duplicates_inner(
                     return None;
                 }
 
-                // Tokenize (with optional type stripping for cross-language detection)
                 let file_tokens = if strip_types {
                     tokenize_file_cross_language(&file.path, &source, true, skip_imports)
                 } else {
@@ -286,7 +282,6 @@ fn find_duplicates_inner(
                     return None;
                 }
 
-                // Normalize and hash using resolved normalization flags
                 let hashed = normalize_and_hash_resolved(&file_tokens.tokens, normalization);
                 let entry = TokenCacheEntry {
                     hashed_tokens: hashed,
@@ -353,21 +348,18 @@ fn find_duplicates_inner(
         shingle_filter::filter_to_focus_candidates(&mut file_data, focus_files, config.min_tokens);
     }
 
-    // Collect per-file suppressions for line-level filtering
     let suppressions_by_file: FxHashMap<PathBuf, Vec<Suppression>> = file_data
         .iter()
         .filter(|file| !file.suppressions.is_empty())
         .map(|file| (file.path.clone(), file.suppressions.clone()))
         .collect();
 
-    // Strip suppressions from the data passed to the detector
     let detector_data: Vec<(PathBuf, Vec<normalize::HashedToken>, tokenize::FileTokens)> =
         file_data
             .into_iter()
             .map(|file| (file.path, file.hashed_tokens, file.file_tokens))
             .collect();
 
-    // Step 3 & 4: Detect clones
     let detector = CloneDetector::new(config.min_tokens, config.min_lines, config.skip_local);
     let mut report = if let Some(focus_files) = focus_files {
         detector.detect_touching_files(detector_data, focus_files)
@@ -375,29 +367,20 @@ fn find_duplicates_inner(
         detector.detect(detector_data)
     };
 
-    // Step 5: Apply line-level suppressions FIRST, so the post-suppression
-    // instance count is what the min-occurrences filter evaluates. Otherwise
-    // a 3-instance clone group whose third instance is line-suppressed would
-    // survive `--min-occurrences 3` and show up as a 2-instance group.
     if !suppressions_by_file.is_empty() {
         apply_line_suppressions(&mut report, &suppressions_by_file);
     }
 
-    // Step 5b: Apply the min-occurrences filter on the post-suppression set.
     apply_min_occurrences_filter(&mut report, config.min_occurrences);
 
     let default_ignore_skips =
         build_default_ignore_skips(extra_ignores.as_ref(), &default_skip_counts);
 
-    // Step 6: Group into families with refactoring suggestions
     report.clone_families = families::group_into_families(&report.clone_groups, root);
 
-    // Step 7: Detect mirrored directory trees
     report.mirrored_directories =
         families::detect_mirrored_directories(&report.clone_families, root);
 
-    // Sort all result arrays for deterministic output ordering.
-    // Parallel tokenization (par_iter) doesn't guarantee collection order.
     report.sort();
 
     DuplicationRun {
@@ -449,7 +432,6 @@ fn apply_line_suppressions(
     report.clone_groups.retain_mut(|group| {
         group.instances.retain(|instance| {
             if let Some(supps) = suppressions_by_file.get(&instance.file) {
-                // Check if any line in the instance range is suppressed
                 for line in instance.start_line..=instance.end_line {
                     if suppress::is_suppressed(supps, line as u32, IssueKind::CodeDuplication) {
                         return false;
@@ -458,7 +440,6 @@ fn apply_line_suppressions(
             }
             true
         });
-        // Keep group only if it still has 2+ instances
         group.instances.len() >= 2
     });
 }
@@ -490,8 +471,6 @@ fn build_ignore_set(config: &DuplicatesConfig) -> Option<IgnoreSet> {
         }
     }
 
-    // User patterns were validated at config load time
-    // (see FallowConfig::validate_user_globs).
     for pattern in &config.ignore {
         builder.add(
             Glob::new(pattern)
@@ -587,7 +566,6 @@ mod tests {
 
     #[test]
     fn find_duplicates_with_real_files() {
-        // Create a temp directory with duplicate files
         let dir = tempfile::tempdir().expect("create temp dir");
         let src_dir = dir.path().join("src");
         std::fs::create_dir_all(&src_dir).expect("create src dir");
@@ -647,7 +625,6 @@ export function validateInput(data: string): boolean {
         );
         assert!(report.stats.files_with_clones >= 2);
 
-        // Should also have clone families
         assert!(
             !report.clone_families.is_empty(),
             "Should group clones into families"
@@ -832,7 +809,6 @@ export function processData(input: string): string {
         };
 
         let report = find_duplicates(dir.path(), &files, &config);
-        // With only 2 files and one suppressed, there should be no clones
         assert!(
             report.clone_groups.is_empty(),
             "File-wide suppression should exclude file from duplication analysis"
@@ -845,8 +821,6 @@ export function processData(input: string): string {
         let src_dir = dir.path().join("src");
         std::fs::create_dir_all(&src_dir).expect("create src dir");
 
-        // Block A: only appears in 2 files (a pair).
-        // Block B: appears in 3 files (a triple).
         let block_a = r#"
 export function blockA(input: string): string {
     const trimmed = input.trim();
@@ -912,7 +886,6 @@ export function blockB(value: number): number {
             },
         ];
 
-        // Baseline: minOccurrences = 2 (default). Both groups reported.
         let default_config = DuplicatesConfig {
             min_tokens: 10,
             min_lines: 2,
@@ -930,7 +903,6 @@ export function blockB(value: number): number {
         );
         let baseline_pct = baseline.stats.duplication_percentage;
 
-        // Raised: minOccurrences = 3. Only the triple survives.
         let raised_config = DuplicatesConfig {
             min_tokens: 10,
             min_lines: 2,
@@ -952,8 +924,6 @@ export function blockB(value: number): number {
             report.stats.clone_groups_below_min_occurrences, 1,
             "the hidden 2-instance group must be counted"
         );
-        // `clone_groups` and `clone_instances` reflect the post-filter set so
-        // consumers iterating `clone_groups[]` see a matching count.
         assert_eq!(
             report.stats.clone_groups, 1,
             "stats.clone_groups must match the post-filter array length"
@@ -962,8 +932,6 @@ export function blockB(value: number): number {
             report.stats.clone_instances, 3,
             "stats.clone_instances must match the surviving instance total"
         );
-        // `duplication_percentage` stays pre-filter so threshold gates and
-        // trend lines don't shift when minOccurrences changes.
         assert!(
             (report.stats.duplication_percentage - baseline_pct).abs() < f64::EPSILON,
             "duplication_percentage should not shift when minOccurrences changes"
@@ -972,11 +940,6 @@ export function blockB(value: number): number {
 
     #[test]
     fn min_occurrences_evaluates_after_line_suppressions() {
-        // Three files share a clone. The third file suppresses the clone with
-        // an inline comment. After suppression the group has 2 instances.
-        // With minOccurrences=3 the group must be hidden, NOT reported as a
-        // 2-instance clone. The filter evaluates the post-suppression count,
-        // not the pre-suppression detector output.
         let dir = tempfile::tempdir().expect("create temp dir");
         let src_dir = dir.path().join("src");
         std::fs::create_dir_all(&src_dir).expect("create src dir");

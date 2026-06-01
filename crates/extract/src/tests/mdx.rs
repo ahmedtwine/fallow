@@ -139,7 +139,6 @@ fn mdx_ignores_imports_inside_code_fences() {
 # Example
 
 ```ts
-// file: exampleSlice.ts
 import exampleSliceReducer from './exampleSlice'
 import { store } from './store'
 ```

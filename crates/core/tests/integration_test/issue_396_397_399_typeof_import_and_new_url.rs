@@ -45,8 +45,6 @@ fn unresolved_specifiers(results: &fallow_types::results::AnalysisResults) -> Ve
         .collect()
 }
 
-// ── Issue #396 ───────────────────────────────────────────────────────
-
 #[test]
 fn auto_imports_dts_typeof_import_traces_target_file() {
     let root = fixture_path("issue-396-auto-imports");
@@ -61,8 +59,6 @@ fn auto_imports_dts_typeof_import_traces_target_file() {
     );
 }
 
-// ── Issue #397 ───────────────────────────────────────────────────────
-
 #[test]
 fn components_dts_typeof_import_traces_target_file() {
     let root = fixture_path("issue-397-vue-components");
@@ -76,8 +72,6 @@ fn components_dts_typeof_import_traces_target_file() {
          should not be unused. Got: {names:?}"
     );
 }
-
-// ── Issue #399 ───────────────────────────────────────────────────────
 
 #[test]
 fn new_url_dot_slash_does_not_produce_unresolved_import() {

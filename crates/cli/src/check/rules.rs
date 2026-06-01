@@ -1,7 +1,5 @@
 use fallow_config::{ResolvedConfig, RulesConfig, Severity};
 
-// ── Rules helpers ────────────────────────────────────────────────
-
 /// Remove issues whose effective severity is `Off` from the results.
 ///
 /// When overrides are configured, per-file rule resolution is used for
@@ -12,7 +10,6 @@ pub fn apply_rules(results: &mut fallow_core::results::AnalysisResults, config: 
     let rules = &config.rules;
     let has_overrides = !config.overrides.is_empty();
 
-    // File-scoped issue types: filter per-file when overrides exist
     if has_overrides {
         results
             .unused_files
@@ -106,7 +103,6 @@ pub fn apply_rules(results: &mut fallow_core::results::AnalysisResults, config: 
         }
     }
 
-    // Non-file-scoped issue types: always use base rules
     if rules.unused_dependencies == Severity::Off {
         results.unused_dependencies.clear();
     }
@@ -166,7 +162,6 @@ pub fn has_error_severity_issues(
 ) -> bool {
     let has_overrides = config.is_some_and(|c| !c.overrides.is_empty());
 
-    // File-scoped issue types: check per-file when overrides exist
     let file_scoped_errors =
         if has_overrides {
             let config = config.unwrap();
@@ -233,7 +228,6 @@ pub fn has_error_severity_issues(
                     && !results.empty_catalog_groups.is_empty())
         };
 
-    // Non-file-scoped issue types: always use base rules
     file_scoped_errors
         || (rules.unused_dependencies == Severity::Error && !results.unused_dependencies.is_empty())
         || (rules.unused_dev_dependencies == Severity::Error
@@ -250,13 +244,6 @@ pub fn has_error_severity_issues(
         || (!has_overrides
             && rules.circular_dependencies == Severity::Error
             && !results.circular_dependencies.is_empty())
-        // Note: re-export-cycle is intentionally NOT guarded by `!has_overrides`.
-        // Per-file `overrides.rules.re-export-cycle` is a no-op (the cycle spans
-        // multiple files; see `crates/config/src/config/resolution.rs` load-time
-        // warn). The file-scoped block above does not consult re_export_cycle,
-        // so adding the guard would silently mute re_export_cycle errors any
-        // time overrides exist for an unrelated rule. Keep the project-wide
-        // check unconditional.
         || (rules.re_export_cycle == Severity::Error && !results.re_export_cycles.is_empty())
         || (rules.boundary_violation == Severity::Error && !results.boundary_violations.is_empty())
         || (rules.unused_catalog_entries == Severity::Error
@@ -354,8 +341,6 @@ mod tests {
     use fallow_core::extract::MemberKind;
     use fallow_core::results::*;
     use std::path::PathBuf;
-
-    // ── Helper: build populated AnalysisResults ──────────────────
 
     fn make_results() -> AnalysisResults {
         let mut r = AnalysisResults::default();
@@ -502,8 +487,6 @@ mod tests {
         )
     }
 
-    // ── apply_rules ──────────────────────────────────────────────
-
     #[test]
     fn apply_rules_default_error_preserves_all() {
         let mut results = make_results();
@@ -523,7 +506,6 @@ mod tests {
         let config = config_with_rules(rules);
         apply_rules(&mut results, &config);
         assert!(results.unused_files.is_empty());
-        // Other types are preserved
         assert!(!results.unused_exports.is_empty());
     }
 
@@ -576,7 +558,6 @@ mod tests {
 
     #[test]
     fn apply_rules_off_each_type_individually() {
-        // Verify every rule field maps to its corresponding results field
         let field_setters: Vec<(RuleFieldSetter, ResultFieldCheck)> = vec![
             (
                 |r| r.unused_files = Severity::Off,
@@ -636,8 +617,6 @@ mod tests {
             );
         }
     }
-
-    // ── has_error_severity_issues ────────────────────────────────
 
     #[test]
     fn empty_results_no_error_issues() {
@@ -721,10 +700,8 @@ mod tests {
             unused_dependency_overrides: Severity::Warn,
             misconfigured_dependency_overrides: Severity::Error,
         };
-        // Only unused_files present, but set to Warn — should not trigger
         assert!(!has_error_severity_issues(&results, &rules, None));
 
-        // Promote unused_files to Error — should now trigger
         rules.unused_files = Severity::Error;
         assert!(has_error_severity_issues(&results, &rules, None));
     }
@@ -745,11 +722,8 @@ mod tests {
             unresolved_imports: Severity::Off,
             ..RulesConfig::default()
         };
-        // Other fields are default (Error) but have no issues
         assert!(!has_error_severity_issues(&results, &rules, None));
     }
-
-    // ── Override-aware tests ─────────────────────────────────────
 
     /// Build a ResolvedConfig with overrides that turn off unused_exports for test files.
     fn config_with_test_override() -> ResolvedConfig {
@@ -869,7 +843,6 @@ mod tests {
     #[test]
     fn apply_rules_with_override_filters_matching_files() {
         let mut results = AnalysisResults::default();
-        // Test file export — should be removed by override
         results
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
@@ -881,7 +854,6 @@ mod tests {
                 span_start: 0,
                 is_re_export: false,
             }));
-        // Non-test file export — should be preserved
         results
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
@@ -913,7 +885,6 @@ mod tests {
         let config = config_with_test_override();
         apply_rules(&mut results, &config);
 
-        // Override only affects unused_exports, unused_files should be untouched
         assert_eq!(results.unused_files.len(), 1);
     }
 
@@ -948,7 +919,6 @@ mod tests {
     #[test]
     fn has_error_with_override_per_file_resolution() {
         let mut results = AnalysisResults::default();
-        // Only a test file has unused exports — override turns that off
         results
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
@@ -964,7 +934,6 @@ mod tests {
         let config = config_with_test_override();
         let rules = &config.rules;
 
-        // With overrides: the test file's effective severity is Off, so no Error issues
         assert!(
             !has_error_severity_issues(&results, rules, Some(&config)),
             "test file override should suppress error"
@@ -974,7 +943,6 @@ mod tests {
     #[test]
     fn has_error_with_override_non_matching_file_still_error() {
         let mut results = AnalysisResults::default();
-        // Non-test file — override doesn't match, base rules (Error) apply
         results
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
@@ -1029,8 +997,6 @@ mod tests {
             "a cycle touching any Error-severity file should still fail"
         );
     }
-
-    // ── promote_warns_to_errors ─────────────────────────────────────
 
     #[test]
     fn promote_warns_to_errors_promotes_all_warns() {
@@ -1113,7 +1079,6 @@ mod tests {
         };
         promote_warns_to_errors(&mut rules);
 
-        // Off should remain Off
         assert_eq!(rules.unused_files, Severity::Off);
         assert_eq!(rules.unused_exports, Severity::Off);
         assert_eq!(rules.unused_types, Severity::Off);
@@ -1127,7 +1092,6 @@ mod tests {
         let mut rules = RulesConfig::default(); // all Error
         promote_warns_to_errors(&mut rules);
 
-        // Error should remain Error
         assert_eq!(rules.unused_files, Severity::Error);
         assert_eq!(rules.unused_exports, Severity::Error);
     }
@@ -1146,8 +1110,6 @@ mod tests {
         assert_eq!(rules.unused_exports, Severity::Error);
         assert_eq!(rules.unused_types, Severity::Off);
     }
-
-    // ── has_error_severity_issues: non-file-scoped types ────────────
 
     #[test]
     fn has_error_circular_deps_detected() {
@@ -1192,7 +1154,6 @@ mod tests {
             re_export_cycle: Severity::Warn,
             ..RulesConfig::default()
         };
-        // No other issues, circular is Warn -> no error
         assert!(!has_error_severity_issues(&results, &rules, None));
     }
 
@@ -1211,7 +1172,6 @@ mod tests {
                 },
             ));
         let rules = RulesConfig::default();
-        // unused_optional_dependencies defaults to Warn, so no error
         assert!(!has_error_severity_issues(&results, &rules, None));
     }
 
@@ -1249,7 +1209,6 @@ mod tests {
                 },
             ));
         let rules = RulesConfig::default();
-        // type_only_dependencies defaults to Warn, not Error
         assert!(!has_error_severity_issues(&results, &rules, None));
     }
 

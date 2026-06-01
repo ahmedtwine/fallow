@@ -174,9 +174,6 @@ fn build_group(
         .filter(|l| paths.contains(&l.path))
         .cloned()
         .collect();
-    // `group_targets` flows straight into `RefactoringTargetFinding::with_actions`
-    // below; no intermediate collect needed.
-
     let total_files = paths.len();
     let (mut vital_signs, mut counts) = compute_vital_signs_and_counts(
         score_output,

@@ -12,7 +12,6 @@ fn three_level_star_chain_used_exports_propagate() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // alpha and beta are imported through barrel-a -> barrel-b -> barrel-c -> source
     assert!(
         !unused_export_names.contains(&"alpha"),
         "alpha should propagate through 3-level star chain, found: {unused_export_names:?}"
@@ -35,7 +34,6 @@ fn three_level_star_chain_unused_exports_detected() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // gamma and delta are star-re-exported but never imported by index.ts
     assert!(
         unused_export_names.contains(&"gamma"),
         "gamma should be unused (not imported), found: {unused_export_names:?}"
@@ -52,7 +50,6 @@ fn three_level_star_chain_no_unused_files() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // All files are part of the chain, none should be unused
     assert!(
         results.unused_files.is_empty(),
         "no files should be unused in re-export chain fixture, found: {:?}",

@@ -10,9 +10,6 @@ fn detects_unused_default_and_named_catalog_entries() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // The default catalog has: react (used), is-even (unused), hardcoded-pkg (unused as catalog).
-    // The react17 named catalog has: react, react-dom (both unused). The legacy catalog has
-    // is-odd (used via catalog:legacy).
     let mut expected: FxHashSet<(&str, &str)> = FxHashSet::default();
     for entry in [
         ("default", "is-even"),
@@ -29,8 +26,6 @@ fn detects_unused_default_and_named_catalog_entries() {
         .collect();
     assert_eq!(actual, expected, "unexpected catalog findings: {actual:?}");
 
-    // The "react" entry in the default catalog IS referenced ("catalog:" and
-    // "catalog:default" both resolve to default), so it must NOT appear.
     assert!(
         !results
             .unused_catalog_entries
@@ -39,7 +34,6 @@ fn detects_unused_default_and_named_catalog_entries() {
         "default catalog 'react' is referenced by both consumers and must not be flagged"
     );
 
-    // The legacy catalog is fully consumed (is-odd).
     assert!(
         !results
             .unused_catalog_entries
@@ -81,7 +75,6 @@ fn catalog_entries_are_sorted_default_first() {
         .iter()
         .map(|e| e.entry.catalog_name.as_str())
         .collect();
-    // Default catalog entries must precede named-catalog entries.
     let first_named = names.iter().position(|n| *n != "default");
     if let Some(idx) = first_named {
         assert!(

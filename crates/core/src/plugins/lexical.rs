@@ -67,12 +67,6 @@ impl Plugin for LexicalPlugin {
     }
 
     fn used_class_member_rules(&self) -> Vec<UsedClassMemberRule> {
-        // `isInline` is an inline-vs-block layout hook on ElementNode and
-        // DecoratorNode only; TextNode is inherently inline and has no
-        // isInline(). `decorate` is a DecoratorNode-specific render hook. Both
-        // are layered on top of the shared lifecycle set per base so a
-        // genuinely-dead isInline / decorate on the wrong node kind still
-        // surfaces.
         let element_members: Vec<&str> = LEXICAL_NODE_LIFECYCLE_MEMBERS
             .iter()
             .copied()

@@ -126,8 +126,6 @@ mod tests {
 
     #[test]
     fn claims_no_config_patterns() {
-        // config.toml is not a JS/TS source file, so there is nothing to parse;
-        // activation reads it directly via is_enabled_with_deps.
         let plugin = SupabasePlugin;
         assert!(plugin.config_patterns().is_empty());
     }

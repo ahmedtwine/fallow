@@ -16,23 +16,18 @@ use super::types::{
 /// The line threshold above which we suggest extracting a module rather than a function.
 const MODULE_EXTRACTION_THRESHOLD: usize = 50;
 
-/// Group clone groups into families by their file set.
-///
-/// Each family contains all clone groups that are duplicated across exactly the
-/// same set of files. Families are sorted by total duplicated lines (descending).
+/// Group clone groups into families by file set, sorted by total duplicated lines.
 #[must_use]
 pub fn group_into_families(clone_groups: &[CloneGroup], root: &Path) -> Vec<CloneFamily> {
     if clone_groups.is_empty() {
         return Vec::new();
     }
 
-    // Build a map from file-set -> list of clone groups
     let mut family_map: Vec<(BTreeSet<PathBuf>, Vec<CloneGroup>)> = Vec::new();
 
     for group in clone_groups {
         let file_set: BTreeSet<PathBuf> = group.instances.iter().map(|i| i.file.clone()).collect();
 
-        // Find or create the family for this file set
         if let Some(entry) = family_map.iter_mut().find(|(fs, _)| *fs == file_set) {
             entry.1.push(group.clone());
         } else {
@@ -58,7 +53,6 @@ pub fn group_into_families(clone_groups: &[CloneGroup], root: &Path) -> Vec<Clon
         })
         .collect();
 
-    // Sort by total duplicated lines descending (most impactful families first)
     families.sort_by(|a, b| {
         b.total_duplicated_lines
             .cmp(&a.total_duplicated_lines)
@@ -77,7 +71,6 @@ fn generate_suggestions(
 ) -> Vec<RefactoringSuggestion> {
     let mut suggestions = Vec::new();
 
-    // Determine if files are cross-directory
     let directories: BTreeSet<_> = file_set
         .iter()
         .filter_map(|p| p.parent().map(Path::to_path_buf))
@@ -85,7 +78,6 @@ fn generate_suggestions(
     let is_cross_directory = directories.len() > 1;
 
     if total_duplicated_lines >= MODULE_EXTRACTION_THRESHOLD {
-        // Large amount of shared code -> suggest extracting a shared module
         let file_names: Vec<_> = file_set
             .iter()
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
@@ -107,7 +99,6 @@ fn generate_suggestions(
             )
         };
 
-        // (instance_count - 1) copies of each group's lines can be eliminated
         let estimated_savings: usize = groups
             .iter()
             .map(|g| g.line_count * (g.instances.len().saturating_sub(1)))
@@ -126,7 +117,6 @@ fn generate_suggestions(
             estimated_savings,
         });
     } else {
-        // Smaller clones -> suggest per-group function extraction
         for group in groups {
             let estimated_savings = group.line_count * (group.instances.len().saturating_sub(1));
             let file_names: Vec<_> = group
@@ -173,8 +163,6 @@ pub fn detect_mirrored_directories(
 ) -> Vec<MirroredDirectory> {
     const MIN_MIRROR_FAMILIES: usize = 3;
 
-    // For each 2-file family, extract the directory pair + filename
-    // Entry: (filename, duplicated_lines)
     type MirrorEntry = (String, usize);
     let mut pair_map: FxHashMap<(String, String), Vec<MirrorEntry>> = FxHashMap::default();
 
@@ -194,12 +182,10 @@ pub fn detect_mirrored_directories(
         let (dir_a, file_a) = split_dir_file(&path_a);
         let (dir_b, file_b) = split_dir_file(&path_b);
 
-        // Only match if the filenames are the same
         if file_a != file_b {
             continue;
         }
 
-        // Normalize: always use the lexically smaller dir first
         let (da, db) = if dir_a <= dir_b {
             (dir_a.to_string(), dir_b.to_string())
         } else {
@@ -229,7 +215,6 @@ pub fn detect_mirrored_directories(
         });
     }
 
-    // Sort mirrors by total lines descending
     mirrors.sort_by_key(|b| std::cmp::Reverse(b.total_lines));
 
     mirrors
@@ -391,13 +376,11 @@ mod tests {
 
         let families = group_into_families(&groups, &root());
         assert_eq!(families.len(), 1);
-        // 3 instances, line_count = 10, savings = 10 * (3 - 1) = 20
         assert_eq!(families[0].suggestions[0].estimated_savings, 20);
     }
 
     #[test]
     fn estimated_savings_for_extract_module() {
-        // Total lines >= 50, so it gets ExtractModule suggestion
         let groups = vec![
             CloneGroup {
                 instances: vec![instance("src/a.ts", 1, 30), instance("lib/b.ts", 1, 30)],
@@ -413,13 +396,11 @@ mod tests {
 
         let families = group_into_families(&groups, &root());
         assert_eq!(families.len(), 1);
-        // Total savings: 30 * (2 - 1) + 26 * (2 - 1) = 56
         assert_eq!(families[0].suggestions[0].estimated_savings, 56);
     }
 
     #[test]
     fn same_directory_files_get_specific_location_hint() {
-        // Both files in same directory
         let groups = vec![
             CloneGroup {
                 instances: vec![
@@ -445,7 +426,6 @@ mod tests {
             families[0].suggestions[0].kind,
             RefactoringKind::ExtractModule
         );
-        // Should mention the specific directory, not "a shared directory"
         assert!(
             !families[0].suggestions[0]
                 .description
@@ -456,7 +436,6 @@ mod tests {
 
     #[test]
     fn cross_directory_files_get_shared_directory_hint() {
-        // Files in different directories
         let groups = vec![
             CloneGroup {
                 instances: vec![instance("src/a.ts", 1, 30), instance("lib/b.ts", 1, 30)],
@@ -516,7 +495,6 @@ mod tests {
         ];
 
         let families = group_into_families(&groups, &root());
-        // Total lines = 10 + 11 = 21 < 50, so each group gets a function suggestion
         assert_eq!(families.len(), 1);
         assert_eq!(families[0].suggestions.len(), 2);
         assert!(
@@ -529,8 +507,6 @@ mod tests {
 
     #[test]
     fn single_instance_group_zero_savings() {
-        // A group with only 1 instance shouldn't happen in practice,
-        // but test the saturating_sub behavior
         let groups = vec![CloneGroup {
             instances: vec![instance("src/a.ts", 1, 10)],
             token_count: 30,
@@ -539,7 +515,6 @@ mod tests {
 
         let families = group_into_families(&groups, &root());
         assert_eq!(families.len(), 1);
-        // savings = 10 * (1 - 1) = 0
         assert_eq!(families[0].suggestions[0].estimated_savings, 0);
     }
 

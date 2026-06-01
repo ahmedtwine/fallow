@@ -62,9 +62,6 @@ pub(super) fn read_source(
 /// classifier on in-memory bytes without a disk round-trip.
 pub(super) fn classify_source(raw: &str) -> Result<(String, EncodingMetadata), EncodingError> {
     let had_bom = raw.starts_with('\u{FEFF}');
-    // `strip_prefix` returns the original slice when the prefix is absent, so
-    // `unwrap_or(raw)` is identical to a branched `if had_bom { strip } else
-    // { raw }` without leaving an `.expect()` panic in production code.
     let content = raw.strip_prefix('\u{FEFF}').unwrap_or(raw).to_owned();
 
     let crlf_count = content.matches("\r\n").count();
@@ -134,7 +131,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.ts");
         atomic_write(&path, b"data").unwrap();
-        // Only the target file should exist; no stray temp files
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
@@ -167,8 +163,6 @@ mod tests {
         atomic_write(&path, &data).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), data);
     }
-
-    // -- read_source tests ---------------------------------------------------
 
     #[test]
     fn read_source_returns_none_for_path_outside_root() {
@@ -227,18 +221,15 @@ mod tests {
 
         let (content, meta) = read_source(root, &file).unwrap().unwrap();
         assert_eq!(content, "");
-        assert_eq!(meta.line_ending, "\n"); // defaults to LF when no line endings found
+        assert_eq!(meta.line_ending, "\n");
         assert!(!meta.had_bom);
     }
-
-    // -- BOM + mixed-EOL tests (issue #475) ---------------------------------
 
     #[test]
     fn read_source_strips_utf8_bom_and_flags_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let file = root.join("bom.ts");
-        // EF BB BF + "export const x = 1;\nexport const y = 2;\n"
         std::fs::write(&file, "\u{FEFF}export const x = 1;\nexport const y = 2;\n").unwrap();
 
         let (content, meta) = read_source(root, &file).unwrap().unwrap();
@@ -269,7 +260,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let file = root.join("mixed.ts");
-        // CRLF on line 1, LF on lines 2 and 3.
         std::fs::write(
             &file,
             "export const a = 1;\r\nexport const b = 2;\nexport const c = 3;\r\n",
@@ -290,9 +280,6 @@ mod tests {
 
     #[test]
     fn read_source_mixed_with_bom_is_still_mixed_after_strip() {
-        // The BOM strip happens first; mixed-EOL detection runs on the
-        // post-strip view. A BOM-bearing file with mixed line endings is
-        // still mixed and must surface the same error.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let file = root.join("bom-mixed.ts");
@@ -304,8 +291,6 @@ mod tests {
 
     #[test]
     fn classify_source_pure_lf_no_bom_round_trips() {
-        // Sanity check on the classifier directly: pure LF, no BOM is the
-        // happy path that pre-#475 code optimized for.
         let (content, meta) = classify_source("a\nb\nc\n").unwrap();
         assert_eq!(content, "a\nb\nc\n");
         assert_eq!(meta.line_ending, "\n");
@@ -318,8 +303,4 @@ mod tests {
         assert_eq!(meta.line_ending, "\n");
         assert!(!meta.had_bom);
     }
-
-    // The line-ending-preserving join logic that used to live in this
-    // module is now covered by plan.rs::stage_fixed_content + the
-    // per-fixer round-trip integration tests under crates/cli/tests/.
 }

@@ -45,7 +45,6 @@ fn duplicate_code_semantic_mode_detects_type2_clones() {
 
     let report = fallow_core::duplicates::find_duplicates(&root, &files, &dupes_config);
 
-    // In semantic mode, copy2.ts (renamed variables) should also match
     let files_with_clones: rustc_hash::FxHashSet<_> = report
         .clone_groups
         .iter()
@@ -73,7 +72,6 @@ fn duplicate_code_unique_file_has_no_clones() {
 
     let report = fallow_core::duplicates::find_duplicates(&root, &files, &dupes_config);
 
-    // unique.ts should not appear in any clone group (its code is distinct)
     let all_clone_files: Vec<String> = report
         .clone_groups
         .iter()
@@ -101,7 +99,6 @@ fn duplicate_code_json_output_serializable() {
 
     let report = fallow_core::duplicates::find_duplicates(&root, &files, &dupes_config);
 
-    // Should be serializable to JSON
     let json = serde_json::to_string_pretty(&report).expect("report should serialize to JSON");
     let reparsed: serde_json::Value = serde_json::from_str(&json).expect("JSON should be valid");
     assert!(reparsed["clone_groups"].is_array());
@@ -123,7 +120,6 @@ fn duplicate_code_skip_local_filters_same_directory() {
 
     let report = fallow_core::duplicates::find_duplicates(&root, &files, &dupes_config);
 
-    // All fixture files are in the same directory (src/), so skip_local should filter them all
     assert!(
         report.clone_groups.is_empty(),
         "skip_local should filter same-directory clones"
@@ -136,7 +132,6 @@ fn duplicate_code_min_tokens_threshold_filters() {
     let config = create_config(root.clone());
     let files = fallow_core::discover::discover_files(&config);
 
-    // Use very high min_tokens — should find no clones
     let dupes_config = fallow_core::duplicates::DuplicatesConfig {
         min_tokens: 10000,
         min_lines: 1,
@@ -171,9 +166,6 @@ fn duplicate_code_find_duplicates_in_project_convenience() {
 
 #[test]
 fn ignore_imports_removes_import_only_clones() {
-    // Create two files with identical sorted import blocks but different runtime code.
-    // Without ignore_imports, the import blocks produce clone groups.
-    // With ignore_imports, the imports are stripped and only runtime code is compared.
     let dir = tempfile::tempdir().expect("create temp dir");
     let src = dir.path().join("src");
     std::fs::create_dir_all(&src).expect("create src");
@@ -187,9 +179,7 @@ fn ignore_imports_removes_import_only_clones() {
                     import { G } from './g';\n\
                     import { H } from './h';\n";
 
-    // File 1: identical imports + unique code
     let file1 = format!("{imports}\nexport function foo() {{ return A + B + C; }}\n");
-    // File 2: identical imports + different code
     let file2 = format!("{imports}\nexport function bar() {{ return D * E * F; }}\n");
 
     std::fs::write(src.join("file1.ts"), &file1).expect("write file1");
@@ -210,7 +200,6 @@ fn ignore_imports_removes_import_only_clones() {
         },
     ];
 
-    // Without ignore_imports: should detect import block duplication
     let config_with_imports = fallow_core::duplicates::DuplicatesConfig {
         min_tokens: 10,
         min_lines: 3,
@@ -223,7 +212,6 @@ fn ignore_imports_removes_import_only_clones() {
         "Without ignore_imports, identical import blocks should be detected as clones"
     );
 
-    // With ignore_imports: import block clones should disappear
     let config_ignore = fallow_core::duplicates::DuplicatesConfig {
         min_tokens: 10,
         min_lines: 3,

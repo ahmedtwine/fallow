@@ -14,8 +14,6 @@ fn imports_in_custom_location_eslint_config_credit_their_packages() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Before the fix: `@eslint/js` shows up in unused_dependencies because
-    // `.config/eslint.config.js` was never parsed (hidden directory skipped).
     let unused_deps: Vec<&str> = results
         .unused_dependencies
         .iter()

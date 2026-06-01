@@ -9,8 +9,6 @@ use fallow_core::duplicates::normalize::{HashedToken, normalize_and_hash};
 use fallow_core::duplicates::tokenize::{FileTokens, SourceToken, TokenKind};
 use oxc_span::Span;
 
-// ── Helpers ────────────────────────────────────────────────
-
 /// Build a `Vec<HashedToken>` from raw hash values.
 fn make_hashed_tokens(hashes: &[u64]) -> Vec<HashedToken> {
     hashes
@@ -41,10 +39,8 @@ fn make_source_tokens(count: usize) -> Vec<SourceToken> {
 /// Build a `FileTokens` struct. The `source` is a synthetic string with enough
 /// bytes for `count` tokens (each spanning 3 bytes) spread across lines.
 fn make_file_tokens_for(count: usize) -> FileTokens {
-    // Build a source string that has at least `count * 3` bytes and many lines.
     let mut source = String::with_capacity(count * 4);
     for i in 0..count {
-        // Each token is "xx" (2 chars) then a newline to guarantee 3-byte spans.
         source.push_str("xx");
         if i < count - 1 {
             source.push('\n');
@@ -60,8 +56,6 @@ fn make_file_tokens_for(count: usize) -> FileTokens {
 }
 
 type DetectInput = Vec<(PathBuf, Vec<HashedToken>, FileTokens)>;
-
-// ── Test 1: Two identical large files ──────────────────────
 
 #[test]
 fn two_identical_large_files_single_group_no_quadratic_blowup() {
@@ -88,13 +82,11 @@ fn two_identical_large_files_single_group_no_quadratic_blowup() {
         "Detection on 2x{count} tokens took {elapsed:?}, expected < 5s"
     );
 
-    // Should have exactly one top-level group covering all 1000 tokens.
     assert!(
         !report.clone_groups.is_empty(),
         "Should detect at least one clone group"
     );
 
-    // The largest group should span the full file.
     let largest = &report.clone_groups[0];
     assert_eq!(
         largest.token_count, count,
@@ -106,8 +98,6 @@ fn two_identical_large_files_single_group_no_quadratic_blowup() {
         "The group should have exactly 2 instances"
     );
 }
-
-// ── Test 2: Three identical files ──────────────────────────
 
 #[test]
 fn three_identical_files_single_group_three_instances() {
@@ -144,8 +134,6 @@ fn three_identical_files_single_group_three_instances() {
     );
 }
 
-// ── Test 3: Five identical files ───────────────────────────
-
 #[test]
 fn five_identical_files_single_group_five_instances() {
     let hashes: Vec<u64> = (1..=50).collect();
@@ -178,13 +166,9 @@ fn five_identical_files_single_group_five_instances() {
     );
 }
 
-// ── Test 4: Partial overlap ────────────────────────────────
-
 #[test]
 fn partial_overlap_detects_shared_region() {
-    // File A: tokens 1..100
     let hashes_a: Vec<u64> = (1..=100).collect();
-    // File B: tokens 50..150
     let hashes_b: Vec<u64> = (50..=150).collect();
 
     let data: DetectInput = vec![
@@ -200,7 +184,6 @@ fn partial_overlap_detects_shared_region() {
         ),
     ];
 
-    // min_tokens = 5 so the overlap region (51 tokens: 50..100) qualifies.
     let detector = CloneDetector::new(5, 1, false);
     let report = detector.detect(data);
 
@@ -209,7 +192,6 @@ fn partial_overlap_detects_shared_region() {
         "Should detect the overlapping region"
     );
 
-    // The largest group should cover the 51-token overlap [50..100].
     let largest = &report.clone_groups[0];
     assert_eq!(
         largest.token_count, 51,
@@ -217,8 +199,6 @@ fn partial_overlap_detects_shared_region() {
     );
     assert_eq!(largest.instances.len(), 2);
 }
-
-// ── Test 5: No duplication ─────────────────────────────────
 
 #[test]
 fn completely_different_files_produce_zero_groups() {
@@ -248,11 +228,8 @@ fn completely_different_files_produce_zero_groups() {
     );
 }
 
-// ── Test 6: Single file with internal repetition ───────────
-
 #[test]
 fn single_file_internal_repetition() {
-    // [1,2,3,4,5, 99, 1,2,3,4,5]
     let hashes: Vec<u64> = vec![1, 2, 3, 4, 5, 99, 1, 2, 3, 4, 5];
     let count = hashes.len();
 
@@ -270,7 +247,6 @@ fn single_file_internal_repetition() {
         "Should detect [1,2,3,4,5] duplicated within a single file"
     );
 
-    // The group should have 2 instances in the same file at non-overlapping positions.
     let group = &report.clone_groups[0];
     assert_eq!(
         group.instances.len(),
@@ -279,10 +255,8 @@ fn single_file_internal_repetition() {
     );
     assert_eq!(group.token_count, 5, "Duplicated block should be 5 tokens");
 
-    // Both instances should be in the same file.
     assert_eq!(group.instances[0].file, group.instances[1].file);
 
-    // They should not overlap (start_line of second > end_line of first).
     let first_end = group.instances[0].end_line;
     let second_start = group.instances[1].start_line;
     assert!(
@@ -291,11 +265,8 @@ fn single_file_internal_repetition() {
     );
 }
 
-// ── Test 7: Semantic mode Type-2 detection ─────────────────
-
 #[test]
 fn semantic_mode_detects_type2_clones() {
-    // Two files with identical structure but different identifier names.
     let code_a = r#"
 function processData(input) {
     const trimmed = input.trim();
@@ -325,7 +296,6 @@ function handlePayload(payload) {
     let ft_a = tokenize_file(&PathBuf::from("a.ts"), code_a, false);
     let ft_b = tokenize_file(&PathBuf::from("b.ts"), code_b, false);
 
-    // Normalize in semantic mode (blinds identifiers).
     let hashed_a = normalize_and_hash(&ft_a.tokens, DetectionMode::Semantic);
     let hashed_b = normalize_and_hash(&ft_b.tokens, DetectionMode::Semantic);
 
@@ -345,10 +315,6 @@ function handlePayload(payload) {
         "Semantic mode should detect Type-2 clones (renamed variables)"
     );
 
-    // In strict mode the same code should produce fewer or smaller clone groups,
-    // because identifiers are NOT blinded and thus differ across files.
-    // (Keywords and punctuation still match, so small structural fragments may
-    // appear, but the whole-function match should only exist in semantic mode.)
     let ft_a2 = tokenize_file(&PathBuf::from("a.ts"), code_a, false);
     let ft_b2 = tokenize_file(&PathBuf::from("b.ts"), code_b, false);
     let hashed_a2 = normalize_and_hash(&ft_a2.tokens, DetectionMode::Strict);
@@ -380,11 +346,8 @@ function handlePayload(payload) {
     );
 }
 
-// ── Test 8: Many small files ───────────────────────────────
-
 #[test]
 fn many_small_files_with_some_duplicates() {
-    // 50 files, 20 tokens each. First 10 files share the same content.
     let shared_hashes: Vec<u64> = (1..=20).collect();
     let mut data: DetectInput = Vec::with_capacity(50);
 
@@ -392,7 +355,6 @@ fn many_small_files_with_some_duplicates() {
         let hashes = if i < 10 {
             shared_hashes.clone()
         } else {
-            // Unique content per file.
             ((i * 1000 + 1)..=(i * 1000 + 20))
                 .map(|v| v as u64)
                 .collect()
@@ -408,7 +370,6 @@ fn many_small_files_with_some_duplicates() {
     let detector = CloneDetector::new(5, 1, false);
     let report = detector.detect(data);
 
-    // The first 10 files should form a clone group.
     assert!(
         !report.clone_groups.is_empty(),
         "Should detect clones among the first 10 identical files"
@@ -426,15 +387,11 @@ fn many_small_files_with_some_duplicates() {
         "Largest group should have 10 instances (the 10 identical files)"
     );
 
-    // Stats should reflect all 50 files.
     assert_eq!(report.stats.total_files, 50);
 }
 
-// ── Test 9: All identical tokens (worst case for SA) ───────
-
 #[test]
 fn all_identical_tokens_does_not_hang() {
-    // 100 tokens all with hash value 42.
     let hashes = vec![42u64; 100];
 
     let data: DetectInput = vec![
@@ -460,21 +417,17 @@ fn all_identical_tokens_does_not_hang() {
         "All-identical-token input took {elapsed:?}, should not hang"
     );
 
-    // Should detect clones (same content across two files).
     assert!(
         !report.clone_groups.is_empty(),
         "Should detect clones in files with all-identical tokens"
     );
 }
 
-// ── Test 10: Empty files ───────────────────────────────────
-
 #[test]
 fn empty_files_mixed_with_normal_files_do_not_crash() {
     let normal_hashes: Vec<u64> = (1..=20).collect();
 
     let data: DetectInput = vec![
-        // Empty file (0 tokens).
         (
             PathBuf::from("empty.ts"),
             make_hashed_tokens(&[]),
@@ -485,13 +438,11 @@ fn empty_files_mixed_with_normal_files_do_not_crash() {
                 line_count: 0,
             },
         ),
-        // Normal file.
         (
             PathBuf::from("a.ts"),
             make_hashed_tokens(&normal_hashes),
             make_file_tokens_for(20),
         ),
-        // Another empty file.
         (
             PathBuf::from("empty2.ts"),
             make_hashed_tokens(&[]),
@@ -502,7 +453,6 @@ fn empty_files_mixed_with_normal_files_do_not_crash() {
                 line_count: 0,
             },
         ),
-        // Duplicate of the normal file.
         (
             PathBuf::from("b.ts"),
             make_hashed_tokens(&normal_hashes),
@@ -513,14 +463,11 @@ fn empty_files_mixed_with_normal_files_do_not_crash() {
     let detector = CloneDetector::new(5, 1, false);
     let report = detector.detect(data);
 
-    // Should not crash and should detect the clone between a.ts and b.ts.
     assert!(
         !report.clone_groups.is_empty(),
         "Should detect clones between the two non-empty identical files"
     );
 }
-
-// ── Test 11: min_tokens threshold ──────────────────────────
 
 #[test]
 fn min_tokens_threshold_filters_small_clones() {
@@ -539,7 +486,6 @@ fn min_tokens_threshold_filters_small_clones() {
         ),
     ];
 
-    // min_tokens = 500 — no clone can be that large since files only have 100 tokens.
     let detector = CloneDetector::new(500, 1, false);
     let report = detector.detect(data);
 
@@ -550,13 +496,10 @@ fn min_tokens_threshold_filters_small_clones() {
     );
 }
 
-// ── Test 12: skip_local filter ─────────────────────────────
-
 #[test]
 fn skip_local_filters_same_directory_keeps_cross_directory() {
     let hashes: Vec<u64> = (1..=50).collect();
 
-    // Same directory — should be filtered.
     let data_same_dir: DetectInput = vec![
         (
             PathBuf::from("src/utils/a.ts"),
@@ -578,7 +521,6 @@ fn skip_local_filters_same_directory_keeps_cross_directory() {
         "skip_local should filter same-directory clones"
     );
 
-    // Different directories — should be kept.
     let data_cross_dir: DetectInput = vec![
         (
             PathBuf::from("src/components/a.ts"),
@@ -600,11 +542,8 @@ fn skip_local_filters_same_directory_keeps_cross_directory() {
     );
 }
 
-// ── Test 13: Duplication percentage is computed correctly ───
-
 #[test]
 fn duplication_percentage_computation() {
-    // Two identical 20-line files.
     let hashes: Vec<u64> = (1..=20).collect();
 
     let data: DetectInput = vec![
@@ -642,8 +581,6 @@ fn duplication_percentage_computation() {
     assert_eq!(report.stats.total_files, 2);
 }
 
-// ── Test 14: JSON serialization roundtrip ──────────────────
-
 #[test]
 fn duplication_report_serializes_to_valid_json() {
     let hashes: Vec<u64> = (1..=30).collect();
@@ -666,11 +603,9 @@ fn duplication_report_serializes_to_valid_json() {
 
     let json = serde_json::to_string_pretty(&report).expect("Report should serialize to JSON");
 
-    // Verify it's valid JSON by parsing it back.
     let parsed: serde_json::Value =
         serde_json::from_str(&json).expect("Serialized JSON should be valid");
 
-    // Verify top-level structure.
     assert!(
         parsed.get("clone_groups").is_some(),
         "JSON should contain 'clone_groups' key"
@@ -680,21 +615,18 @@ fn duplication_report_serializes_to_valid_json() {
         "JSON should contain 'stats' key"
     );
 
-    // Verify stats fields are present.
     let stats = parsed.get("stats").unwrap();
     assert!(stats.get("total_files").is_some());
     assert!(stats.get("duplication_percentage").is_some());
     assert!(stats.get("duplicated_lines").is_some());
     assert!(stats.get("clone_groups").is_some());
 
-    // Verify clone_groups array is non-empty.
     let groups = parsed.get("clone_groups").unwrap().as_array().unwrap();
     assert!(
         !groups.is_empty(),
         "Should have clone groups in JSON output"
     );
 
-    // Verify each group has required fields.
     for group in groups {
         assert!(group.get("instances").is_some());
         assert!(group.get("token_count").is_some());

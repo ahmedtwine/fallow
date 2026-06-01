@@ -21,10 +21,6 @@ use super::types::ResolveContext;
 use super::upgrades::apply_specifier_upgrades;
 use super::{ResolveResult, ResolvedImport, ResolvedModule, ResolvedReExport};
 
-// -----------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------
-
 fn dummy_span() -> Span {
     Span::new(0, 0)
 }
@@ -68,9 +64,7 @@ fn with_empty_ctx<F: FnOnce(&ResolveContext)>(f: F) {
 }
 
 #[cfg(miri)]
-fn with_empty_ctx<F: FnOnce(&ResolveContext)>(_f: F) {
-    // oxc_resolver uses statx syscall unsupported by Miri — skip.
-}
+fn with_empty_ctx<F: FnOnce(&ResolveContext)>(_f: F) {}
 
 fn make_import(source: &str, imported: ImportedName, local: &str) -> ImportInfo {
     ImportInfo {
@@ -160,10 +154,6 @@ fn make_resolved_re_export(source: &str, target: ResolveResult) -> ResolvedReExp
         target,
     }
 }
-
-// -----------------------------------------------------------------------
-// resolve_static_imports
-// -----------------------------------------------------------------------
 
 #[test]
 fn static_imports_named() {
@@ -280,10 +270,6 @@ fn static_imports_preserves_type_only() {
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_single_dynamic_import
-// -----------------------------------------------------------------------
-
 #[test]
 fn dynamic_import_with_destructured_names() {
     with_empty_ctx(|ctx| {
@@ -302,10 +288,8 @@ fn dynamic_import_with_destructured_names() {
             ImportedName::Named(ref n) if n == "bar"
         ));
         assert_eq!(result[1].info.local_name, "bar");
-        // Both should have the same source
         assert_eq!(result[0].info.source, "./utils");
         assert_eq!(result[1].info.source, "./utils");
-        // Both should be non-type-only
         assert!(!result[0].info.is_type_only);
         assert!(!result[1].info.is_type_only);
     });
@@ -346,8 +330,6 @@ fn dynamic_import_side_effect() {
 
 #[test]
 fn dynamic_import_destructured_takes_priority_over_local_name() {
-    // When both destructured_names and local_name are set,
-    // destructured_names wins (checked first).
     with_empty_ctx(|ctx| {
         let imp = DynamicImportInfo {
             source: "./mod".into(),
@@ -367,10 +349,6 @@ fn dynamic_import_destructured_takes_priority_over_local_name() {
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_dynamic_imports (batch)
-// -----------------------------------------------------------------------
-
 #[test]
 fn dynamic_imports_flattens_multiple() {
     with_empty_ctx(|ctx| {
@@ -382,7 +360,6 @@ fn dynamic_imports_flattens_multiple() {
         let file = Path::new("/project/src/app.ts");
         let result = resolve_dynamic_imports(ctx, file, &imports);
 
-        // ./a -> 2 Named, ./b -> 1 Namespace, ./c -> 1 SideEffect = 4 total
         assert_eq!(result.len(), 4);
     });
 }
@@ -395,10 +372,6 @@ fn dynamic_imports_empty_list() {
         assert!(result.is_empty());
     });
 }
-
-// -----------------------------------------------------------------------
-// resolve_re_exports
-// -----------------------------------------------------------------------
 
 #[test]
 fn re_exports_maps_each_entry() {
@@ -446,10 +419,6 @@ fn re_exports_preserves_type_only() {
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_single_require
-// -----------------------------------------------------------------------
-
 #[test]
 fn require_namespace_without_destructuring() {
     with_empty_ctx(|ctx| {
@@ -479,7 +448,6 @@ fn require_namespace_without_local_name() {
             result[0].info.imported_name,
             ImportedName::Namespace
         ));
-        // No local name -> empty string from unwrap_or_default
         assert_eq!(result[0].info.local_name, "");
     });
 }
@@ -502,7 +470,6 @@ fn require_with_destructured_names() {
             ImportedName::Named(ref n) if n == "resolve"
         ));
         assert_eq!(result[1].info.local_name, "resolve");
-        // Both share the same source
         assert_eq!(result[0].info.source, "path");
         assert_eq!(result[1].info.source, "path");
     });
@@ -520,10 +487,6 @@ fn require_destructured_is_not_type_only() {
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_require_imports (batch)
-// -----------------------------------------------------------------------
-
 #[test]
 fn require_imports_flattens_multiple() {
     with_empty_ctx(|ctx| {
@@ -534,7 +497,6 @@ fn require_imports_flattens_multiple() {
         let file = Path::new("/project/src/app.js");
         let result = resolve_require_imports(ctx, file, &reqs);
 
-        // fs -> 1 Namespace, path -> 2 Named = 3 total
         assert_eq!(result.len(), 3);
     });
 }
@@ -548,15 +510,8 @@ fn require_imports_empty_list() {
     });
 }
 
-// -----------------------------------------------------------------------
-// apply_specifier_upgrades
-// -----------------------------------------------------------------------
-
 #[test]
 fn specifier_upgrades_npm_to_internal() {
-    // Module 0 resolves `preact/hooks` to InternalModule(FileId(5))
-    // Module 1 resolves `preact/hooks` to NpmPackage("preact")
-    // After upgrade, module 1 should also point to InternalModule(FileId(5))
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -588,7 +543,6 @@ fn specifier_upgrades_npm_to_internal() {
 
 #[test]
 fn specifier_upgrades_noop_when_no_internal() {
-    // All modules resolve `lodash` to NpmPackage — no upgrade should happen
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -631,8 +585,6 @@ fn specifier_upgrades_empty_modules() {
 
 #[test]
 fn specifier_upgrades_skips_relative_specifiers() {
-    // Relative specifiers (./foo) are NOT bare specifiers, so they should
-    // never be candidates for upgrade.
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -656,7 +608,6 @@ fn specifier_upgrades_skips_relative_specifiers() {
 
     apply_specifier_upgrades(&mut modules);
 
-    // Module 1 should still be NpmPackage — relative specifier not upgraded
     assert!(matches!(
         modules[1].resolved_imports[0].target,
         ResolveResult::NpmPackage(_)
@@ -727,7 +678,6 @@ fn specifier_upgrades_applies_to_re_exports() {
 
 #[test]
 fn specifier_upgrades_does_not_downgrade_internal() {
-    // If both modules already resolve to InternalModule, nothing changes
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -763,8 +713,6 @@ fn specifier_upgrades_does_not_downgrade_internal() {
 
 #[test]
 fn specifier_upgrades_first_internal_wins() {
-    // Two modules resolve the same bare specifier to different internal files.
-    // The first one (by module order) wins.
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -797,7 +745,6 @@ fn specifier_upgrades_first_internal_wins() {
 
     apply_specifier_upgrades(&mut modules);
 
-    // Module 2 should be upgraded to the first FileId encountered (10)
     assert!(matches!(
         modules[2].resolved_imports[0].target,
         ResolveResult::InternalModule(FileId(10))
@@ -806,8 +753,6 @@ fn specifier_upgrades_first_internal_wins() {
 
 #[test]
 fn specifier_upgrades_does_not_touch_unresolvable() {
-    // Unresolvable should not be upgraded even if a bare specifier
-    // matches an InternalModule elsewhere.
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -831,7 +776,6 @@ fn specifier_upgrades_does_not_touch_unresolvable() {
 
     apply_specifier_upgrades(&mut modules);
 
-    // Unresolvable should remain unresolvable
     assert!(matches!(
         modules[1].resolved_imports[0].target,
         ResolveResult::Unresolvable(_)
@@ -840,8 +784,6 @@ fn specifier_upgrades_does_not_touch_unresolvable() {
 
 #[test]
 fn specifier_upgrades_cross_import_and_re_export() {
-    // An import in module 0 resolves to InternalModule, a re-export in
-    // module 1 for the same specifier should also be upgraded.
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -870,10 +812,6 @@ fn specifier_upgrades_cross_import_and_re_export() {
         ResolveResult::InternalModule(FileId(3))
     ));
 }
-
-// -----------------------------------------------------------------------
-// resolve_dynamic_patterns
-// -----------------------------------------------------------------------
 
 #[test]
 fn dynamic_patterns_matches_files_in_dir() {
@@ -979,10 +917,6 @@ fn dynamic_patterns_glob_prefix_passthrough() {
     assert_eq!(result[0].1.len(), 2);
 }
 
-// -----------------------------------------------------------------------
-// Unresolvable specifier handling
-// -----------------------------------------------------------------------
-
 #[test]
 fn static_import_unresolvable_relative_path() {
     with_empty_ctx(|ctx| {
@@ -1053,15 +987,8 @@ fn re_export_unresolvable() {
     });
 }
 
-// -----------------------------------------------------------------------
-// apply_specifier_upgrades: re-export triggers upgrade for imports
-// -----------------------------------------------------------------------
-
 #[test]
 fn specifier_upgrades_re_export_triggers_import_upgrade() {
-    // Module 0 has a re-export that resolves to InternalModule.
-    // Module 1 has a static import for the same specifier as NpmPackage.
-    // The re-export should trigger the import to be upgraded.
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -1093,8 +1020,6 @@ fn specifier_upgrades_re_export_triggers_import_upgrade() {
 
 #[test]
 fn specifier_upgrades_re_export_triggers_dynamic_import_upgrade() {
-    // A re-export resolving to InternalModule should also upgrade
-    // dynamic imports for the same specifier.
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -1126,8 +1051,6 @@ fn specifier_upgrades_re_export_triggers_dynamic_import_upgrade() {
 
 #[test]
 fn specifier_upgrades_does_not_upgrade_external_file() {
-    // ExternalFile results should never be upgraded, even when a bare
-    // specifier matches.
     let mut modules = vec![
         make_resolved_module(
             0,
@@ -1153,16 +1076,11 @@ fn specifier_upgrades_does_not_upgrade_external_file() {
 
     apply_specifier_upgrades(&mut modules);
 
-    // ExternalFile should remain ExternalFile (only NpmPackage gets upgraded)
     assert!(matches!(
         modules[1].resolved_imports[0].target,
         ResolveResult::ExternalFile(_)
     ));
 }
-
-// -----------------------------------------------------------------------
-// resolve_dynamic_patterns: edge cases
-// -----------------------------------------------------------------------
 
 #[test]
 fn dynamic_patterns_prefix_without_suffix() {
@@ -1216,13 +1134,8 @@ fn dynamic_patterns_empty_canonical_paths() {
     assert!(result.is_empty());
 }
 
-// -----------------------------------------------------------------------
-// resolve_single_require: edge cases
-// -----------------------------------------------------------------------
-
 #[test]
 fn require_destructured_empty_names_uses_namespace() {
-    // Empty destructured_names means the whole module is imported
     with_empty_ctx(|ctx| {
         let req = RequireCallInfo {
             source: "path".into(),
@@ -1240,10 +1153,6 @@ fn require_destructured_empty_names_uses_namespace() {
         ));
     });
 }
-
-// -----------------------------------------------------------------------
-// resolve_single_dynamic_import: edge cases
-// -----------------------------------------------------------------------
 
 #[test]
 fn dynamic_import_empty_destructured_and_no_local_is_side_effect() {
@@ -1269,10 +1178,6 @@ fn dynamic_import_empty_destructured_and_no_local_is_side_effect() {
 
 #[test]
 fn speculative_dynamic_import_drops_when_unresolvable() {
-    // Issue #378: synthesised auto-mock siblings (Vitest `__mocks__/<file>`)
-    // must be dropped silently when the path does not exist on disk. The user
-    // never wrote the synthesised path, so a missing target should not
-    // surface as an `unresolved-import` finding.
     with_empty_ctx(|ctx| {
         let imp = DynamicImportInfo {
             source: "./services/__mocks__/api".into(),
@@ -1292,9 +1197,6 @@ fn speculative_dynamic_import_drops_when_unresolvable() {
 
 #[test]
 fn non_speculative_dynamic_import_keeps_unresolvable_entry() {
-    // Sanity guard: only speculative imports get the drop treatment.
-    // User-written `import('./missing')` must still produce a ResolvedImport
-    // with an Unresolvable target so `find_unresolved_imports` can report it.
     with_empty_ctx(|ctx| {
         let imp = DynamicImportInfo {
             source: "./missing".into(),
@@ -1328,10 +1230,6 @@ fn dynamic_import_preserves_source_span() {
         assert_eq!(result[0].info.span.end, 84);
     });
 }
-
-// -----------------------------------------------------------------------
-// resolve_specifier: URL and data imports
-// -----------------------------------------------------------------------
 
 #[test]
 fn specifier_https_url_returns_external_file() {
@@ -1385,18 +1283,12 @@ fn specifier_custom_protocol_returns_external_file() {
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_specifier: Deno jsr: and npm: schemes (issue #624)
-// -----------------------------------------------------------------------
-
 #[test]
 fn specifier_jsr_scheme_returns_external_file() {
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/supabase/functions/hello/index.ts");
         let result = specifier::resolve_specifier(ctx, file, "jsr:@std/path", false);
 
-        // JSR is a separate registry; treated as external so it is never reported
-        // as an unresolved import or misclassified as an npm dependency.
         assert!(
             matches!(result, ResolveResult::ExternalFile(ref p) if p.to_str().unwrap() == "jsr:@std/path")
         );
@@ -1409,8 +1301,6 @@ fn specifier_npm_scheme_scoped_credits_package() {
         let file = Path::new("/project/supabase/functions/hello/index.ts");
         let result = specifier::resolve_specifier(ctx, file, "npm:@supabase/supabase-js@2", false);
 
-        // `npm:` is stripped and the version selector dropped, so the package is
-        // credited under its bare npm name.
         assert!(
             matches!(result, ResolveResult::NpmPackage(ref name) if name == "@supabase/supabase-js"),
             "expected NpmPackage(@supabase/supabase-js), got {result:?}"
@@ -1435,21 +1325,14 @@ fn specifier_npm_scheme_unscoped_credits_package() {
 fn specifier_bare_npm_scheme_returns_external_file() {
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/supabase/functions/hello/index.ts");
-        // A bare `npm:` (empty body) is malformed; treated as external rather than
-        // producing an `unresolved-import` finding for the empty specifier.
         let result = specifier::resolve_specifier(ctx, file, "npm:", false);
 
         assert!(matches!(result, ResolveResult::ExternalFile(_)));
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_specifier: HTML root-relative paths
-// -----------------------------------------------------------------------
-
 #[test]
 fn specifier_html_root_relative_unresolvable() {
-    // Root-relative paths in HTML files that fail resolution return Unresolvable
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/public/index.html");
         let result = specifier::resolve_specifier(ctx, file, "/src/main.tsx", false);
@@ -1463,7 +1346,6 @@ fn specifier_html_root_relative_unresolvable() {
 
 #[test]
 fn specifier_html_root_relative_deep_path_unresolvable() {
-    // Even deep root-relative paths in HTML should return Unresolvable when not found
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/nested/deep/page.html");
         let result = specifier::resolve_specifier(ctx, file, "/assets/styles/main.css", false);
@@ -1476,11 +1358,6 @@ fn specifier_html_root_relative_deep_path_unresolvable() {
 
 #[test]
 fn specifier_root_relative_in_ts_file_unresolvable_when_missing() {
-    // After issue #105, root-relative paths in TS/JS/JSX/TSX files are treated
-    // as web-root-relative (same as HTML) to support SSR frameworks like Hono
-    // that emit `<link href="/static/..." />` from JSX templates. When the
-    // target is not a registered file, the result is `Unresolvable`, never a
-    // spurious npm package or external file.
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result = specifier::resolve_specifier(ctx, file, "/usr/local/lib/something", false);
@@ -1492,13 +1369,8 @@ fn specifier_root_relative_in_ts_file_unresolvable_when_missing() {
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_specifier: bare specifier error paths
-// -----------------------------------------------------------------------
-
 #[test]
 fn specifier_path_alias_hash_returns_unresolvable() {
-    // Path aliases (#import) that fail resolution should return Unresolvable, not NpmPackage
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result = specifier::resolve_specifier(ctx, file, "#internal/utils", false);
@@ -1542,7 +1414,6 @@ fn specifier_path_alias_at_slash_returns_unresolvable() {
 
 #[test]
 fn specifier_pascal_scope_alias_returns_unresolvable() {
-    // PascalCase @Scope is treated as a path alias, not npm package
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result = specifier::resolve_specifier(ctx, file, "@Components/Button", false);
@@ -1554,7 +1425,6 @@ fn specifier_pascal_scope_alias_returns_unresolvable() {
 #[test]
 #[cfg_attr(miri, ignore)] // oxc_resolver uses statx syscall unsupported by Miri
 fn specifier_plugin_alias_match_returns_unresolvable() {
-    // Plugin-provided path aliases that fail resolution should also be Unresolvable
     let resolver = specifier::create_resolver(&[], &[]);
     let style_resolver = specifier::create_resolver(&[], &["style".to_string()]);
     let extensions = react_native::build_extensions(&[]);
@@ -1594,7 +1464,6 @@ fn specifier_plugin_alias_match_returns_unresolvable() {
 
 #[test]
 fn specifier_bare_scoped_package_returns_npm_package() {
-    // Scoped bare specifiers that fail resolution -> NpmPackage with extracted name
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result = specifier::resolve_specifier(ctx, file, "@babel/core/transform", false);
@@ -1608,7 +1477,6 @@ fn specifier_bare_scoped_package_returns_npm_package() {
 
 #[test]
 fn specifier_bare_unscoped_package_returns_npm_package() {
-    // Unscoped bare specifiers that fail resolution -> NpmPackage
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result = specifier::resolve_specifier(ctx, file, "lodash/merge", false);
@@ -1619,10 +1487,8 @@ fn specifier_bare_unscoped_package_returns_npm_package() {
 
 #[test]
 fn specifier_invalid_package_name_returns_unresolvable() {
-    // Bare specifiers that aren't valid package names -> Unresolvable
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
-        // Shell variable is not a valid package name
         let result = specifier::resolve_specifier(ctx, file, "$DIR", false);
 
         assert!(matches!(result, ResolveResult::Unresolvable(ref s) if s == "$DIR"));
@@ -1631,22 +1497,17 @@ fn specifier_invalid_package_name_returns_unresolvable() {
 
 #[test]
 fn specifier_bundler_internal_returns_unresolvable() {
-    // Webpack loader syntax (contains ?) is not a valid package name
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result =
             specifier::resolve_specifier(ctx, file, "raw-loader?esModule=false!./data.csv", false);
 
-        // Contains "://"-like pattern is not present, but "!" makes it not a bare specifier
-        // Actually let's check: it doesn't start with . or /, doesn't contain ://, doesn't start with data:
-        // So is_bare = true, but is_valid_package_name("raw-loader?esModule=false!./data.csv") = false (contains ? and !)
         assert!(matches!(result, ResolveResult::Unresolvable(_)));
     });
 }
 
 #[test]
 fn specifier_double_underscore_returns_unresolvable() {
-    // Turbopack barrel optimization prefixes
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result = specifier::resolve_specifier(ctx, file, "__barrel_optimize__", false);
@@ -1657,7 +1518,6 @@ fn specifier_double_underscore_returns_unresolvable() {
 
 #[test]
 fn specifier_pure_numeric_returns_unresolvable() {
-    // Pure numeric strings are not valid package names
     with_empty_ctx(|ctx| {
         let file = Path::new("/project/src/app.ts");
         let result = specifier::resolve_specifier(ctx, file, "123", false);
@@ -1665,10 +1525,6 @@ fn specifier_pure_numeric_returns_unresolvable() {
         assert!(matches!(result, ResolveResult::Unresolvable(_)));
     });
 }
-
-// -----------------------------------------------------------------------
-// resolve_specifier: relative path resolution failure
-// -----------------------------------------------------------------------
 
 #[test]
 fn specifier_relative_path_missing_is_unresolvable() {
@@ -1690,10 +1546,6 @@ fn specifier_parent_relative_path_missing_is_unresolvable() {
     });
 }
 
-// -----------------------------------------------------------------------
-// resolve_specifier: at-at slash alias
-// -----------------------------------------------------------------------
-
 #[test]
 fn specifier_at_at_slash_returns_unresolvable() {
     with_empty_ctx(|ctx| {
@@ -1704,22 +1556,15 @@ fn specifier_at_at_slash_returns_unresolvable() {
     });
 }
 
-// -----------------------------------------------------------------------
-// create_resolver: React Native plugin configuration
-// oxc_resolver uses statx syscall unsupported by Miri — skip all.
-// -----------------------------------------------------------------------
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn create_resolver_without_plugins() {
-    // Should create a resolver without panicking
     let _resolver = specifier::create_resolver(&[], &[]);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn create_resolver_with_react_native_plugin() {
-    // Should create a resolver with RN extensions without panicking
     let plugins = vec!["react-native".to_string()];
     let _resolver = specifier::create_resolver(&plugins, &[]);
 }
@@ -1745,33 +1590,22 @@ fn create_resolver_with_multiple_plugins() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn create_resolver_with_custom_conditions() {
-    // User-supplied conditions should be accepted without panic.
     let conditions = vec!["worker".to_string(), "edge-light".to_string()];
     let _resolver = specifier::create_resolver(&[], &conditions);
 }
 
-// -----------------------------------------------------------------------
-// .d.ts extension priority: runtime files resolve before declarations
-// -----------------------------------------------------------------------
-
 #[test]
 #[cfg_attr(miri, ignore)] // oxc_resolver uses statx syscall unsupported by Miri
 fn resolve_prefers_js_over_dts_when_both_exist() {
-    // When both `utils.js` and `utils.d.ts` exist side-by-side, resolving
-    // `./utils` should find the runtime file (`utils.js`), not the type
-    // declaration (`utils.d.ts`). Declaration files provide types for their
-    // companion .js files but are not standalone modules.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
-    // Create both files
     std::fs::write(root.join("utils.js"), "export const helper = 1;").unwrap();
     std::fs::write(
         root.join("utils.d.ts"),
         "export declare const helper: number;",
     )
     .unwrap();
-    // The importing file must exist for resolve_file to work
     std::fs::write(root.join("app.ts"), "import { helper } from './utils';").unwrap();
 
     let resolver = specifier::create_resolver(&[], &[]);
@@ -1794,7 +1628,6 @@ fn resolve_prefers_js_over_dts_when_both_exist() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn resolve_prefers_ts_over_dts_when_both_exist() {
-    // .ts should also resolve before .d.ts
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
@@ -1826,7 +1659,6 @@ fn resolve_prefers_ts_over_dts_when_both_exist() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn resolve_falls_back_to_dts_when_no_runtime_file() {
-    // When only .d.ts exists (no runtime companion), it should still resolve
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
@@ -1850,17 +1682,9 @@ fn resolve_falls_back_to_dts_when_no_runtime_file() {
     );
 }
 
-// -----------------------------------------------------------------------
-// Issue #135: package.json exports with `development` condition
-// -----------------------------------------------------------------------
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn resolve_honors_development_condition_by_default() {
-    // When a package.json `exports` map declares both a `development` and an
-    // `import` branch, fallow should honor `development` (common pattern in
-    // monorepos where `development` points at source files and `import` at
-    // compiled output). See issue #135.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 
@@ -1882,16 +1706,11 @@ fn resolve_honors_development_condition_by_default() {
     )
     .unwrap();
     std::fs::write(root.join("app.ts"), "import { src } from 'pkg';").unwrap();
-    // Minimum-viable resolver sandbox: pkg is discoverable via a peer dir on
-    // the filesystem, so point the resolver at the project root for bare-
-    // specifier lookup.
     std::fs::write(
         root.join("package.json"),
         r#"{"name": "app-root", "dependencies": {"pkg": "file:./pkg"}}"#,
     )
     .unwrap();
-    // oxc_resolver looks for bare specifiers under node_modules/, so symlink
-    // pkg into node_modules to exercise the real resolution path.
     std::fs::create_dir_all(root.join("node_modules")).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("pkg"), root.join("node_modules/pkg")).unwrap();
@@ -1915,9 +1734,6 @@ fn resolve_honors_development_condition_by_default() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn resolve_honors_user_supplied_conditions_before_baseline() {
-    // User-supplied conditions take priority over the baseline. Here the
-    // `worker` branch should win even though `development` and `import` both
-    // match. Validates the config-driven side of issue #135.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
 

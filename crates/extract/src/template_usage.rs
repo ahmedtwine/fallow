@@ -13,9 +13,7 @@ pub struct TemplateUsage {
     pub(crate) used_bindings: FxHashSet<String>,
     pub(crate) member_accesses: Vec<MemberAccess>,
     pub(crate) whole_object_uses: Vec<String>,
-    /// PascalCase tag names referenced in the template that matched no import
-    /// and no local binding. Candidates for framework convention auto-import
-    /// resolution (Nuxt `<Card001 />` components). See issue #704.
+    /// PascalCase tag names that matched no import or local binding.
     pub(crate) unresolved_tag_names: FxHashSet<String>,
 }
 
@@ -163,8 +161,6 @@ pub fn analyze_template_snippet_with_bound_targets(
                 })
                 .collect(),
         ),
-        // Tag-name capture happens in the tag scanner (`merge_component_tag_usage`),
-        // not in expression-snippet analysis, so this path contributes none.
         unresolved_tag_names: FxHashSet::default(),
     }
 }

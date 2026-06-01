@@ -50,8 +50,6 @@ fn extract_text(result: &rmcp::model::CallToolResult) -> &str {
     }
 }
 
-// ── End-to-end: analyze ──────────────────────────────────────────
-
 #[tokio::test]
 async fn e2e_analyze_returns_json_on_basic_project() {
     let bin = fallow_binary();
@@ -78,8 +76,6 @@ async fn e2e_analyze_returns_json_on_basic_project() {
     );
 }
 
-// ── End-to-end: project_info ─────────────────────────────────────
-
 #[tokio::test]
 async fn e2e_project_info_returns_files() {
     let bin = fallow_binary();
@@ -102,8 +98,6 @@ async fn e2e_project_info_returns_files() {
         "project_info should report files, got file_count={file_count}"
     );
 }
-
-// ── End-to-end: analyze with issue type filter ───────────────────
 
 #[tokio::test]
 async fn e2e_analyze_with_issue_type_filter() {
@@ -134,8 +128,6 @@ async fn e2e_analyze_with_issue_type_filter() {
     );
 }
 
-// ── End-to-end: trace_export ─────────────────────────────────────
-
 #[tokio::test]
 async fn e2e_trace_export_returns_json() {
     let bin = fallow_binary();
@@ -162,8 +154,6 @@ async fn e2e_trace_export_returns_json() {
     assert_eq!(json["export_name"].as_str(), Some("usedFunction"));
     assert_eq!(json["is_used"].as_bool(), Some(true));
 }
-
-// ── End-to-end: trace_file ───────────────────────────────────────
 
 #[tokio::test]
 async fn e2e_trace_file_returns_json() {
@@ -194,8 +184,6 @@ async fn e2e_trace_file_returns_json() {
     );
 }
 
-// ── End-to-end: trace_dependency ─────────────────────────────────
-
 #[tokio::test]
 async fn e2e_trace_dependency_returns_json() {
     let bin = fallow_binary();
@@ -220,8 +208,6 @@ async fn e2e_trace_dependency_returns_json() {
     assert_eq!(json["package_name"].as_str(), Some("react"));
     assert!(json["imported_by"].is_array());
 }
-
-// ── End-to-end: trace_clone ──────────────────────────────────────
 
 #[tokio::test]
 async fn e2e_trace_clone_returns_json() {
@@ -277,8 +263,6 @@ async fn e2e_trace_clone_returns_json() {
         }
     }
 }
-
-// ── End-to-end: health ───────────────────────────────────────────
 
 #[tokio::test]
 async fn e2e_health_returns_json() {

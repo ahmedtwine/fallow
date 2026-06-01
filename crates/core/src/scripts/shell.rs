@@ -26,7 +26,6 @@ pub fn split_shell_operators(script: &str) -> Vec<&str> {
     while i < len {
         let b = bytes[i];
 
-        // Toggle quote state
         if b == b'\'' && !in_double_quote {
             in_single_quote = !in_single_quote;
             i += 1;
@@ -38,13 +37,11 @@ pub fn split_shell_operators(script: &str) -> Vec<&str> {
             continue;
         }
 
-        // Inside quotes — skip everything
         if in_single_quote || in_double_quote {
             i += 1;
             continue;
         }
 
-        // Try to match a shell operator and split on it
         if let Some(op_len) = shell_operator_len(bytes, i) {
             segments.push(&script[start..i]);
             i += op_len;
@@ -70,12 +67,10 @@ fn shell_operator_len(bytes: &[u8], i: usize) -> Option<usize> {
     let b = bytes[i];
     let next = bytes.get(i + 1).copied();
 
-    // Two-character operators: && ||
     if matches!((b, next), (b'&', Some(b'&')) | (b'|', Some(b'|'))) {
         return Some(2);
     }
 
-    // Single-character operators: ; | &
     if b == b';' {
         return Some(1);
     }
@@ -93,7 +88,6 @@ fn shell_operator_len(bytes: &[u8], i: usize) -> Option<usize> {
 /// at the start of a token list. Returns the index of the first real command token, or `None`
 /// if all tokens were consumed.
 pub fn skip_initial_wrappers(tokens: &[&str], mut idx: usize) -> Option<usize> {
-    // Skip env var assignments (KEY=value pairs)
     while idx < tokens.len() && super::is_env_assignment(tokens[idx]) {
         idx += 1;
     }
@@ -101,14 +95,11 @@ pub fn skip_initial_wrappers(tokens: &[&str], mut idx: usize) -> Option<usize> {
         return None;
     }
 
-    // Skip env wrapper commands (cross-env, dotenv, env)
     while idx < tokens.len() && ENV_WRAPPERS.contains(&tokens[idx]) {
         idx += 1;
-        // Skip env var assignments after the wrapper
         while idx < tokens.len() && super::is_env_assignment(tokens[idx]) {
             idx += 1;
         }
-        // dotenv uses -- as separator
         if idx < tokens.len() && tokens[idx] == "--" {
             idx += 1;
         }
@@ -127,23 +118,14 @@ pub fn advance_past_package_manager(tokens: &[&str], mut idx: usize) -> Option<u
     let token = tokens[idx];
     if matches!(token, "npx" | "pnpx" | "bunx") {
         idx += 1;
-        // Skip npx flags (--yes, --no-install, -p, --package)
         while idx < tokens.len() && tokens[idx].starts_with('-') {
             let flag = tokens[idx];
             idx += 1;
-            // --package <name> consumes the next argument
             if matches!(flag, "--package" | "-p") && idx < tokens.len() {
                 idx += 1;
             }
         }
     } else if token == "bun" {
-        // `bun` is both a script runner and a direct executor:
-        //   bun <script> / bun run <script>   -> named script (skip)
-        //   bun exec <bin> / bun x <pkg>      -> executes a binary
-        //   bun --bun <bin> ...               -> runtime flags, then a binary to run
-        // Skip known boolean runtime flags, then classify the target. An unknown
-        // leading flag is treated as a script delegation (skip) rather than guessed
-        // at, since we cannot tell whether it consumes the following token as a value.
         idx += 1;
         let mut saw_runtime_flag = false;
         while idx < tokens.len() && BUN_RUNTIME_FLAGS.contains(&tokens[idx]) {
@@ -156,24 +138,15 @@ pub fn advance_past_package_manager(tokens: &[&str], mut idx: usize) -> Option<u
         let subcmd = tokens[idx];
         if subcmd == "exec" || subcmd == "x" {
             idx += 1;
-        } else if matches!(subcmd, "run" | "run-script") {
-            // Delegates to a named script, not a binary invocation
-            return None;
-        } else if !saw_runtime_flag {
-            // Bare `bun <name>` (or `bun --unknown-flag ...`) runs a script; skip.
+        } else if matches!(subcmd, "run" | "run-script") || !saw_runtime_flag {
             return None;
         }
-        // else: `bun --bun <bin>`, the post-flag target is a binary invocation.
     } else if matches!(token, "yarn" | "pnpm" | "npm") {
         if idx + 1 < tokens.len() {
             let subcmd = tokens[idx + 1];
             if subcmd == "exec" || subcmd == "dlx" {
                 idx += 2;
-            } else if matches!(subcmd, "run" | "run-script") {
-                // Delegates to a named script, not a binary invocation
-                return None;
             } else {
-                // Bare `yarn <name>` runs a script — skip
                 return None;
             }
         } else {
@@ -190,8 +163,6 @@ pub fn advance_past_package_manager(tokens: &[&str], mut idx: usize) -> Option<u
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- shell_operator_len ---
 
     #[test]
     fn operator_len_double_ampersand() {
@@ -238,8 +209,6 @@ mod tests {
     fn operator_len_semicolon_at_end() {
         assert_eq!(shell_operator_len(b";", 0), Some(1));
     }
-
-    // --- split_shell_operators ---
 
     #[test]
     fn split_empty_input() {
@@ -307,8 +276,6 @@ mod tests {
         assert_eq!(segments[5].trim(), "f");
     }
 
-    // --- skip_initial_wrappers ---
-
     #[test]
     fn skip_wrappers_no_wrappers() {
         let tokens = vec!["webpack", "--mode", "production"];
@@ -356,8 +323,6 @@ mod tests {
         let tokens = vec!["ignored", "cross-env", "NODE_ENV=prod", "webpack"];
         assert_eq!(skip_initial_wrappers(&tokens, 1), Some(3));
     }
-
-    // --- advance_past_package_manager ---
 
     #[test]
     fn advance_npm_run_returns_none() {
@@ -457,8 +422,6 @@ mod tests {
 
     #[test]
     fn advance_bun_runtime_flag_then_binary() {
-        // `bun --bun prek install`: --bun forces the bun runtime for the
-        // executed binary; `prek` is the binary, not a script.
         let tokens = vec!["bun", "--bun", "prek", "install"];
         assert_eq!(advance_past_package_manager(&tokens, 0), Some(2));
     }
@@ -471,31 +434,24 @@ mod tests {
 
     #[test]
     fn advance_bun_runtime_flag_then_run_is_script() {
-        // Bun documents `bun --watch run dev` (flag before `run`); the target
-        // is still a named script, so nothing is credited.
         let tokens = vec!["bun", "--watch", "run", "dev"];
         assert_eq!(advance_past_package_manager(&tokens, 0), None);
     }
 
     #[test]
     fn advance_bun_x_executes_binary() {
-        // `bun x <pkg>` is the bun-native alias of `bunx <pkg>`.
         let tokens = vec!["bun", "x", "cowsay"];
         assert_eq!(advance_past_package_manager(&tokens, 0), Some(2));
     }
 
     #[test]
     fn advance_bun_unknown_leading_flag_returns_none() {
-        // `--filter` consumes a value; an unrecognized leading flag is treated
-        // as a script delegation rather than guessed at (conservative: avoid
-        // crediting the flag value as a package).
         let tokens = vec!["bun", "--filter", "foo", "run", "build"];
         assert_eq!(advance_past_package_manager(&tokens, 0), None);
     }
 
     #[test]
     fn advance_bun_bare_name_returns_none() {
-        // Bare `bun <name>` runs a script, like `yarn <name>`.
         let tokens = vec!["bun", "scripts/build.ts"];
         assert_eq!(advance_past_package_manager(&tokens, 0), None);
     }

@@ -71,8 +71,7 @@ pub struct ActivateArgs {
     pub email: Option<String>,
 }
 
-// Manual `Debug` so a future `tracing::debug!(?args)` cannot leak the raw
-// license JWT through stderr. Same defensive principle as `CloudRequest`.
+// Manual `Debug` masks the raw license JWT in logs.
 impl std::fmt::Debug for ActivateArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActivateArgs")
@@ -455,9 +454,6 @@ mod tests {
 
     #[test]
     fn activate_args_debug_masks_raw_jwt() {
-        // Symmetric with CloudRequest + UploadInventoryArgs Debug masking.
-        // The raw JWT is a credential; future `tracing::debug!(?args)` must
-        // not leak it to stderr.
         let args = ActivateArgs {
             raw_jwt: Some("eyJhbGciOiJFZERTQSJ9.secret_payload.sig".to_owned()),
             email: Some("alice@example.com".to_owned()),
@@ -472,10 +468,8 @@ mod tests {
             formatted.contains("raw_jwt: Some(\"***\")"),
             "expected explicit redaction marker, got: {formatted}"
         );
-        // None case stays distinguishable.
         let bare = ActivateArgs::default();
         assert!(format!("{bare:?}").contains("raw_jwt: None"));
-        // Non-secret fields stay inspectable.
         assert!(formatted.contains("email: Some(\"alice@example.com\")"));
     }
 

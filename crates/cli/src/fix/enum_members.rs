@@ -136,7 +136,6 @@ pub(super) fn apply_enum_member_fixes(
                 continue;
             }
 
-            // Safety check: the line should contain the member name
             let line = lines[line_idx];
             if !line.contains(&member.member_name) {
                 continue;
@@ -216,16 +215,13 @@ pub(super) fn apply_enum_member_fixes(
 
             for fix in &member_fixes {
                 if folded_parents.contains(fix.parent_name.as_str()) {
-                    // Folded ranges are deleted as full blocks; skip per-member edits.
                     continue;
                 }
                 let line = &new_lines[fix.line_idx];
                 if line.contains('{') && line.contains('}') {
-                    // Single-line enum: remove the member token from the line
                     let new_line = remove_member_from_single_line(line, &fix.member_name);
                     new_lines[fix.line_idx] = new_line;
                 } else {
-                    // Multi-line enum: mark this line for removal
                     new_lines[fix.line_idx] = String::new();
                     lines_to_delete.push(fix.line_idx);
                 }
@@ -243,8 +239,6 @@ pub(super) fn apply_enum_member_fixes(
 
             stage_fixed_content(plan, path, &new_lines, &meta, &content);
 
-            // Optimistic `applied: true`; orchestrator flips to false on
-            // commit failure for this target path via the __target sidechannel.
             let target = path.display().to_string();
             for fix in &member_fixes {
                 if folded_parents.contains(fix.parent_name.as_str()) {
@@ -285,7 +279,6 @@ pub(super) fn apply_enum_member_fixes(
 ///
 /// Returns the modified line with the member removed and commas cleaned up.
 fn remove_member_from_single_line(line: &str, member_name: &str) -> String {
-    // Find the content between { and }
     let Some(open) = line.find('{') else {
         return line.to_string();
     };
@@ -300,11 +293,8 @@ fn remove_member_from_single_line(line: &str, member_name: &str) -> String {
     let suffix = &line[close..];
     let inner = &line[open + 1..close];
 
-    // Split inner by comma to get individual member tokens
     let parts: Vec<&str> = inner.split(',').collect();
 
-    // Filter out the part that matches the member name.
-    // A member part might be " Active", " Active = 'active'", etc.
     let filtered: Vec<String> = parts
         .iter()
         .filter(|part| {
@@ -312,7 +302,6 @@ fn remove_member_from_single_line(line: &str, member_name: &str) -> String {
             if trimmed.is_empty() {
                 return false;
             }
-            // Extract just the identifier name (before any `=` sign)
             let ident = trimmed.split('=').next().unwrap_or(trimmed).trim();
             ident != member_name
         })
@@ -320,10 +309,8 @@ fn remove_member_from_single_line(line: &str, member_name: &str) -> String {
         .collect();
 
     if filtered.is_empty() {
-        // All members removed — leave empty enum body: `enum Foo {}`
         format!("{}{}", prefix.trim_end(), suffix.trim_start())
     } else {
-        // Reconstruct with consistent formatting: `{ A, B }`
         let members_str = filtered.join(", ");
         format!("{prefix} {members_str} {suffix}")
     }
@@ -640,7 +627,6 @@ mod tests {
         let original = "enum Status {\n  Active,\n  Inactive,\n}\n";
         std::fs::write(&file, original).unwrap();
 
-        // Point at line 2 (Active), but claim the member name is "Missing"
         let fixes = fix_single_member(root, &file, "Status", "Missing", 2, false);
 
         assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
@@ -668,7 +654,6 @@ mod tests {
         let file = root.join("status.ts");
         std::fs::write(&file, "enum Status {\n  Active,\n  Inactive,\n}\n").unwrap();
 
-        // Remove the last member
         fix_single_member(root, &file, "Status", "Inactive", 3, false);
 
         let content = std::fs::read_to_string(&file).unwrap();
@@ -691,8 +676,6 @@ mod tests {
         let content = std::fs::read_to_string(&file).unwrap();
         assert_eq!(content, "enum Priority {\n  Low = 0,\n  High = 2,\n}\n");
     }
-
-    // ── remove_member_from_single_line unit tests ───────────────
 
     #[test]
     fn single_line_remove_first_member() {
@@ -732,7 +715,6 @@ mod tests {
 
     #[test]
     fn single_line_remove_two_members_sequentially() {
-        // Remove two members from a single-line enum via two separate fixes
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let file = root.join("status.ts");
@@ -812,25 +794,18 @@ mod tests {
     #[test]
     fn enum_fix_single_line_with_trailing_comma() {
         let result = remove_member_from_single_line("enum Foo { A, B, C, }", "B");
-        // Trailing empty part from split should be filtered (empty after trim)
         assert_eq!(result, "enum Foo { A, C }");
     }
 
     #[test]
     fn enum_fix_single_line_no_braces() {
-        // Edge case: no opening brace
         let result = remove_member_from_single_line("enum Foo A, B, C", "B");
         assert_eq!(result, "enum Foo A, B, C");
     }
 
     #[test]
     fn enum_fix_single_line_close_before_open() {
-        // Edge case: close brace before open brace
         let result = remove_member_from_single_line("} enum Foo { A }", "A");
-        // rfind('}') finds the last one, find('{') finds the first one at position 13
-        // But '}' at position 0 < '{' at position 13 is: open=13, close=15
-        // So open >= close? No, 13 < 15. Actually this would work.
-        // Let's just verify it doesn't panic
         assert!(!result.is_empty());
     }
 
@@ -902,7 +877,6 @@ mod tests {
         let file = root.join("status.ts");
         std::fs::write(&file, "enum Status { Active }\n").unwrap();
 
-        // line=0 saturates to line_idx=0
         let member = make_enum_member(&file, "Status", "Active", 0);
         let mut members_by_file: FxHashMap<PathBuf, Vec<&UnusedMember>> = FxHashMap::default();
         members_by_file.insert(file.clone(), vec![&member]);
@@ -921,8 +895,6 @@ mod tests {
         );
         let _ = plan.commit();
 
-        // line_idx=0 points to "enum Status { Active }" which contains "Active"
-        // and has both { and }, so it's treated as single-line
         let content = std::fs::read_to_string(&file).unwrap();
         assert_eq!(content, "enum Status {}\n");
     }
@@ -1105,13 +1077,11 @@ mod tests {
             &mut fixes,
         );
 
-        // File is untouched on dry-run
         let content = std::fs::read_to_string(&file).unwrap();
         assert_eq!(content, "export enum Status {\n  Active,\n  Inactive,\n}\n");
         assert_eq!(fixes.len(), 1);
         assert_eq!(fixes[0]["type"], "remove_export");
         assert_eq!(fixes[0]["name"], "Status");
-        // Dry-run entries should NOT carry an applied key.
         assert!(fixes[0].get("applied").is_none());
     }
 
@@ -1141,7 +1111,6 @@ mod tests {
         );
         let _ = plan.commit();
 
-        // Non-exported enum: fold does not fire, members removed individually.
         let content = std::fs::read_to_string(&file).unwrap();
         assert_eq!(content, "enum Status {\n}\n");
         assert_eq!(fixes.len(), 2);

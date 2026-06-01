@@ -32,16 +32,7 @@ use super::types::{ResolveContext, ResolveResult};
 pub(super) fn create_resolver(active_plugins: &[String], extra_conditions: &[String]) -> Resolver {
     let mut options = ResolveOptions {
         extensions: build_extensions(active_plugins),
-        // Support TypeScript's node16/nodenext module resolution where .ts files
-        // are imported with .js extensions (e.g., `import './api.js'` for `api.ts`).
         extension_alias: vec![
-            // Glimmer single-file components live in `.gts` / `.gjs` files
-            // but the canonical TypeScript-bundler / Glint convention is to
-            // write the import with a `.ts` (or `.js`) extension and have
-            // the resolver pick up the Glimmer sibling. `.gts` / `.gjs` are
-            // framework-specific extensions that don't collide with anything
-            // else, so this is applied unconditionally rather than gated on
-            // the Ember plugin.
             (
                 ".js".into(),
                 vec![
@@ -62,13 +53,6 @@ pub(super) fn create_resolver(active_plugins: &[String], extra_conditions: &[Str
         ..Default::default()
     };
 
-    // Always use auto-discovery mode so oxc_resolver finds the nearest tsconfig.json
-    // for each file. This is critical for monorepos where workspace packages have
-    // their own tsconfig with path aliases (e.g., `~/*` → `./src/*`). Manual mode
-    // with a root tsconfig only uses that single tsconfig's paths for ALL files,
-    // missing workspace-specific aliases. Auto mode walks up from each file to find
-    // the nearest tsconfig.json and follows `extends` chains, so workspace tsconfigs
-    // that extend a root tsconfig still inherit root-level paths.
     options.tsconfig = Some(oxc_resolver::TsconfigDiscovery::Auto);
 
     Resolver::new(options)
@@ -156,8 +140,6 @@ fn warn_once_tsconfig(ctx: &ResolveContext<'_>, err: &ResolveError) {
     let message = err.to_string();
     let should_warn = {
         let Ok(mut seen) = ctx.tsconfig_warned.lock() else {
-            // Mutex poisoned by a panic on another thread — stay silent rather
-            // than poisoning this thread's resolution with another panic.
             return;
         };
         seen.insert(message.clone())
@@ -838,29 +820,15 @@ fn try_scss_fallbacks(
     if !is_scss_importer && !from_style {
         return None;
     }
-    // 0. CSS-extension probe: `./Foo` -> `./Foo.scss` / `.sass` / `.css`. The
-    //    standard resolver's extension list contains both `.vue` / `.svelte` /
-    //    `.astro` AND CSS extensions; for SFC importers (`from_style = true`)
-    //    `./Foo` would otherwise resolve to the SFC itself instead of the
-    //    sibling `Foo.scss`. SCSS importers also benefit (defensive against
-    //    future extension list changes).
     if let Some(result) = try_css_extension_fallback(ctx, from_file, specifier) {
         return Some(result);
     }
-    // 1. Local partial convention: `@use 'variables'` → `_variables.scss`.
     if let Some(result) = try_scss_partial_fallback(ctx, from_file, specifier) {
         return Some(result);
     }
-    // 2. Framework-supplied SCSS include paths (Angular's
-    //    `stylePreprocessorOptions.includePaths`, Nx equivalent). See #103.
     if let Some(result) = try_scss_include_path_fallback(ctx, from_file, specifier, from_style) {
         return Some(result);
     }
-    // 3. `node_modules/` search (Sass's own resolution algorithm):
-    //    `@import 'bootstrap/scss/functions'` →
-    //    `node_modules/bootstrap/scss/_functions.scss`. Returns
-    //    `ResolveResult::NpmPackage` so unused-/unlisted-dependency detection
-    //    stays accurate. See #125.
     try_scss_node_modules_fallback(ctx, from_file, specifier, from_style)
 }
 
@@ -1032,23 +1000,12 @@ pub(super) fn resolve_specifier(
     specifier: &str,
     from_style: bool,
 ) -> ResolveResult {
-    // Deno import schemes. `jsr:<spec>` names the JSR registry, which is not npm
-    // and cannot be accounted for against package.json, so treat it like a URL
-    // import: external and never reported. `npm:<pkg>[@version][/subpath]` names
-    // an npm package, so strip the scheme and the `@version` selector and resolve
-    // the remainder as a normal bare specifier. A declared/installed dependency is
-    // then credited, and the original `npm:` source string is preserved on the
-    // ImportInfo for the unlisted-dependency carve-out. These schemes never appear
-    // in Node projects, so this leaves non-Deno resolution unchanged. See #624.
     if specifier.starts_with("jsr:") {
         return ResolveResult::ExternalFile(PathBuf::from(specifier));
     }
     let npm_normalized;
     let specifier = if let Some(rest) = specifier.strip_prefix("npm:") {
         npm_normalized = normalize_npm_specifier(rest);
-        // A bare `npm:` (empty body) is malformed Deno syntax; treat it as an
-        // external runtime import rather than emitting an `unresolved-import`
-        // finding for the empty specifier.
         if npm_normalized.is_empty() {
             return ResolveResult::ExternalFile(PathBuf::from(specifier));
         }
@@ -1057,7 +1014,6 @@ pub(super) fn resolve_specifier(
         specifier
     };
 
-    // URL imports (https://, http://, data:) are valid but can't be resolved locally
     if specifier.contains("://") || specifier.starts_with("data:") {
         return ResolveResult::ExternalFile(PathBuf::from(specifier));
     }
@@ -1066,20 +1022,6 @@ pub(super) fn resolve_specifier(
         return result;
     }
 
-    // Root-relative paths (`/src/main.tsx`, `/static/style.css`) are a web
-    // convention meaning "relative to the project/workspace root". Vite,
-    // Parcel, and other dev servers resolve them this way. In monorepos, each
-    // workspace member has its own Vite root, so `site/index.html` referencing
-    // `/src/main.tsx` should resolve to `site/src/main.tsx`, not
-    // `<monorepo-root>/src/main.tsx`. Use the source file's parent directory as
-    // the base, which is correct for both workspace members and single projects.
-    //
-    // Applied to web-facing source files: HTML, JSX/TSX, plain JS/TS, and
-    // Glimmer files. HTML-like asset extraction can originate from `.html`
-    // parsing or from `html` tagged templates in JS/TS-family files, so keep
-    // the source extension set broad even though generic JSX resource
-    // attributes are intentionally ignored by default. See issues #105 and
-    // #640.
     if specifier.starts_with('/')
         && from_file.extension().is_some_and(|e| {
             matches!(
@@ -1118,9 +1060,6 @@ pub(super) fn resolve_specifier(
                 }
             }
         }
-        // Fall back to project root for non-workspace setups where the source
-        // file may be in a subdirectory (e.g., `public/index.html` referencing
-        // `/src/main.tsx`, or a Hono JSX layout in `src/` referencing `/static/style.css`).
         if source_dir != ctx.root
             && let Ok(resolved) = ctx.resolver.resolve(ctx.root, &relative)
         {
@@ -1142,19 +1081,10 @@ pub(super) fn resolve_specifier(
         return ResolveResult::Unresolvable(specifier.to_string());
     }
 
-    // CSS-context imports (SFC `<style>` blocks) bypass the standard resolver
-    // entirely and route through SCSS-aware fallbacks first. The standard
-    // resolver's extension list mixes JS / SFC / CSS extensions, so a bare
-    // `./Foo` from a `Foo.vue` `<style lang="scss">` block would resolve to
-    // `Foo.vue` itself instead of the sibling `Foo.scss`. The SCSS fallback
-    // chain restricts probing to `.css` / `.scss` / `.sass` (plus partial /
-    // include-path / node_modules conventions), which matches Sass's actual
-    // resolution algorithm. See issue #195 (Case B).
     if from_style && let Some(result) = try_scss_fallbacks(ctx, from_file, specifier, true) {
         return result;
     }
 
-    // Bare specifier classification (used for fallback logic below).
     let is_bare = is_bare_specifier(specifier);
     let is_alias = is_path_alias(specifier);
     let matches_plugin_alias = ctx
@@ -1168,30 +1098,12 @@ pub(super) fn resolve_specifier(
         return result;
     }
 
-    // Use resolve_file instead of resolve so that TsconfigDiscovery::Auto works.
-    // oxc_resolver's resolve() ignores Auto tsconfig discovery — only resolve_file()
-    // walks up from the importing file to find the nearest tsconfig.json and apply
-    // its path aliases (e.g., @/ → src/).
-    //
-    // If resolve_file returns a tsconfig-related error (e.g., a solution-style
-    // tsconfig.json references a sibling with a broken `extends` chain), retry with
-    // the directory-only `resolve()` form so a broken sibling config does not poison
-    // resolution for files covered by a healthy sibling. See issue #97.
     match resolve_file_with_tsconfig_fallback(ctx, from_file, specifier) {
         ResolveFileAttempt::Resolved {
             resolution: resolved,
             used_tsconfig_fallback,
         } => {
             let resolved_path = resolved.path();
-            // Reject JS/TS hits for stylesheet importers. The standard resolver's
-            // extension list mixes JS/TS with CSS-family extensions and tries
-            // `.tsx` / `.ts` before `.scss` / `.sass` / `.css`, so a `@use 'Widget'`
-            // from a `.scss` file would otherwise resolve to a sibling
-            // `Widget.tsx` even when `Widget.scss` exists next to it. Sass's
-            // actual resolution algorithm only considers stylesheets; redirect
-            // to the SCSS-aware fallback chain (CSS-extension probe, partial
-            // convention, include paths, node_modules) and short-circuit with
-            // `Unresolvable` if those also fail. See issue #245.
             let is_scss_importer = from_file
                 .extension()
                 .is_some_and(|e| e == "scss" || e == "sass");
@@ -1214,18 +1126,10 @@ pub(super) fn resolve_specifier(
                     return ResolveResult::Unresolvable(specifier.to_string());
                 }
             }
-            // Try raw path lookup first (avoids canonicalize syscall in most cases)
             if let Some(&file_id) = ctx.raw_path_to_id.get(resolved_path) {
                 return ResolveResult::InternalModule(file_id);
             }
 
-            // Fast path for bare specifiers resolving to node_modules: if the resolved
-            // path is in node_modules (but not pnpm's .pnpm virtual store) and the
-            // package is not a workspace package, skip the expensive canonicalize()
-            // syscall and go directly to NpmPackage. Workspace packages need the full
-            // fallback chain (source fallback, pnpm fallback) to map dist→src.
-            // Note: the byte pattern check handles Unix and Windows separators separately.
-            // Paths with mixed separators fall through to canonicalize() (perf-only cost).
             if is_bare
                 && !resolved_path
                     .as_os_str()
@@ -1246,7 +1150,6 @@ pub(super) fn resolve_specifier(
                 };
             }
 
-            // Fall back to canonical path lookup
             match dunce::canonicalize(resolved_path) {
                 Ok(canonical) => {
                     if let Some(&file_id) = ctx.path_to_id.get(canonical.as_path()) {
@@ -1254,12 +1157,8 @@ pub(super) fn resolve_specifier(
                     } else if let Some(fallback) = ctx.canonical_fallback
                         && let Some(file_id) = fallback.get(&canonical)
                     {
-                        // Intra-project symlink: raw path differs from canonical path.
-                        // The lazy fallback resolves this without upfront bulk canonicalize.
                         ResolveResult::InternalModule(file_id)
                     } else if let Some(file_id) = try_source_fallback(&canonical, ctx.path_to_id) {
-                        // Exports map resolved to a built output (e.g., dist/utils.js)
-                        // but the source file (e.g., src/utils.ts) is what we track.
                         ResolveResult::InternalModule(file_id)
                     } else if let Some(file_id) =
                         try_pnpm_workspace_fallback(&canonical, ctx.path_to_id, ctx.workspace_roots)
@@ -1268,10 +1167,6 @@ pub(super) fn resolve_specifier(
                     } else if let Some(pkg_name) =
                         extract_package_name_from_node_modules_path(&canonical)
                     {
-                        // Workspace package resolved through a node_modules symlink to
-                        // a built output (e.g. dist/esm/button/index.js) that has no
-                        // src/ mirror. Retry against the workspace root's source tree.
-                        // See issue #106.
                         if ctx.workspace_roots.contains_key(pkg_name.as_str())
                             && let Some(result) = try_workspace_package_fallback(ctx, specifier)
                         {
@@ -1288,7 +1183,6 @@ pub(super) fn resolve_specifier(
                     }
                 }
                 Err(_) => {
-                    // Path doesn't exist on disk — try source fallback on the raw path
                     if let Some(file_id) = try_source_fallback(resolved_path, ctx.path_to_id) {
                         ResolveResult::InternalModule(file_id)
                     } else if let Some(file_id) = try_pnpm_workspace_fallback(
@@ -1342,8 +1236,6 @@ pub(super) fn resolve_specifier(
             if used_tsconfig_fallback
                 && matches_nearest_tsconfig_path_alias(ctx.root, from_file, specifier)
             {
-                // The tsconfig chain was broken, so alias-aware resolution is unavailable.
-                // Keep these imports unresolved instead of misclassifying them as npm packages.
                 return ResolveResult::Unresolvable(specifier.to_string());
             }
 
@@ -1352,30 +1244,15 @@ pub(super) fn resolve_specifier(
             }
 
             if is_alias || matches_plugin_alias {
-                // Try plugin-provided path aliases before giving up.
-                // This covers both built-in alias shapes (`~/`, `@/`, `#foo`) and
-                // custom prefixes discovered from framework config files such as
-                // `@shared/*` or `$utils/*`.
                 if let Some(result) = try_path_alias_fallback(ctx, specifier) {
                     return result;
                 }
-                // A plugin-alias prefix can collide with a workspace package name when
-                // a tsconfig `paths` entry maps a sibling-package specifier at unbuilt
-                // output, e.g. `"@scope/*": ["../*/dist/index.d.ts"]`. The TypeScript
-                // plugin registers `@scope/` as a path alias, so `@scope/pkg` matches
-                // `matches_plugin_alias`, but the alias target (`dist/...`) does not
-                // exist pre-build and `try_path_alias_fallback` returns `None`. Before
-                // giving up, resolve it as a workspace package against the package's
-                // source tree, matching the non-alias bare-specifier path below.
-                // See issue #757.
                 if is_bare
                     && is_valid_package_name(specifier)
                     && let Some(result) = try_workspace_package_fallback(ctx, specifier)
                 {
                     return result;
                 }
-                // Path aliases that fail resolution are unresolvable, not npm packages.
-                // Classifying them as NpmPackage would cause false "unlisted dependency" reports.
                 ResolveResult::Unresolvable(specifier.to_string())
             } else if let Some(result) =
                 try_css_relative_subpath_fallback(ctx, from_file, specifier, from_style)
@@ -1384,9 +1261,6 @@ pub(super) fn resolve_specifier(
             } else if is_plain_css_file(from_file) && is_bare_style_subpath(specifier) {
                 ResolveResult::Unresolvable(specifier.to_string())
             } else if is_bare && is_valid_package_name(specifier) {
-                // Workspace package fallback: self-referencing and cross-workspace
-                // imports without node_modules symlinks. Resolves `@org/pkg/sub`
-                // against the workspace root's source tree. See issues #106 and #641.
                 if let Some(result) = try_workspace_package_fallback(ctx, specifier) {
                     return result;
                 }
@@ -1486,25 +1360,14 @@ mod tests {
         )));
     }
 
-    // `TsconfigCircularExtend(CircularPathBufs)` is part of the matched set but
-    // cannot be directly unit-tested: `CircularPathBufs` is not re-exported from
-    // `oxc_resolver::lib`, so external crates cannot construct the variant. The
-    // `matches!` arm is structural, so adding the variant to `is_tsconfig_error`
-    // is guaranteed by the compiler to return `true` regardless of payload.
-
     #[test]
     fn io_error_is_tsconfig_error() {
-        // An IO error (permission denied while reading a tsconfig) must trigger
-        // the fallback. The variant is shared with non-tsconfig IO failures, but
-        // the retry via `resolve()` is safe in either case.
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
         assert!(is_tsconfig_error(&ResolveError::from(io_err)));
     }
 
     #[test]
     fn json_error_is_tsconfig_error() {
-        // Malformed tsconfig JSON surfaces as ResolveError::Json. Same variant
-        // covers malformed package.json; retry via `resolve()` is safe there too.
         assert!(is_tsconfig_error(&ResolveError::Json(JSONError {
             path: PathBuf::from("/project/tsconfig.json"),
             message: "unexpected token".to_string(),
@@ -1515,8 +1378,6 @@ mod tests {
 
     #[test]
     fn module_not_found_is_not_tsconfig_error() {
-        // Regular "module not found" must NOT trigger the fallback —
-        // the tsconfig loaded fine, the specifier just doesn't exist.
         assert!(!is_tsconfig_error(&ResolveError::NotFound(
             "./missing-module".to_string()
         )));

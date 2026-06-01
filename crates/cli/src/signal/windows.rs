@@ -19,11 +19,6 @@
 
 use std::io;
 
-// `BOOL` moved from `Win32::Foundation` to `windows_sys::core` in
-// windows-sys 0.61 (matches the `SetConsoleCtrlHandler` signature
-// `add: windows_sys::core::BOOL -> windows_sys::core::BOOL`). The old
-// `Win32::Foundation::BOOL` path no longer resolves and broke the
-// Windows ARM64 native compile on every PR.
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
     SetConsoleCtrlHandler,
@@ -60,9 +55,6 @@ unsafe extern "system" fn handler(ctrl_type: u32) -> BOOL {
     reason = "FFI to Win32 SetConsoleCtrlHandler; `handler` matches the documented PHANDLER_ROUTINE ABI"
 )]
 pub fn install() -> io::Result<()> {
-    // SAFETY: `handler` matches the documented `PHANDLER_ROUTINE` ABI;
-    // the second argument (`Add`) is TRUE so Windows pushes onto the
-    // existing handler chain rather than replacing it.
     let ok: BOOL = unsafe { SetConsoleCtrlHandler(Some(handler), 1) };
     if ok == 0 {
         return Err(io::Error::last_os_error());

@@ -16,7 +16,6 @@ fn init_temp_dir(suffix: &str) -> std::path::PathBuf {
         let _ = fs::remove_dir_all(&dir);
     }
     fs::create_dir_all(&dir).unwrap();
-    // init requires a package.json to exist
     fs::write(
         dir.join("package.json"),
         r#"{"name": "init-test", "main": "index.ts"}"#,
@@ -29,10 +28,6 @@ fn init_temp_dir(suffix: &str) -> std::path::PathBuf {
 fn cleanup(dir: &std::path::Path) {
     let _ = fs::remove_dir_all(dir);
 }
-
-// ---------------------------------------------------------------------------
-// Init creates config files
-// ---------------------------------------------------------------------------
 
 #[test]
 fn init_creates_fallowrc_json() {

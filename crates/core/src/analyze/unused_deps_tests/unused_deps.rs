@@ -1,7 +1,5 @@
 use super::helpers::*;
 
-// ---- find_unused_dependencies integration tests ----
-
 #[test]
 fn unused_dep_flagged_when_never_imported() {
     let (graph, _) = build_graph_with_npm_imports(&[("react", false)]);
@@ -32,7 +30,6 @@ fn known_tooling_dev_deps_not_flagged_as_unused() {
     let (unused, unused_dev, _) = find_unused_dependencies(&graph, &pkg, &config, None, &[]);
 
     assert!(unused.is_empty());
-    // "jest" and "vitest" are known tooling deps, so they should NOT be flagged
     assert!(
         !unused_dev.iter().any(|d| d.package_name == "jest"),
         "jest is a known tooling dep and should be filtered"
@@ -73,7 +70,6 @@ fn unused_optional_dep_flagged_when_never_imported() {
 
 #[test]
 fn implicit_deps_not_flagged_as_unused() {
-    // react-dom, @types/node, etc. are implicit and should be filtered
     let (graph, _) = build_graph_with_npm_imports(&[]);
     let pkg = make_pkg(&["react-dom", "@types/node"], &[], &[]);
     let config = test_config(PathBuf::from("/project"));
@@ -322,12 +318,8 @@ fn unused_dep_location_is_correct() {
     );
 }
 
-// ---- Scoped package / subpath import edge cases ----
-
 #[test]
 fn scoped_package_subpath_import_recognized_as_used() {
-    // import { Button } from '@chakra-ui/react/button'
-    // should recognize '@chakra-ui/react' as the package name
     let (graph, _resolved_modules) = build_graph_with_npm_imports(&[("@chakra-ui/react", false)]);
     let pkg = make_pkg(&["@chakra-ui/react"], &[], &[]);
     let config = test_config(PathBuf::from("/project"));
@@ -342,7 +334,6 @@ fn scoped_package_subpath_import_recognized_as_used() {
 
 #[test]
 fn optional_dep_in_peer_deps_also_counts() {
-    // An optional dep that is also used should not be flagged
     let (graph, _) = build_graph_with_npm_imports(&[("sharp", false)]);
     let pkg = make_pkg(&[], &[], &["sharp"]);
     let config = test_config(PathBuf::from("/project"));
@@ -354,8 +345,6 @@ fn optional_dep_in_peer_deps_also_counts() {
         "optional dep that is imported should not be flagged as unused"
     );
 }
-
-// ---- Empty / edge case scenarios ----
 
 #[test]
 fn no_deps_produces_no_unused() {
@@ -414,7 +403,6 @@ fn unlisted_dep_has_import_sites() {
 
 #[test]
 fn path_alias_imports_not_reported_as_unlisted() {
-    // @/components and ~/utils are path aliases, not npm packages
     let files = vec![DiscoveredFile {
         id: FileId(0),
         path: PathBuf::from("/project/src/index.ts"),
@@ -551,11 +539,8 @@ fn multiple_unresolved_imports_collected() {
     assert!(unresolved.iter().any(|u| u.specifier == "./missing-b"));
 }
 
-// ---- Additional coverage: all deps used scenario ----
-
 #[test]
 fn all_deps_used_produces_no_unused() {
-    // Every dependency listed is also imported — nothing should be flagged
     let (graph, _) =
         build_graph_with_npm_imports(&[("react", false), ("lodash", false), ("axios", false)]);
     let pkg = make_pkg(&["react", "lodash", "axios"], &[], &[]);
@@ -572,12 +557,8 @@ fn all_deps_used_produces_no_unused() {
     assert!(unused_optional.is_empty());
 }
 
-// ---- Additional coverage: workspace-scoped dependency usage ----
-
 #[test]
 fn workspace_dep_used_within_workspace_not_flagged() {
-    // A workspace declares "react" as a dep AND a file within that workspace imports "react".
-    // This dep should NOT be flagged as unused for the workspace.
     let ws_root = PathBuf::from("/project/packages/web");
     let files = vec![DiscoveredFile {
         id: FileId(0),
@@ -618,22 +599,16 @@ fn workspace_dep_used_within_workspace_not_flagged() {
     }];
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // Root package.json does NOT list "react" — it's only in the workspace
     let root_pkg = make_pkg(&[], &[], &[]);
     let config = test_config(PathBuf::from("/project"));
 
-    // The workspace package.json would list "react", but since we can't write to disk,
-    // we verify that the root analysis does not flag "react" because it IS used somewhere.
     let (unused, _, _) = find_unused_dependencies(&graph, &root_pkg, &config, None, &[]);
 
-    // "react" is not in root package.json, so it won't appear in unused root deps at all
     assert!(
         !unused.iter().any(|d| d.package_name == "react"),
         "react should not be in root unused since it's not in root deps"
     );
 }
-
-// ---- Additional coverage: unused deps with plugin tooling for dev deps ----
 
 #[test]
 fn plugin_tooling_dev_deps_not_flagged() {

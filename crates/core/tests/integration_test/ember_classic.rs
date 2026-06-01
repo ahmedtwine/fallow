@@ -1,32 +1,6 @@
-//! End-to-end smoke test for the Ember.js / Glimmer / Embroider plugin
-//! against the `tests/fixtures/ember-classic/` fixture.
-//!
-//! Covers the plugin's two suppression mechanisms plus one HTML-scanner
-//! integration at the level of `AnalysisResults`, not the per-shape unit
-//! tests in `crates/core/src/plugins/ember.rs`:
-//!
-//! 1. `tooling_dependencies`: `ember-source`, `ember-cli-htmlbars`, and
-//!    other runtime-resolved packages are not flagged as `unused-dependency`
-//!    even though no source file imports them.
-//! 2. `virtual_module_prefixes`: `@ember/object`,
-//!    `@ember/routing/router-service`, and `@ember/service` (AMD-loader /
-//!    Embroider-rewritten specifiers; not real npm packages) are not
-//!    flagged as `unresolved-import` or `unlisted-dependency`.
-//! 3. `<script src="{{rootURL}}...">` / `<script src="{{config.assetsPath}}...">`
-//!    placeholders in `app/index.html` are skipped by the generic
-//!    template-placeholder filter in `crate::extract::html`; they never
-//!    enter the import graph in the first place, so they don't surface as
-//!    `unresolved-import`. (This is a framework-agnostic HTML-scanner fix,
-//!    not Ember-specific plugin code; the witness lives here because
-//!    Ember is the most common consumer.)
-//!
-//! Also fences:
-//!
-//! - `used_class_member_rules`: `Service::init` / `Service::willDestroy`
-//!   and `Route::model` / `Route::setupController` are not surfaced as
-//!   `unused-class-member` on the convention subclasses.
-//! - Template-only imports survive: `on` in `app/components/counter.gts`
-//!   is referenced only inside the `<template>` block.
+//! End-to-end smoke test for the Ember.js / Glimmer / Embroider plugin.
+//! Covers the plugin suppressions and the HTML placeholder filter at the
+//! `AnalysisResults` level.
 
 use super::common::{create_config, fixture_path};
 
@@ -62,7 +36,6 @@ fn ember_classic_fixture_recognises_plugin_suppressions() {
         })
         .collect();
 
-    // 1. Tooling-only dependencies stay credited.
     for tool in [
         "ember-source",
         "ember-cli",
@@ -76,8 +49,6 @@ fn ember_classic_fixture_recognises_plugin_suppressions() {
         );
     }
 
-    // 2. `@ember/*` virtual specifiers consumed by `app/controllers/application.ts`
-    // must not surface as unresolved or unlisted.
     for virtual_spec in [
         "@ember/object",
         "@ember/service",
@@ -101,10 +72,6 @@ fn ember_classic_fixture_recognises_plugin_suppressions() {
         );
     }
 
-    // 3. `{{rootURL}}` / `{{config.assetsPath}}` placeholders in
-    //    `app/index.html` are filtered out at HTML asset extraction
-    //    (`crate::extract::html::is_template_placeholder`), so they never
-    //    enter the import graph and cannot surface as `unresolved-import`.
     for placeholder_fragment in ["{{rootURL}}", "{{config.assetsPath}}"] {
         assert!(
             !unresolved
@@ -115,8 +82,6 @@ fn ember_classic_fixture_recognises_plugin_suppressions() {
         );
     }
 
-    // 4. Framework-invoked lifecycle members on convention subclasses
-    //    survive (scoped used-class-member rules).
     let lifecycle_must_survive = [
         ("SessionService", "init"),
         ("SessionService", "willDestroy"),

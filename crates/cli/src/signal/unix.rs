@@ -29,14 +29,9 @@ pub fn install() -> io::Result<()> {
                 let exit_code = match signal {
                     SIGINT => 130,
                     SIGTERM => 143,
-                    // signal-hook only delivers the signals we registered.
                     _ => 128,
                 };
                 handle_signal(exit_code);
-                // If we returned from handle_signal we are in graceful
-                // mode; keep listening for the next signal. A second
-                // SIGINT in graceful mode is still graceful (the watch
-                // loop polls the shutdown flag and exits cleanly).
             }
         })?;
     Ok(())

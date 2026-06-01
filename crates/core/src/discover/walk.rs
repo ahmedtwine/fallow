@@ -100,24 +100,20 @@ pub const SOURCE_EXTENSIONS: &[&str] = &[
 
 /// Glob patterns for test/dev/story files excluded in production mode.
 pub const PRODUCTION_EXCLUDE_PATTERNS: &[&str] = &[
-    // Test files
     "**/*.test.*",
     "**/*.spec.*",
     "**/*.e2e.*",
     "**/*.e2e-spec.*",
     "**/*.bench.*",
     "**/*.fixture.*",
-    // Story files
     "**/*.stories.*",
     "**/*.story.*",
-    // Test directories
     "**/__tests__/**",
     "**/__mocks__/**",
     "**/__snapshots__/**",
     "**/__fixtures__/**",
     "**/test/**",
     "**/tests/**",
-    // Dev/config files at project root only (not nested src/ files like Angular's app.config.ts)
     "*.config.*",
     "**/.*.js",
     "**/.*.ts",
@@ -156,17 +152,14 @@ fn is_allowed_hidden_with_scopes(
     let name = entry.file_name();
     let name_str = name.to_string_lossy();
 
-    // Not hidden — always allow
     if !name_str.starts_with('.') {
         return true;
     }
 
-    // Hidden files are fine — the type filter (source extensions) will handle them
     if entry.file_type().is_some_and(|ft| !ft.is_dir()) {
         return true;
     }
 
-    // Hidden directory — check against the allowlist
     is_allowed_hidden_dir(name)
         || is_allowed_scoped_hidden_dir(name, entry.path(), additional_hidden_dir_scopes)
 }
@@ -219,7 +212,6 @@ pub fn discover_files_with_additional_hidden_dirs(
         walk_builder.filter_entry(move |entry| is_allowed_hidden_with_scopes(entry, &scopes));
     }
 
-    // Build production exclude matcher if needed
     let production_excludes = if config.production {
         let mut builder = globset::GlobSetBuilder::new();
         for pattern in PRODUCTION_EXCLUDE_PATTERNS {
@@ -235,10 +227,6 @@ pub fn discover_files_with_additional_hidden_dirs(
         None
     };
 
-    // Parallel filesystem walk — uses work-stealing across config.threads threads.
-    // `build_parallel()` honors the `.threads()` setting (unlike sequential `build()`).
-    // Each thread collects results into a local buffer, flushed on drop to avoid
-    // per-entry Mutex contention.
     let collected: Mutex<Vec<(std::path::PathBuf, u64)>> = Mutex::new(Vec::new());
     let mut visitor_builder = FileVisitorBuilder {
         root: &config.root,
@@ -248,10 +236,6 @@ pub fn discover_files_with_additional_hidden_dirs(
     };
     walk_builder.build_parallel().visit(&mut visitor_builder);
 
-    // Sort by path for stable, deterministic FileId assignment.
-    // The same set of files always produces the same IDs regardless of file
-    // size changes, which is the foundation for incremental analysis and
-    // cross-run graph caching.
     let mut raw = collected
         .into_inner()
         .expect("walk collector lock poisoned");
@@ -276,7 +260,6 @@ mod tests {
 
     use super::*;
 
-    // is_allowed_hidden_dir tests
     #[test]
     fn allowed_hidden_dirs() {
         assert!(is_allowed_hidden_dir(OsStr::new(".storybook")));
@@ -297,13 +280,10 @@ mod tests {
 
     #[test]
     fn non_hidden_dirs_not_in_allowlist() {
-        // Non-hidden names should not match the allowlist (they are always allowed
-        // by is_allowed_hidden because they don't start with '.')
         assert!(!is_allowed_hidden_dir(OsStr::new("src")));
         assert!(!is_allowed_hidden_dir(OsStr::new("node_modules")));
     }
 
-    // SOURCE_EXTENSIONS tests
     #[test]
     fn source_extensions_include_typescript() {
         assert!(SOURCE_EXTENSIONS.contains(&"ts"));
@@ -355,7 +335,6 @@ mod tests {
         assert!(SOURCE_EXTENSIONS.contains(&"gql"));
     }
 
-    // PRODUCTION_EXCLUDE_PATTERNS tests — verify actual glob matching, not just string contains
     fn build_production_glob_set() -> globset::GlobSet {
         let mut builder = globset::GlobSetBuilder::new();
         for pattern in PRODUCTION_EXCLUDE_PATTERNS {
@@ -375,7 +354,6 @@ mod tests {
         assert!(set.is_match("src/Button.test.ts"));
         assert!(set.is_match("src/utils.spec.tsx"));
         assert!(set.is_match("src/__tests__/helper.ts"));
-        // Non-test files should NOT match
         assert!(!set.is_match("src/Button.ts"));
         assert!(!set.is_match("src/utils.tsx"));
     }
@@ -385,28 +363,22 @@ mod tests {
         let set = build_production_glob_set();
         assert!(set.is_match("src/Button.stories.tsx"));
         assert!(set.is_match("src/Card.story.ts"));
-        // Non-story files should NOT match
         assert!(!set.is_match("src/Button.tsx"));
     }
 
     #[test]
     fn production_excludes_config_files_at_root_only() {
         let set = build_production_glob_set();
-        // Root-level tool configs should match
         assert!(set.is_match("vitest.config.ts"));
         assert!(set.is_match("jest.config.js"));
-        // Nested config files should NOT match (e.g. Angular app.config.ts)
         assert!(!set.is_match("src/app/app.config.ts"));
         assert!(!set.is_match("src/app/app.config.server.ts"));
-        // Workspace-level tool configs are no longer excluded (acceptable trade-off)
         assert!(!set.is_match("packages/foo/vitest.config.ts"));
-        // Source files should NOT match
         assert!(!set.is_match("src/config.ts"));
     }
 
     #[test]
     fn production_patterns_are_valid_globs() {
-        // build_production_glob_set() already validates all patterns compile
         let _ = build_production_glob_set();
     }
 
@@ -430,7 +402,6 @@ mod tests {
         assert!(!SOURCE_EXTENSIONS.contains(&"wasm"));
     }
 
-    // discover_files integration tests using tempdir fixtures
     mod discover_files_integration {
         use std::path::PathBuf;
 
@@ -471,7 +442,6 @@ mod tests {
             let src = dir.path().join("src");
             std::fs::create_dir_all(&src).unwrap();
 
-            // Source files that should be discovered
             std::fs::write(src.join("app.ts"), "export const a = 1;").unwrap();
             std::fs::write(src.join("component.tsx"), "export default () => {};").unwrap();
             std::fs::write(src.join("utils.js"), "module.exports = {};").unwrap();
@@ -501,10 +471,8 @@ mod tests {
             let src = dir.path().join("src");
             std::fs::create_dir_all(&src).unwrap();
 
-            // Source file to ensure discovery works at all
             std::fs::write(src.join("app.ts"), "export const a = 1;").unwrap();
 
-            // Non-source files that should be excluded
             std::fs::write(src.join("data.json"), "{}").unwrap();
             std::fs::write(src.join("readme.md"), "# Hello").unwrap();
             std::fs::write(src.join("notes.txt"), "notes").unwrap();
@@ -522,7 +490,6 @@ mod tests {
         fn excludes_disallowed_hidden_directories() {
             let dir = tempfile::tempdir().expect("create temp dir");
 
-            // Files inside disallowed hidden directories
             let git_dir = dir.path().join(".git");
             std::fs::create_dir_all(&git_dir).unwrap();
             std::fs::write(git_dir.join("hooks.ts"), "// git hook").unwrap();
@@ -535,7 +502,6 @@ mod tests {
             std::fs::create_dir_all(&cache_dir).unwrap();
             std::fs::write(cache_dir.join("cached.js"), "// cached").unwrap();
 
-            // A normal source file to confirm discovery works
             let src = dir.path().join("src");
             std::fs::create_dir_all(&src).unwrap();
             std::fs::write(src.join("app.ts"), "export const a = 1;").unwrap();
@@ -552,7 +518,6 @@ mod tests {
         fn includes_allowed_hidden_directories() {
             let dir = tempfile::tempdir().expect("create temp dir");
 
-            // Files inside allowed hidden directories
             let storybook = dir.path().join(".storybook");
             std::fs::create_dir_all(&storybook).unwrap();
             std::fs::write(storybook.join("main.ts"), "export default {};").unwrap();
@@ -650,16 +615,12 @@ mod tests {
         fn excludes_root_build_directory() {
             let dir = tempfile::tempdir().expect("create temp dir");
 
-            // The `ignore` crate respects `.ignore` files (independent of git).
-            // Use this to simulate build/ exclusion as it happens in real projects.
             std::fs::write(dir.path().join(".ignore"), "/build/\n").unwrap();
 
-            // Root-level build/ should be ignored
             let build_dir = dir.path().join("build");
             std::fs::create_dir_all(&build_dir).unwrap();
             std::fs::write(build_dir.join("output.js"), "// build output").unwrap();
 
-            // Normal source file
             let src = dir.path().join("src");
             std::fs::create_dir_all(&src).unwrap();
             std::fs::write(src.join("app.ts"), "export const a = 1;").unwrap();
@@ -676,7 +637,6 @@ mod tests {
         fn includes_nested_build_directory() {
             let dir = tempfile::tempdir().expect("create temp dir");
 
-            // Nested build/ directory should NOT be ignored
             let nested_build = dir.path().join("src").join("build");
             std::fs::create_dir_all(&nested_build).unwrap();
             std::fs::write(nested_build.join("helper.ts"), "export const h = 1;").unwrap();
@@ -708,12 +668,10 @@ mod tests {
             let config = make_config(dir.path().to_path_buf(), false);
             let files = discover_files(&config);
 
-            // IDs should be sequential 0, 1, 2
             for (idx, file) in files.iter().enumerate() {
                 assert_eq!(file.id, FileId(idx as u32), "FileId should be sequential");
             }
 
-            // Files should be sorted by path
             for pair in files.windows(2) {
                 assert!(
                     pair[0].path < pair[1].path,
@@ -787,14 +745,10 @@ mod tests {
         fn hidden_files_not_discovered_as_source() {
             let dir = tempfile::tempdir().expect("create temp dir");
 
-            // Hidden files at root — these have source extensions but are dotfiles.
-            // The type filter (`*.ts`, not `.*ts`) will exclude them because the
-            // `ignore` crate's type matcher only matches non-hidden filenames.
             std::fs::write(dir.path().join(".env"), "SECRET=abc").unwrap();
             std::fs::write(dir.path().join(".gitignore"), "node_modules").unwrap();
             std::fs::write(dir.path().join(".eslintrc.js"), "module.exports = {};").unwrap();
 
-            // Normal source file
             let src = dir.path().join("src");
             std::fs::create_dir_all(&src).unwrap();
             std::fs::write(src.join("app.ts"), "export const a = 1;").unwrap();
@@ -911,12 +865,10 @@ mod tests {
         fn default_ignore_patterns_exclude_root_build() {
             let dir = tempfile::tempdir().expect("create temp dir");
 
-            // Root-level build/ should be excluded
             let build = dir.path().join("build");
             std::fs::create_dir_all(&build).unwrap();
             std::fs::write(build.join("output.js"), "// built").unwrap();
 
-            // Nested build/ should NOT be excluded
             let nested_build = dir.path().join("src").join("build");
             std::fs::create_dir_all(&nested_build).unwrap();
             std::fs::write(nested_build.join("helper.ts"), "export const h = 1;").unwrap();

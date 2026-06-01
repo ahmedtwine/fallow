@@ -33,27 +33,18 @@ use super::{PathRule, Plugin, PluginResult};
 const ENABLERS: &[&str] = &["@adonisjs/core"];
 
 const ENTRY_PATTERNS: &[&str] = &[
-    // Bootstrap files common to v5 / v6 / v7
     "server.{ts,js}",
     "ace",
     "ace.{ts,js}",
-    // v6 / v7 ship the bootstrap files under bin/ (server, console, test, ...)
     "bin/**/*.{ts,js}",
-    // Preload files registered via .adonisrc.json / adonisrc.ts
     "start/**/*.{ts,js}",
-    // Application providers (declared by string in v5 rc, by lazy import in v6/v7 rc)
     "providers/**/*.{ts,js}",
-    // Custom ace commands (referenced by directory in rc files)
     "commands/**/*.{ts,js}",
-    // Auto-loaded configuration modules
     "config/**/*.{ts,js}",
-    // TypeScript ambient declarations (loaded via tsconfig "types" or rc "types")
     "contracts/**/*.ts",
-    // Lucid database artifacts — discovered by ace at runtime, not imported
     "database/migrations/**/*.{ts,js}",
     "database/seeders/**/*.{ts,js}",
     "database/factories/**/*.{ts,js}",
-    // v5 layout (PascalCase folders). Inert for v6/v7 projects.
     "app/Controllers/Http/**/*.ts",
     "app/Controllers/Ws/**/*.ts",
     "app/Models/**/*.ts",
@@ -66,7 +57,6 @@ const ENTRY_PATTERNS: &[&str] = &[
     "app/Repositories/**/*.ts",
     "app/Strategies/**/*.ts",
     "app/Helpers/**/*.{ts,js}",
-    // v6 / v7 layout (snake_case folders). Inert for v5 projects.
     "app/controllers/**/*.ts",
     "app/models/**/*.ts",
     "app/middleware/**/*.ts",
@@ -79,38 +69,21 @@ const ENTRY_PATTERNS: &[&str] = &[
     "app/helpers/**/*.ts",
 ];
 
-const CONFIG_PATTERNS: &[&str] = &[
-    // v5 rc file (JSON)
-    ".adonisrc.json",
-    // v6 / v7 rc file (TS canonical, JS variant accepted by some toolchains)
-    "adonisrc.ts",
-    "adonisrc.js",
-];
+const CONFIG_PATTERNS: &[&str] = &[".adonisrc.json", "adonisrc.ts", "adonisrc.js"];
 
 const ALWAYS_USED: &[&str] = &[
-    // v5 rc file
     ".adonisrc.json",
-    // v6 / v7 rc file
     "adonisrc.ts",
     "adonisrc.js",
-    // v5 ace command manifest committed to source
     "ace-manifest.json",
-    // Project tsconfig — always referenced indirectly
     "tsconfig.json",
-    // Typed environment loader (referenced by ignitor at boot)
     "env.ts",
-    // Japa test bootstrap (v5)
     "japaFile.ts",
 ];
 
-// `@ioc:` is the v5 IoC container prefix. Imports like
-// `@ioc:Adonis/Core/Route` resolve through the runtime container, not via the
-// filesystem. Listing the prefix here prevents false `unlisted-dependency`
-// reports without affecting v6 / v7 projects (they don't use this prefix).
 const VIRTUAL_MODULE_PREFIXES: &[&str] = &["@ioc:"];
 
 const TOOLING_DEPENDENCIES: &[&str] = &[
-    // Core framework + companion modules autoloaded via IoC
     "@adonisjs/core",
     "@adonisjs/application",
     "@adonisjs/ace",
@@ -127,7 +100,6 @@ const TOOLING_DEPENDENCIES: &[&str] = &[
     "@adonisjs/bodyparser",
     "@adonisjs/static",
     "@adonisjs/health",
-    // First-party packages registered through rc providers
     "@adonisjs/lucid",
     "@adonisjs/auth",
     "@adonisjs/session",
@@ -141,22 +113,16 @@ const TOOLING_DEPENDENCIES: &[&str] = &[
     "@adonisjs/drive",
     "@adonisjs/validator",
     "@adonisjs/http-transformers",
-    // v6/v7 standard validator
     "@vinejs/vine",
-    // v5 tsconfig preset and common Sentry integration
     "adonis-preset-ts",
     "adonis5-sentry",
-    // v7 encryption backend
     "@boringnode/encryption",
-    // peerDependencies declared by @adonisjs/core (v6/v7)
     "argon2",
     "bcrypt",
     "edge.js",
     "pino-pretty",
     "youch",
-    // Optional hash driver users may swap in
     "phc-bcrypt",
-    // Decorator metadata used by Lucid models and validators
     "reflect-metadata",
 ];
 
@@ -553,14 +519,12 @@ mod tests {
         }"#;
         let result = resolve_v5_adonisrc(rc_path(), source);
 
-        // Locals become entry patterns (both file and directory forms).
         assert!(has_entry_pattern(&result, "start/routes.{ts,js}"));
         assert!(has_entry_pattern(&result, "start/kernel.{ts,js}"));
         assert!(has_entry_pattern(&result, "providers/AppProvider.{ts,js}"));
         assert!(has_entry_pattern(&result, "commands.{ts,js}"));
         assert!(has_entry_pattern(&result, "commands/**/*.{ts,js}"));
 
-        // External package specs become referenced dependencies.
         assert!(
             result
                 .referenced_dependencies
@@ -575,7 +539,6 @@ mod tests {
 
     #[test]
     fn resolve_v5_extracts_object_form_entries() {
-        // v5 allows `{ file: "...", environment: ["web"] }` next to plain strings.
         let source = r#"{
             "preloads": [
                 { "file": "./start/socket", "environment": ["web"] },
@@ -639,7 +602,6 @@ mod tests {
 
     #[test]
     fn resolve_v5_path_aliases_strip_dot_slash() {
-        // Some projects write replacement values as "./app" instead of "app".
         let source = r#"{
             "aliases": {
                 "App": "./app"
@@ -694,9 +656,6 @@ mod tests {
 
     #[test]
     fn resolve_v5_ignores_non_adonisrc_filenames() {
-        // The resolve_config dispatcher returns default when the filename
-        // doesn't match a known rc shape. We assert it here so refactors
-        // don't silently misroute adonisrc.ts (handled separately).
         let plugin = AdonisPlugin;
         let result = plugin.resolve_config(
             Path::new("some-other.json"),
@@ -710,8 +669,6 @@ mod tests {
 
     #[test]
     fn resolve_v5_full_customer_api_shape() {
-        // Mirror the actual .adonisrc.json from project-target/customer-api-rest-v2
-        // to assert the parser handles real-world rc shape end to end.
         let source = r#"{
             "typescript": true,
             "commands": [
@@ -754,7 +711,6 @@ mod tests {
 
         let result = resolve_v5_adonisrc(rc_path(), source);
 
-        // Every preload yields an entry pattern.
         for preload in [
             "start/routes.{ts,js}",
             "start/events.{ts,js}",
@@ -767,14 +723,12 @@ mod tests {
             );
         }
 
-        // Project providers become entries.
         assert!(has_entry_pattern(&result, "providers/AppProvider.{ts,js}"));
         assert!(has_entry_pattern(
             &result,
             "providers/LoggerProvider.{ts,js}"
         ));
 
-        // External providers / ace providers become referenced deps.
         for ext in [
             "@adonisjs/core",
             "@adonisjs/lucid",
@@ -790,10 +744,8 @@ mod tests {
             );
         }
 
-        // Aliases mapped with trailing slash convention.
         assert_eq!(result.path_aliases.len(), 4);
 
-        // Meta files and types end up in always_used_files.
         assert!(
             result
                 .always_used_files
@@ -813,8 +765,6 @@ mod tests {
 
     #[test]
     fn is_enabled_detects_adonis_core_dependency() {
-        // The plugin must activate whenever @adonisjs/core is in dependencies.
-        // Other unrelated packages must not enable it on their own.
         let plugin = AdonisPlugin;
         assert!(plugin.is_enabled_with_deps(
             &["@adonisjs/core".to_string(), "luxon".to_string()],
@@ -852,8 +802,6 @@ mod tests {
 
     #[test]
     fn subpath_import_to_path_alias_rejects_bare_keys() {
-        // Subpath imports without "/*" don't map cleanly to prefix aliases;
-        // we drop them rather than emit a broken alias.
         assert_eq!(
             subpath_import_to_path_alias("#start/routes", "./start/routes.js"),
             None
@@ -889,10 +837,8 @@ mod tests {
             })
         ";
 
-        // Use a non-existent root so package.json#imports reading silently fails.
         let result = resolve_v6_adonisrc(rc_ts_path(), source, Path::new("/non-existent-root"));
 
-        // Bare external packages → referenced dependencies.
         for ext in ["@adonisjs/core", "@adonisjs/lucid"] {
             assert!(
                 result.referenced_dependencies.contains(&ext.to_string()),
@@ -900,11 +846,8 @@ mod tests {
             );
         }
 
-        // Local relative path → entry pattern.
         assert!(has_entry_pattern(&result, "providers/app_provider.{ts,js}"));
 
-        // Subpath imports (#start/...) are deliberately routed via path aliases,
-        // not as direct entry patterns derived from the spec.
         assert!(
             !has_entry_pattern(&result, "start/routes.{ts,js}"),
             "subpath spec should not become an entry pattern directly"
@@ -934,10 +877,6 @@ mod tests {
 
     #[test]
     fn resolve_v6_classifies_hook_lazy_imports() {
-        // Adonis assembler hooks accept the same `() => import('SPEC')`
-        // thunk shape as commands / providers / preloads, just nested under
-        // `hooks.<name>`. External hook packages should land as referenced
-        // deps; project-local hook modules should yield entry patterns.
         let source = r"
             import { defineConfig } from '@adonisjs/core/app'
 
@@ -961,7 +900,6 @@ mod tests {
         ";
         let result = resolve_v6_adonisrc(rc_ts_path(), source, Path::new("/non-existent-root"));
 
-        // External hook packages routed as referenced dependencies.
         for pkg in ["@adonisjs/vite", "my-package", "@scope/dev-tools"] {
             assert!(
                 result.referenced_dependencies.contains(&pkg.to_string()),
@@ -969,7 +907,6 @@ mod tests {
             );
         }
 
-        // Local hook modules become entry patterns (file + directory form).
         assert!(has_entry_pattern(
             &result,
             "hooks/on_build_starting.{ts,js}"
@@ -998,13 +935,8 @@ mod tests {
 
     #[test]
     fn resolve_v6_reads_subpath_imports_from_package_json() {
-        // Create a temp project with a v6-style package.json + adonisrc.ts.
-        // We exercise the real disk read inside resolve_v6_adonisrc.
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path();
-        // Use `r##"..."##` (two hashes) because the JSON content contains
-        // `"#` substrings (the subpath-import key opener) which would
-        // terminate a single-hash raw string prematurely.
         std::fs::write(
             root.join("package.json"),
             r##"{
@@ -1031,7 +963,6 @@ mod tests {
 
         let result = resolve_v6_adonisrc(&rc_path, rc_source, root);
 
-        // Every imports entry should yield a path alias pair.
         for (find, repl) in [
             ("#controllers/", "app/controllers/"),
             ("#models/", "app/models/"),
@@ -1050,8 +981,6 @@ mod tests {
 
     #[test]
     fn resolve_v6_handles_missing_package_json_gracefully() {
-        // No package.json at root → no aliases emitted, but the rest of the
-        // parse still completes and other buckets populate normally.
         let source = r"
             export default defineConfig({
                 providers: [() => import('@adonisjs/core/providers/app_provider')],
@@ -1068,7 +997,6 @@ mod tests {
 
     #[test]
     fn resolve_v6_full_friends_of_adonis_playground_shape() {
-        // End-to-end shape mirroring project-target/FriendsOfAdonis/playgrounds/graphql.
         let source = r"
             import { indexEntities } from '@adonisjs/core'
             import { defineConfig } from '@adonisjs/core/app'
@@ -1104,8 +1032,6 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path();
-        // Two-hash raw string: JSON keys contain `"#` which would close the
-        // single-hash form prematurely.
         std::fs::write(
             root.join("package.json"),
             r##"{
@@ -1125,7 +1051,6 @@ mod tests {
 
         let result = resolve_v6_adonisrc(&root.join("adonisrc.ts"), source, root);
 
-        // Every external command/provider package is registered as referenced.
         for pkg in [
             "@adonisjs/core",
             "@adonisjs/lucid",
@@ -1138,15 +1063,11 @@ mod tests {
             );
         }
 
-        // directories.resolvers must contribute an entry pattern so resolvers
-        // outside the conventional app/* layout stay alive.
         assert!(has_entry_pattern(
             &result,
             "app/graphql/resolvers/**/*.{ts,js}"
         ));
 
-        // package.json#imports map to path aliases — project-specific
-        // (#graphql/*) included.
         assert!(
             result
                 .path_aliases

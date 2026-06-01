@@ -4,7 +4,6 @@ use super::common::{create_config, fixture_path};
 fn workspace_cross_import_resolves() {
     let root = fixture_path("workspace-cross-imports");
 
-    // Set up node_modules symlinks for cross-workspace resolution
     let nm = root.join("node_modules").join("@myorg");
     let _ = std::fs::create_dir_all(&nm);
     #[cfg(unix)]
@@ -19,7 +18,6 @@ fn workspace_cross_import_resolves() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // No unresolved imports — cross-workspace @myorg/core should resolve
     assert!(
         results.unresolved_imports.is_empty(),
         "cross-workspace imports should resolve, found unresolved: {:?}",
@@ -35,7 +33,6 @@ fn workspace_cross_import_resolves() {
 fn workspace_cross_import_detects_orphan() {
     let root = fixture_path("workspace-cross-imports");
 
-    // Set up node_modules symlinks
     let nm = root.join("node_modules").join("@myorg");
     let _ = std::fs::create_dir_all(&nm);
     #[cfg(unix)]
@@ -73,7 +70,6 @@ fn workspace_cross_import_detects_orphan() {
 fn workspace_cross_import_detects_unused_export() {
     let root = fixture_path("workspace-cross-imports");
 
-    // Set up node_modules symlinks
     let nm = root.join("node_modules").join("@myorg");
     let _ = std::fs::create_dir_all(&nm);
     #[cfg(unix)]
@@ -94,13 +90,11 @@ fn workspace_cross_import_detects_unused_export() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // unusedCoreExport is not imported by the web package
     assert!(
         unused_export_names.contains(&"unusedCoreExport"),
         "unusedCoreExport should be unused, found: {unused_export_names:?}"
     );
 
-    // coreHelper IS imported by web, should NOT be flagged
     assert!(
         !unused_export_names.contains(&"coreHelper"),
         "coreHelper should NOT be unused (imported by web), found: {unused_export_names:?}"
@@ -143,8 +137,6 @@ fn workspace_self_reference_resolves_secondary_entry_points() {
         })
         .collect();
 
-    // None of the ui-kit secondary entry point files should be reported.
-    // Before the fix, button/modal/tabs/internal-base were all flagged.
     for secondary in ["button", "modal", "tabs", "internal/base"] {
         assert!(
             !results.unused_files.iter().any(|f| {
@@ -158,8 +150,6 @@ fn workspace_self_reference_resolves_secondary_entry_points() {
         );
     }
 
-    // Cross-workspace self-referencing imports should not surface as unresolved
-    // nor as unlisted dependencies.
     let unresolved_specifiers: Vec<&str> = results
         .unresolved_imports
         .iter()

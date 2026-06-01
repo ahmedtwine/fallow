@@ -5,10 +5,6 @@ use common::{
     fallow_bin, parse_json, run_fallow, run_fallow_combined, run_fallow_in_root, run_fallow_raw,
 };
 
-// ---------------------------------------------------------------------------
-// --fail-on-issues across commands
-// ---------------------------------------------------------------------------
-
 #[test]
 fn fail_on_issues_check_exits_1_with_issues() {
     let output = run_fallow(
@@ -249,10 +245,6 @@ fn combined_human_output_labels_metrics_line() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// --only / --skip in combined mode
-// ---------------------------------------------------------------------------
-
 #[test]
 fn combined_only_dead_code() {
     let output = run_fallow_combined(
@@ -297,14 +289,9 @@ fn combined_only_and_skip_are_mutually_exclusive() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Baseline round-trip
-// ---------------------------------------------------------------------------
-
 #[test]
 fn save_baseline_creates_file() {
     let dir = std::env::temp_dir().join(format!("fallow-baseline-test-{}", std::process::id()));
-    // Pre-clean to avoid false positives from previous runs
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::create_dir_all(&dir);
     let baseline_path = dir.join("fallow-baselines/dead-code.json");
@@ -470,10 +457,6 @@ fn save_baseline_distinguishes_same_unused_dep_across_workspaces() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// --changed-since
-// ---------------------------------------------------------------------------
-
 #[test]
 fn changed_since_accepts_head() {
     let output = run_fallow(
@@ -494,10 +477,6 @@ fn changed_since_accepts_head() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Error paths
-// ---------------------------------------------------------------------------
-
 #[test]
 fn nonexistent_root_exits_2() {
     let output = run_fallow_raw(&[
@@ -511,8 +490,6 @@ fn nonexistent_root_exits_2() {
 
 #[test]
 fn config_with_traversal_glob_exits_2() {
-    // Issue #463: config-sourced glob patterns with `..` segments are
-    // rejected at load time with exit 2 instead of silently no-op'ing.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -537,8 +514,6 @@ fn config_with_traversal_glob_exits_2() {
 
 #[test]
 fn config_with_invalid_glob_exits_2() {
-    // Issue #463: invalid glob syntax now fails loud at load time instead
-    // of being silently dropped.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -563,12 +538,6 @@ fn config_with_invalid_glob_exits_2() {
 
 #[test]
 fn external_plugin_file_traversal_glob_exits_2() {
-    // Issue #463 second BLOCK: external plugin files loaded from
-    // `.fallow/plugins/` (NOT inline `framework[]` in the main config)
-    // also reach `glob::glob` on disk via their `fileExists.pattern`.
-    // The validation must run on those too, not just on the inline path.
-    // Mirrors codex's reproducer: `.fallow/plugins/leak.json` with a
-    // traversal-bearing detection pattern.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -598,9 +567,6 @@ fn external_plugin_file_traversal_glob_exits_2() {
 
 #[test]
 fn fallow_plugin_root_file_traversal_glob_exits_2() {
-    // Issue #463: `fallow-plugin-*` files at the project root are also
-    // auto-discovered (third discovery source after `plugins:` and
-    // `.fallow/plugins/`). Same validation must apply.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -646,19 +612,10 @@ fn no_package_json_returns_empty_results() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Combined-mode JSON contract: stdout is exactly one JSON document even when
-// the project is outside a Git repository (regression for #294).
-// ---------------------------------------------------------------------------
-
 #[test]
 fn combined_json_outside_git_repo_emits_single_document() {
     use std::process::Command;
 
-    // Build a minimal TS project in a tempdir whose parent chain has no `.git`,
-    // so the hotspot pipeline's `is_git_repo` check returns false. We isolate
-    // from any inherited `GIT_DIR` / `GIT_WORK_TREE` set by parent test hooks
-    // and from any global git config that could redirect rev-parse upward.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(
@@ -693,10 +650,6 @@ fn combined_json_outside_git_repo_emits_single_document() {
     let output = cmd.output().expect("failed to run fallow binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // The bug in #294 was that stdout contained an inline `{"error": true,
-    // "message": "hotspot analysis requires a git repository", ...}` followed
-    // by the combined report (two top-level JSON values). Parsing as a single
-    // value catches that exactly: serde_json rejects trailing input.
     serde_json::from_str::<serde_json::Value>(&stdout).unwrap_or_else(|e| {
         panic!(
             "combined mode outside a git repo must emit exactly one JSON document on stdout: {e}\nstdout was:\n{stdout}\nstderr was:\n{}",
@@ -704,8 +657,6 @@ fn combined_json_outside_git_repo_emits_single_document() {
         )
     });
 
-    // And the parsed envelope should be the combined report; schema_version is
-    // the canonical marker.
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("already parsed");
     assert!(
         json.get("schema_version").is_some(),
@@ -717,16 +668,8 @@ fn combined_json_outside_git_repo_emits_single_document() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Issue #468: boundary configuration silent-fail patterns now exit 2 at load.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn config_with_unknown_boundary_zone_reference_exits_2() {
-    // A rule whose `from`/`allow`/`allowTypeOnly` names a zone that does NOT
-    // exist in `zones[]` used to log a `tracing::error!` and continue,
-    // producing a flood of false-positive boundary violations at analysis
-    // time. Now exits 2 at config load with every offending entry enumerated.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -758,8 +701,6 @@ fn config_with_unknown_boundary_zone_reference_exits_2() {
         output.stderr
     );
 
-    // Every offending tuple should appear in one rendered diagnostic. Users
-    // fix all four in one edit instead of one-by-one.
     let stderr = &output.stderr;
     assert!(
         stderr.contains("invalid boundary configuration"),
@@ -775,11 +716,6 @@ fn config_with_unknown_boundary_zone_reference_exits_2() {
 
 #[test]
 fn config_with_redundant_boundary_root_prefix_exits_2() {
-    // `boundaries.zones[].root` + a pattern that redundantly repeats the
-    // root double-prefixes the path at classify time and never matches. This
-    // used to log a `tracing::error!` and continue with a phantom-empty
-    // zone; now exits 2 at config load with the legacy
-    // FALLOW-BOUNDARY-ROOT-REDUNDANT-PREFIX tag preserved for CI grep recipes.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -814,11 +750,6 @@ fn config_with_redundant_boundary_root_prefix_exits_2() {
 
 #[test]
 fn fallow_config_subcommand_rejects_unknown_boundary_zone() {
-    // `fallow config` lives on a different code path than `check` (calls
-    // `FallowConfig::load` / `find_and_load` directly, no `runtime_support`).
-    // Without explicit wiring it would print the parsed config and exit 0
-    // even when `check` exits 2, giving users a false "loaded fine" signal.
-    // Surfaced by review of #468.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -848,9 +779,6 @@ fn fallow_config_subcommand_rejects_unknown_boundary_zone() {
 
 #[test]
 fn fallow_config_subcommand_json_format_emits_structured_error_envelope() {
-    // `--format json` config-load failures must land as the structured
-    // `{"error": true, "message": ..., "exit_code": 2}` envelope on stdout,
-    // not human text. Locks the JSON error contract for the config subcommand.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -890,11 +818,6 @@ fn fallow_config_subcommand_json_format_emits_structured_error_envelope() {
 
 #[test]
 fn fallow_list_boundaries_json_format_emits_structured_error_envelope() {
-    // `fallow list --boundaries --format json` previously hardcoded
-    // `OutputFormat::Human` when calling `load_config`, so config-load
-    // failures (boundary validation, glob validation, plugin validation)
-    // surfaced as human-text errors on stderr instead of the structured JSON
-    // envelope JSON consumers expect. Surfaced by review of #468.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -935,9 +858,6 @@ fn fallow_list_boundaries_json_format_emits_structured_error_envelope() {
 
 #[test]
 fn config_with_valid_boundaries_loads_cleanly() {
-    // Control: a boundary config whose every zone reference resolves and
-    // whose patterns do not redundantly prefix their root continues to load
-    // (no analysis sources here, so check exits 0 with zero findings).
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");
@@ -965,21 +885,8 @@ fn config_with_valid_boundaries_loads_cleanly() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Regression-baseline schema_version validation (#451)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn regression_baseline_schema_mismatch_json_format_emits_structured_error_envelope() {
-    // `fallow check --regression-baseline <path> --fail-on-regression --format json --quiet`
-    // against a baseline whose schema_version does not match this build must:
-    //   1. exit 2 (load failure, distinct from exit 1 "regression detected")
-    //   2. emit the structured `{"error": true, "message": ..., "exit_code": 2}`
-    //      envelope on stdout, not a human-text error on stderr.
-    //   3. include the regenerate hint in the message so a CI consumer's log
-    //      surfaces a copy-pasteable next step.
-    // Locks the OutputFormat-threading path through RegressionOpts into
-    // load_regression_baseline.
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path();
     std::fs::write(root.join("package.json"), r#"{"name":"test"}"#).expect("write package.json");

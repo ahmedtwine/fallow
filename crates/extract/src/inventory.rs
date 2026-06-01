@@ -113,9 +113,6 @@ impl<'a> InventoryVisitor<'a> {
     fn record(&mut self, name: String, span: Span) {
         let (line, start_column) = self.line_col_utf16(span.start);
         let (end_line, end_column) = self.line_col_utf16(span.end);
-        // Canonical body bytes: the function node's full-span slice. Valid AST
-        // spans always fall on char boundaries within range; fall back to an
-        // empty-input hash defensively rather than panicking.
         let source_hash = self
             .source
             .get(span.start as usize..span.end as usize)
@@ -162,11 +159,6 @@ impl<'a> InventoryVisitor<'a> {
 
 impl<'ast> Visit<'ast> for InventoryVisitor<'_> {
     fn visit_function(&mut self, func: &Function<'ast>, flags: ScopeFlags) {
-        // Bodyless functions (TypeScript overload signatures, `abstract`
-        // class methods, `declare function ...`) are not instrumented at
-        // runtime. The instrumenter only calls `add_function` when a body
-        // exists, so neither recording an entry nor advancing the counter
-        // for these signatures keeps our naming in lockstep.
         if func.body.is_none() {
             walk::walk_function(self, func, flags);
             return;
@@ -206,12 +198,6 @@ impl<'ast> Visit<'ast> for InventoryVisitor<'_> {
     }
 
     fn visit_object_property(&mut self, prop: &ObjectProperty<'ast>) {
-        // Object-literal methods (`{ run() {} }`) and arrow properties
-        // (`{ run: () => 1 }`) intentionally do NOT inherit the outer
-        // variable binding's name. Clear any pending_name leaked from an
-        // ancestor (e.g., `const obj = { run() {} }`) so the inner function
-        // falls through to the anonymous counter, matching the e2e
-        // verification against `oxc-coverage-instrument`.
         self.pending_name = None;
         walk::walk_object_property(self, prop);
         self.pending_name = None;
@@ -237,10 +223,6 @@ pub fn walk_source(path: &Path, source: &str) -> Vec<InventoryEntry> {
     let mut visitor = InventoryVisitor::new(source, &line_offsets);
     visitor.visit_program(&parser_return.program);
 
-    // If the initial parse found nothing, retry with JSX/TSX source type
-    // (matches parse.rs fallback for `.js` files that actually contain JSX).
-    // Keep this independent of file length: tiny components such as
-    // `const A = () => <div />;` are common and still need inventory entries.
     if visitor.entries.is_empty() && !source_type.is_jsx() {
         let jsx_type = if source_type.is_typescript() {
             SourceType::tsx()
@@ -285,9 +267,6 @@ mod tests {
 
     #[test]
     fn const_function_expression_captures_binding_name_not_fn_id() {
-        // When both are present, oxc-coverage-instrument prefers the
-        // parent-provided pending_name (the `const` binding). Our walker
-        // matches that precedence.
         let entries = walk("const outer = function inner() { return 1; };");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "outer");
@@ -327,9 +306,6 @@ mod tests {
 
     #[test]
     fn named_function_still_advances_counter_matching_instrumenter() {
-        // Oracle: `oxc-coverage-instrument` advances its `fn_counter` on
-        // every function with a body (named or anonymous). The anonymous
-        // arrow below is the second emitted function, so its slot is `1`.
         let entries = walk(
             r"
             function named() { return 1; }
@@ -342,9 +318,6 @@ mod tests {
 
     #[test]
     fn anonymous_after_named_chain_uses_next_counter_value() {
-        // Regression for the "counter only advances on anonymous" bug caught
-        // in rust-reviewer BLOCK. Each named function MUST still bump the
-        // counter so a trailing anonymous gets the right index.
         let entries = walk(
             r"
             function a() {}
@@ -354,18 +327,11 @@ mod tests {
             ",
         );
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
-        // `a`, `b`, `c`, and the binding `d` consume counter slots 0-3.
-        // There is no free-floating anonymous here; all four are resolved
-        // by name. If a truly anonymous arrow appeared, it would be slot 4.
         assert_eq!(names, vec!["a", "b", "c", "d"]);
     }
 
     #[test]
     fn typescript_overload_signatures_dont_emit_or_advance_counter() {
-        // Overload signatures have no body, are not runtime-instrumented,
-        // and therefore must not consume a counter slot. The trailing
-        // anonymous arrow is the second bodyful function, so it must be
-        // `(anonymous_1)` (slot 0 goes to the `foo` implementation).
         let entries = walk(
             r"
             function foo(): number;
@@ -401,9 +367,6 @@ mod tests {
             }",
         );
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
-        // `outer` is slot 0 (uses its own name); the nested anonymous is
-        // slot 1. The counter advances on every bodyful function, so the
-        // anonymous sees counter value 1 at resolution time.
         assert_eq!(names, vec!["outer", "(anonymous_1)"]);
     }
 
@@ -443,21 +406,15 @@ mod tests {
 
     #[test]
     fn records_one_indexed_utf16_columns() {
-        // `function foo` starts at byte 0, so UTF-16 column 1.
         let entries = walk("function foo() { return 1; }");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].start_column, 1);
         assert_eq!(entries[0].end_line, 1);
-        // Single-line function: end column is past the closing brace.
         assert!(entries[0].end_column > entries[0].start_column);
     }
 
     #[test]
     fn utf16_column_counts_code_units_not_bytes() {
-        // A 4-byte emoji (2 UTF-16 code units) sits before the arrow function.
-        // A byte-based column would be 4 higher than the UTF-16 column; assert
-        // the column stays well under the prefix byte length to prove code-unit
-        // counting.
         let entries = walk("const e = \"\u{1F600}\"; const f = () => 1;");
         let f = entries.iter().find(|e| e.name == "f").expect("f present");
         let byte_prefix_len = "const e = \"\u{1F600}\"; const f = ".len() as u32;
@@ -466,9 +423,6 @@ mod tests {
 
     #[test]
     fn same_line_distinct_named_functions_have_distinct_positions() {
-        // Two functions on one line with different names. The (name) differs,
-        // so the cross-surface stable_id (file+name+line) differs; their
-        // columns also differ for display disambiguation.
         let entries = walk("function a() {} function b() {}");
         let a = entries.iter().find(|e| e.name == "a").expect("a present");
         let b = entries.iter().find(|e| e.name == "b").expect("b present");
@@ -481,9 +435,6 @@ mod tests {
 
     #[test]
     fn same_line_anonymous_functions_stay_distinct_via_counter() {
-        // Two anonymous arrows on one line get distinct names from the
-        // file-scoped counter, so their stable_ids (file+name+line) differ even
-        // though file and line are identical.
         let entries = walk("const xs = [() => 1, () => 2];");
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["(anonymous_0)", "(anonymous_1)"]);
@@ -496,9 +447,6 @@ mod tests {
 
     #[test]
     fn source_hash_is_the_content_digest_of_the_function_span() {
-        // The whole declaration is the function node's span here, so the
-        // canonical body bytes are the entire source. The recorded hash must
-        // equal the protocol helper over those exact bytes (16 lowercase hex).
         let src = "function foo() { return 1; }";
         let entries = walk(src);
         assert_eq!(entries.len(), 1);
@@ -517,9 +465,6 @@ mod tests {
 
     #[test]
     fn source_hash_survives_line_moves_and_tracks_body_edits() {
-        // The #742 property: the same function shifted down keeps its
-        // source_hash (the body bytes are identical), while an edit to the body
-        // changes it. This is what lets baselines survive a pure line shift.
         let original = walk("function foo() { return 1; }");
         let moved = walk("\n\nfunction foo() { return 1; }");
         assert_eq!(

@@ -1,11 +1,7 @@
 //! Shared Vitest/Vite alias extraction.
 //!
-//! Vitest merges `test.alias` AND `resolve.alias` (top-level and per
-//! `test.projects[*]`) when running tests, and the same config can live in
-//! `vitest.config.*`, `vite.config.*`, or a `vitest.workspace.*` array file.
-//! Both the Vitest and Vite plugins funnel their alias sources through
-//! [`process_test_alias`] here so the three false-positive-fix mechanisms stay
-//! consistent across every surface. See issue #601 and its follow-up.
+//! Vitest merges `test.alias` and `resolve.alias` across object and workspace configs,
+//! so both plugins route aliases through this helper to keep the fixes aligned.
 
 use std::path::Path;
 
@@ -34,33 +30,12 @@ fn alias_target_is_source_file(normalized: &str) -> bool {
         .is_some_and(|ext| ALIAS_SOURCE_EXTENSIONS.contains(&ext))
 }
 
-/// Apply one alias entry (`test.alias` or `resolve.alias`) to the plugin result.
+/// Apply one alias entry to the plugin result.
 ///
-/// Three mechanisms cooperate so the Vitest/Vite alias false-positive classes
-/// disappear without introducing new ones:
-/// - (A) push the alias into `path_aliases` so a virtual-module / alias-only
-///   import (`vscode` -> `./mock/vscode.js`) resolves instead of surfacing as
-///   `unresolved-import` / `unlisted-dependency`.
-/// - (B) when the replacement names a local source FILE, seed it as a support
-///   entry point so an aliased `__mocks__` file keeps its exports credited even
-///   when the original package resolves through `node_modules` (in which case
-///   the production import never reaches the path-alias fallback).
-/// - (C) when the alias KEY is a bare package, credit it as a referenced
-///   dependency so redirecting its import through the alias (only happens when
-///   `node_modules` is absent) does not regress it into a false
-///   `unused-dependency`.
-///
-/// Package-to-package aliases (`'lodash-es' -> 'lodash'`) are special-cased:
-/// both package names are credited as referenced and NO path alias is emitted
-/// (pushing one would turn the source import `Unresolvable` in a
-/// no-`node_modules` run). The discriminator is FILESYSTEM-FREE:
-/// `replacement_is_bare_string_literal` is true only when the replacement was
-/// written as a plain bare string literal (`'lodash'`), not a path expression
-/// (`path.resolve(__dirname, 'src')`, `fileURLToPath(new URL('./src', ...))`) or
-/// a `./`-prefixed string. So a directory alias `@` -> `path.resolve(...,'src')`
-/// takes the normal path-alias branch deterministically across every
-/// environment (no `is_dir()` probe, which would flip on sparse checkouts /
-/// Docker layers / npm tarballs where `src/` is absent).
+/// Path aliases feed `path_aliases`, source-file targets seed setup files, and
+/// bare-package aliases are credited as referenced dependencies. Bare-string
+/// package-to-package aliases are special-cased so they credit both packages
+/// without emitting a path alias.
 pub(super) fn process_test_alias(
     result: &mut PluginResult,
     find: &str,
@@ -86,15 +61,12 @@ pub(super) fn process_test_alias(
         return;
     };
 
-    // (A)
     result
         .path_aliases
         .push((find.to_owned(), normalized.clone()));
-    // (B)
     if alias_target_is_source_file(&normalized) {
         result.setup_files.push(root.join(&normalized));
     }
-    // (C)
     if find_is_pkg {
         result
             .referenced_dependencies
@@ -104,11 +76,7 @@ pub(super) fn process_test_alias(
     tracing::debug!(find, target = %normalized, "test alias extracted");
 }
 
-/// Extract and apply the Vitest test-block aliases that BOTH the Vitest and Vite
-/// plugins share: top-level `test.alias`, `test.projects[*].test.alias`, and
-/// `test.projects[*].resolve.alias`. Top-level `resolve.alias` is intentionally
-/// NOT handled here; each plugin owns it (Vitest routes it through
-/// `process_test_alias`; Vite keeps its existing path-alias-only extraction).
+/// Extract and apply the Vitest test-block aliases shared by the Vitest and Vite plugins.
 pub(super) fn apply_test_block_aliases(
     result: &mut PluginResult,
     source: &str,
@@ -138,11 +106,7 @@ pub(super) fn apply_test_block_aliases(
     }
 }
 
-/// Extract and apply aliases from a `vitest.workspace.{ts,js}` array-file shape
-/// (`defineWorkspace([{ test: { alias } }, { resolve: { alias } }, ...])`). Each
-/// array element's top-level `test.alias` and `resolve.alias` are applied. Nested
-/// `test.projects` INSIDE a workspace element is one level too deep and out of
-/// scope (documented non-goal). No-op on object-default-export config files.
+/// Extract and apply aliases from a `vitest.workspace.{ts,js}` array file.
 pub(super) fn apply_workspace_array_aliases(
     result: &mut PluginResult,
     source: &str,
@@ -162,10 +126,7 @@ pub(super) fn apply_workspace_array_aliases(
     }
 }
 
-/// Emit a single `tracing::debug!` when a parsed Vitest/Vite config has neither a
-/// reachable object nor array default export, so a statically-unreadable shape
-/// (`mergeConfig(base, defineConfig({...}))`, an imported-and-spread base config)
-/// is diagnosable under `RUST_LOG=debug` rather than a silent miss.
+/// Emit a debug line when a Vitest/Vite config is not statically reachable.
 pub(super) fn debug_unreachable_config(source: &str, config_path: &Path) {
     if config_parser::config_default_export_unreachable(source, config_path) {
         tracing::debug!(
@@ -189,7 +150,6 @@ mod tests {
 
     #[test]
     fn package_to_package_credits_both_no_path_alias() {
-        // Bare-string-literal package replacement: `'lodash-es' -> 'lodash'`.
         let mut result = PluginResult::default();
         process_test_alias(&mut result, "lodash-es", "lodash", true, &cfg(), &root());
         assert!(
@@ -211,11 +171,6 @@ mod tests {
 
     #[test]
     fn path_builder_directory_alias_is_path_not_package_even_without_src_on_disk() {
-        // CI-safety contract: `@` -> path.resolve(__dirname, 'src') arrives with
-        // replacement_is_bare_string_literal == false, so it takes the path-alias
-        // branch DETERMINISTICALLY, even though `src/` does not exist under the
-        // (nonexistent) root and `src` would pass is_bare_package_specifier. No
-        // filesystem probe is consulted.
         let mut result = PluginResult::default();
         process_test_alias(&mut result, "@", "src", false, &cfg(), &root());
         assert_eq!(
@@ -227,10 +182,6 @@ mod tests {
 
     #[test]
     fn bare_string_directory_alias_residual_is_package_to_package() {
-        // Documented residual edge: a bare-string `'@': 'src'` (no path builder)
-        // is structurally indistinguishable from package-to-package, so it is
-        // treated as such. Rare and non-idiomatic (Vite dir aliases use absolute
-        // paths / path builders).
         let mut result = PluginResult::default();
         process_test_alias(&mut result, "@", "src", true, &cfg(), &root());
         assert!(

@@ -18,9 +18,6 @@ use super::Plugin;
 
 const ENABLERS: &[&str] = &["@sanity/pkg-utils"];
 
-// `always_used` matching uses `literal_separator(true)` with no automatic `**/`
-// prefix, so both the root and the nested form are listed (mirrors the
-// `varlock` / `wuchale` precedent). Covers monorepo `packages/<pkg>/...` configs.
 const ALWAYS_USED: &[&str] = &[
     "package.config.{ts,js,mts,mjs,cts,cjs}",
     "**/package.config.{ts,js,mts,mjs,cts,cjs}",
@@ -65,9 +62,6 @@ mod tests {
 
     #[test]
     fn does_not_activate_for_plain_sanity_client_consumer() {
-        // The exact-match enabler must NOT fire on a sibling `@sanity/*` package;
-        // a project that only uses the API client should keep reporting a stray
-        // package.config.ts as unused.
         let plugin = PkgUtilsPlugin;
         let deps = vec!["@sanity/client".to_string(), "@sanity/vision".to_string()];
         assert!(!plugin.is_enabled_with_deps(&deps, Path::new("/project")));

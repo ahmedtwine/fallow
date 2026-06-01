@@ -32,8 +32,6 @@ pub(super) use super::super::{
     is_package_listed_for_file, should_skip_dependency,
 };
 
-// ---- Integration test helpers ----
-
 /// Build a minimal ResolvedConfig for testing.
 pub(super) fn test_config(root: PathBuf) -> ResolvedConfig {
     FallowConfig::default().resolve(root, OutputFormat::Human, 1, true, true, None)

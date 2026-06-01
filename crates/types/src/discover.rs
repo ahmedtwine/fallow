@@ -48,9 +48,6 @@ pub struct DiscoveredFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub u32);
 
-// Size assertions to prevent memory regressions in hot-path types.
-// These types are stored in large Vecs (one per project file) and iterated
-// in tight loops during discovery, parsing, and graph construction.
 const _: () = assert!(std::mem::size_of::<FileId>() == 4);
 #[cfg(all(target_pointer_width = "64", unix))]
 const _: () = assert!(std::mem::size_of::<DiscoveredFile>() == 40);
@@ -118,8 +115,6 @@ mod tests {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    // ── FileId ──────────────────────────────────────────────────────
-
     #[test]
     fn file_id_equality() {
         assert_eq!(FileId(0), FileId(0));
@@ -183,8 +178,6 @@ mod tests {
         );
     }
 
-    // ── DiscoveredFile ──────────────────────────────────────────────
-
     #[test]
     fn discovered_file_clone() {
         let original = DiscoveredFile {
@@ -218,8 +211,6 @@ mod tests {
         assert_eq!(file.size_bytes, u64::MAX);
     }
 
-    // ── EntryPoint ──────────────────────────────────────────────────
-
     #[test]
     fn entry_point_clone() {
         let ep = EntryPoint {
@@ -231,11 +222,8 @@ mod tests {
         assert!(matches!(cloned.source, EntryPointSource::PackageJsonMain));
     }
 
-    // ── EntryPointSource ────────────────────────────────────────────
-
     #[test]
     fn entry_point_source_all_variants_constructible() {
-        // Verify all variants can be constructed (compile-time coverage)
         let _ = EntryPointSource::PackageJsonMain;
         let _ = EntryPointSource::PackageJsonModule;
         let _ = EntryPointSource::PackageJsonExports;
@@ -267,11 +255,8 @@ mod tests {
         let source = EntryPointSource::Plugin {
             name: "storybook".to_string(),
         };
-        // Use source after clone to verify both copies are valid
         let cloned = source.clone();
-        // Verify original is still usable
         assert!(matches!(&source, EntryPointSource::Plugin { name } if name == "storybook"));
-        // Verify clone has the same data
         match cloned {
             EntryPointSource::Plugin { name } => assert_eq!(name, "storybook"),
             _ => panic!("expected Plugin variant after clone"),

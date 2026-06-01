@@ -30,9 +30,6 @@ const ALWAYS_USED: &[&str] = &[
     "vitest.config.{ts,js,mts,mjs}",
     "vitest.setup.{ts,js}",
     "vitest.workspace.{ts,js}",
-    // Common setupFiles conventions used by CRA, Vitest, and community projects.
-    // These are often referenced via imported/spread base configs that static
-    // analysis can't follow, so we mark them as always-used when Vitest is active.
     "**/src/setupTests.{ts,tsx,js,jsx}",
     "**/src/test-setup.{ts,tsx,js,jsx}",
 ];
@@ -137,7 +134,6 @@ impl Plugin for VitestPlugin {
     fn resolve_config(&self, config_path: &Path, source: &str, root: &Path) -> PluginResult {
         let mut result = PluginResult::default();
 
-        // Extract import sources as referenced dependencies
         let imports = config_parser::extract_imports(source, config_path);
         for imp in &imports {
             let dep = crate::resolve::extract_package_name(imp);
@@ -147,13 +143,6 @@ impl Plugin for VitestPlugin {
             config_parser::extract_vite_react_babel_dependencies(source, config_path),
         );
 
-        // Vitest merges test.alias AND resolve.alias (top-level + per
-        // test.projects[*]) when running tests, so imports that only resolve
-        // through such an alias (virtual modules like `vscode`) and __mocks__
-        // files aliased to mock a real package must be made visible. The
-        // test-block + projects sources are shared with the Vite plugin; the
-        // workspace-array file (`vitest.workspace.*`) and top-level resolve.alias
-        // are Vitest-specific here. See crate::plugins::test_alias.
         test_alias::apply_test_block_aliases(&mut result, source, config_path, root);
         for (find, replacement, is_bare) in
             config_parser::extract_config_aliases_kinded(source, config_path, &["resolve", "alias"])
@@ -170,10 +159,6 @@ impl Plugin for VitestPlugin {
         test_alias::apply_workspace_array_aliases(&mut result, source, config_path, root);
         test_alias::debug_unreachable_config(source, config_path);
 
-        // test.include → entry patterns that replace defaults
-        // Vitest treats root-level test.include as a full override of its default
-        // patterns. Project-level includes (test.projects[*].test.include) only ADD
-        // to the patterns since projects without test.include inherit root defaults.
         let root_includes =
             config_parser::extract_config_string_array(source, config_path, &["test", "include"]);
         if !root_includes.is_empty() {
@@ -181,7 +166,6 @@ impl Plugin for VitestPlugin {
         }
         result.extend_entry_patterns(root_includes);
 
-        // Also check test.projects[*].test.include (Vitest projects/workspaces)
         let project_includes = config_parser::extract_config_array_nested_string_or_array(
             source,
             config_path,
@@ -190,13 +174,11 @@ impl Plugin for VitestPlugin {
         );
         result.extend_entry_patterns(project_includes);
 
-        // test.setupFiles → setup files (string or array)
         let mut setup_files = config_parser::extract_config_string_or_array(
             source,
             config_path,
             &["test", "setupFiles"],
         );
-        // Also check test.projects[*].test.setupFiles (Vitest projects/workspaces)
         setup_files.extend(config_parser::extract_config_array_nested_string_or_array(
             source,
             config_path,
@@ -209,13 +191,11 @@ impl Plugin for VitestPlugin {
                 .push(root.join(f.trim_start_matches("./")));
         }
 
-        // test.globalSetup → setup files (string or array)
         let mut global_setup = config_parser::extract_config_string_or_array(
             source,
             config_path,
             &["test", "globalSetup"],
         );
-        // Also check test.projects[*].test.globalSetup
         global_setup.extend(config_parser::extract_config_array_nested_string_or_array(
             source,
             config_path,
@@ -228,8 +208,6 @@ impl Plugin for VitestPlugin {
                 .push(root.join(f.trim_start_matches("./")));
         }
 
-        // test.environment → if custom, it's a referenced dependency
-        // Vitest custom environments use the package name `vitest-environment-<name>`
         if let Some(env) =
             config_parser::extract_config_string(source, config_path, &["test", "environment"])
             && !matches!(env.as_str(), "node" | "jsdom" | "happy-dom")
@@ -240,8 +218,6 @@ impl Plugin for VitestPlugin {
             result.referenced_dependencies.push(env);
         }
 
-        // test.reporters → referenced dependencies (shallow to avoid options objects)
-        // e.g. reporters: ["default", ["vitest-sonar-reporter", { outputFile: "..." }]]
         let reporters = config_parser::extract_config_nested_shallow_strings(
             source,
             config_path,
@@ -255,8 +231,6 @@ impl Plugin for VitestPlugin {
             }
         }
 
-        // test.coverage.provider → if not built-in, it's a referenced dependency
-        // e.g. "istanbul" → @vitest/coverage-istanbul, "v8" → @vitest/coverage-v8
         if let Some(provider) = config_parser::extract_config_string(
             source,
             config_path,
@@ -269,8 +243,6 @@ impl Plugin for VitestPlugin {
             result.referenced_dependencies.push(provider);
         }
 
-        // test.typecheck.checker → if not built-in, it's a referenced dependency
-        // e.g. "vue-tsc" → vue-tsc package
         if let Some(checker) = config_parser::extract_config_string(
             source,
             config_path,
@@ -280,8 +252,6 @@ impl Plugin for VitestPlugin {
             result.referenced_dependencies.push(checker);
         }
 
-        // test.browser.provider → if not built-in, it's a referenced dependency
-        // "playwright" and "webdriverio" require @vitest/browser peer dependency
         if let Some(provider) = config_parser::extract_config_string(
             source,
             config_path,
@@ -341,8 +311,6 @@ mod tests {
     #[test]
     fn non_mocks_package_does_not_match_suffix() {
         let suffixes = VitestPlugin.virtual_package_suffixes();
-        // Includes adversarial cases that share the substring `__mocks__` but
-        // don't end with `/__mocks__`, plus a package whose own name contains it.
         let non_mocks = [
             "@aws-sdk/client-s3",
             "vitest",
@@ -403,7 +371,6 @@ mod tests {
             };
         "#;
         let result = resolve(source);
-        // No non-import deps should be added for built-in reporters
         let non_import_deps: Vec<_> = result
             .referenced_dependencies
             .iter()
@@ -442,7 +409,6 @@ mod tests {
             };
         "#;
         let result = resolve(source);
-        // Should not panic or add unexpected deps
         assert!(result.referenced_dependencies.is_empty());
     }
 
@@ -682,10 +648,6 @@ mod tests {
         assert_eq!(result.entry_patterns, vec!["packages/vue/**/*.spec.ts"]);
     }
 
-    // test.alias resolution uses normalize_config_path, which strips the project
-    // root prefix, so the config path must be ABSOLUTE for these tests (the
-    // shared `resolve` helper passes a relative config path that normalizes to a
-    // root-relative path that cannot strip an absolute root).
     fn resolve_abs(source: &str) -> PluginResult {
         VitestPlugin.resolve_config(
             std::path::Path::new("/project/vitest.config.ts"),
@@ -696,7 +658,6 @@ mod tests {
 
     #[test]
     fn test_alias_object_form_virtual_module() {
-        // Virtual module aliased to a local mock file: resolves + credits the mock.
         let source = r#"
             export default {
                 test: {
@@ -747,8 +708,6 @@ mod tests {
 
     #[test]
     fn test_alias_resolve_replacement_for_scoped_mock() {
-        // The amplitude/wizard shape: a real scoped package aliased to a mock file
-        // via resolve(__dirname, ...).
         let source = r#"
             import { resolve } from "node:path";
             export default {
@@ -784,7 +743,6 @@ mod tests {
 
     #[test]
     fn test_alias_projects_nested() {
-        // test.projects[*].test.alias must be extracted, not only top-level.
         let source = r#"
             export default {
                 test: {
@@ -813,8 +771,6 @@ mod tests {
 
     #[test]
     fn test_alias_projects_nested_new_url_pathname() {
-        // Vitest's own workspace fixtures use `new URL(..., import.meta.url).pathname`
-        // for project-level test.alias replacements.
         let source = r#"
             export default {
                 test: {
@@ -847,8 +803,6 @@ mod tests {
 
     #[test]
     fn test_alias_directory_target_not_seeded_as_entry_point() {
-        // A directory alias (`@/` -> `src`) is a path alias whose target has no
-        // file extension; it must NOT be seeded as a support entry point.
         let source = r#"
             export default {
                 test: {
@@ -870,9 +824,6 @@ mod tests {
 
     #[test]
     fn test_alias_package_to_package_credits_both_no_path_alias() {
-        // `'lodash-es' -> 'lodash'`: both bare packages. Credit both as referenced
-        // and emit NO path alias (which would turn the lodash-es import
-        // Unresolvable in a no-node_modules run).
         let source = r#"
             export default {
                 test: {
@@ -902,8 +853,6 @@ mod tests {
 
     #[test]
     fn test_alias_regexp_key_skipped_without_panic() {
-        // RegExp `find` keys cannot become a starts_with prefix; the shared parser
-        // returns None and the entry is silently skipped. Documented non-goal.
         let source = r#"
             export default {
                 test: {
@@ -921,8 +870,6 @@ mod tests {
 
     #[test]
     fn top_level_resolve_alias_extracted_from_vitest_config() {
-        // Vitest merges top-level resolve.alias; vite's own vitest.config.ts uses
-        // `resolve.alias: { 'vite/module-runner': resolve(...) }`.
         let source = r#"
             import { resolve } from "node:path";
             export default {
@@ -945,7 +892,6 @@ mod tests {
 
     #[test]
     fn project_level_resolve_alias_extracted() {
-        // test.projects[*].resolve.alias (Codex's vite workspaces-browser shape).
         let source = r#"
             export default {
                 test: {
@@ -967,7 +913,6 @@ mod tests {
 
     #[test]
     fn function_form_define_config_test_alias_extracted() {
-        // `defineConfig(() => ({ test: { alias } }))` arrow-returning-object form.
         let source = r#"
             import { defineConfig } from "vitest/config";
             export default defineConfig(() => ({

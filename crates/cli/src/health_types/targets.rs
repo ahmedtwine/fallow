@@ -232,8 +232,6 @@ pub struct RefactoringTarget {
 mod tests {
     use super::*;
 
-    // --- RecommendationCategory ---
-
     #[test]
     fn category_labels_are_non_empty() {
         let categories = [
@@ -268,8 +266,6 @@ mod tests {
         let unique: rustc_hash::FxHashSet<&&str> = labels.iter().collect();
         assert_eq!(labels.len(), unique.len(), "category labels must be unique");
     }
-
-    // --- Serde serialization ---
 
     #[test]
     fn category_serializes_as_snake_case() {
@@ -338,8 +334,6 @@ mod tests {
         assert_eq!(parsed["threshold"], 10.0);
     }
 
-    // --- RecommendationCategory compact_labels ---
-
     #[test]
     fn category_compact_labels_are_non_empty() {
         let categories = [
@@ -399,8 +393,6 @@ mod tests {
         }
     }
 
-    // --- EffortEstimate ---
-
     #[test]
     fn effort_labels_are_non_empty() {
         let efforts = [
@@ -428,8 +420,6 @@ mod tests {
             r#""high""#
         );
     }
-
-    // --- TargetEvidence ---
 
     #[test]
     fn target_evidence_skips_empty_fields() {

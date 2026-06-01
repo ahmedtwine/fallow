@@ -13,12 +13,6 @@ use super::extraction::RawGroup;
 use super::utils::build_clone_instance_fast;
 use crate::duplicates::types::{CloneGroup, CloneInstance};
 
-// ── Interval index ──────────────────────────────────────────────
-//
-// Sorted, non-overlapping `(start, end)` intervals per slot with
-// O(log N) lookup and merge-on-insert. Used for both token-level
-// and line-level subset removal.
-
 /// Sorted interval lists indexed by a numeric slot (file id or path index).
 struct IntervalIndex {
     slots: Vec<Vec<(usize, usize)>>,
@@ -53,9 +47,7 @@ impl IntervalIndex {
     /// `is_covered` does not produce false negatives across fragmented gaps.
     fn insert(&mut self, slot: usize, start: usize, end: usize) {
         let intervals = &mut self.slots[slot];
-        // First interval whose end >= start: candidate for a left-side merge.
         let lo = intervals.partition_point(|&(_, e)| e < start);
-        // First interval whose start > end: past the right-side merge boundary.
         let hi = intervals.partition_point(|&(s, _)| s <= end);
 
         if lo == hi {
@@ -68,8 +60,6 @@ impl IntervalIndex {
         }
     }
 }
-
-// ── Token-level subset removal ──────────────────────────────────
 
 /// Remove raw groups whose token spans are fully contained within a larger
 /// group's spans. Groups must arrive sorted by length descending.
@@ -105,8 +95,6 @@ fn remove_token_subsets(mut raw_groups: Vec<RawGroup>, num_files: usize) -> Vec<
 
     surviving
 }
-
-// ── Line table construction ─────────────────────────────────────
 
 /// Build a sorted vec of newline byte positions per file for O(log L) lookup.
 fn build_line_tables(files: &[FileData]) -> Vec<Vec<usize>> {
@@ -177,8 +165,6 @@ fn is_atomic_invocation_group(rg: &RawGroup, files: &[FileData]) -> bool {
     checked >= 2
 }
 
-// ── Single clone group construction ─────────────────────────────
-
 /// Convert a single `RawGroup` into a `CloneGroup`, returning `None` when
 /// the group should be filtered out (too few instances, below min_lines,
 /// or same-directory when skip_local is set).
@@ -204,7 +190,6 @@ fn build_clone_group(
         }
     }
 
-    // Apply skip_local: only keep cross-directory clones.
     if skip_local && instances.len() >= 2 {
         let dirs: FxHashSet<_> = instances
             .iter()
@@ -229,18 +214,12 @@ fn build_clone_group(
         return None;
     }
 
-    // Sort instances by file path then start line for stable output.
     instances.sort_by(|a, b| a.file.cmp(&b.file).then(a.start_line.cmp(&b.start_line)));
 
-    // Deduplicate instances that map to overlapping line ranges within
-    // the same file (different token offsets can resolve to overlapping
-    // source spans). When two instances overlap, keep the wider one.
     instances.dedup_by(|b, a| {
         if a.file != b.file {
             return false;
         }
-        // Instances are sorted by start_line. `b` starts at or after `a`.
-        // If b's start overlaps with a's range, merge by extending a.
         if b.start_line <= a.end_line {
             if b.end_line > a.end_line {
                 a.end_line = b.end_line;
@@ -263,8 +242,6 @@ fn build_clone_group(
     })
 }
 
-// ── Line-level subset removal ───────────────────────────────────
-
 /// Remove groups whose line ranges are fully contained within a larger
 /// group's line ranges. Groups must arrive sorted by token count descending.
 ///
@@ -272,7 +249,6 @@ fn build_clone_group(
 /// largest to smallest, registering kept groups' spans and checking smaller
 /// groups against the index in O(instances x log(intervals)).
 fn remove_line_subsets(clone_groups: Vec<CloneGroup>) -> Vec<CloneGroup> {
-    // Build file path -> slot index mapping.
     let mut path_to_idx: FxHashMap<PathBuf, usize> = FxHashMap::default();
     for group in &clone_groups {
         for inst in &group.instances {
@@ -286,10 +262,6 @@ fn remove_line_subsets(clone_groups: Vec<CloneGroup>) -> Vec<CloneGroup> {
 
     for group in clone_groups {
         let all_contained = group.instances.iter().all(|inst| {
-            // Defensive lookup: `path_to_idx` was populated from the same
-            // instances, so a miss should be impossible. Returning `false`
-            // here keeps the group rather than panicking the whole run if
-            // the invariant is ever violated (see issue #243).
             let Some(&fidx) = path_to_idx.get(&inst.file) else {
                 tracing::error!(
                     file = %inst.file.display(),
@@ -321,8 +293,6 @@ fn remove_line_subsets(clone_groups: Vec<CloneGroup>) -> Vec<CloneGroup> {
     kept
 }
 
-// ── Main orchestrator ───────────────────────────────────────────
-
 /// Convert raw groups into `CloneGroup` structs, applying `min_lines` and
 /// `skip_local` filters, deduplication, and subset removal.
 pub(super) fn build_groups(
@@ -337,17 +307,14 @@ pub(super) fn build_groups(
 
     let raw_count = raw_groups.len();
 
-    // Step 1: Token-level subset removal (cheap, before line calculation).
     let t0 = std::time::Instant::now();
     let surviving = remove_token_subsets(raw_groups, files.len());
     let token_subset_us = t0.elapsed().as_micros();
 
-    // Step 2: Pre-compute line offset tables for O(log L) byte-to-line lookup.
     let t0 = std::time::Instant::now();
     let line_tables = build_line_tables(files);
     let line_tables_us = t0.elapsed().as_micros();
 
-    // Step 3: Convert surviving raw groups into CloneGroups with filtering.
     let t0 = std::time::Instant::now();
     let mut clone_groups: Vec<CloneGroup> = surviving
         .iter()
@@ -356,8 +323,6 @@ pub(super) fn build_groups(
         .collect();
     let build_clone_us = t0.elapsed().as_micros();
 
-    // Step 4: Sort by token count desc, then instance count desc so that
-    // N-way groups come before M-way (M<N) subsets at equal token counts.
     let t0 = std::time::Instant::now();
     clone_groups.sort_by(|a, b| {
         b.token_count
@@ -366,7 +331,6 @@ pub(super) fn build_groups(
     });
     let sort_us = t0.elapsed().as_micros();
 
-    // Step 5: Line-level subset removal.
     let t0 = std::time::Instant::now();
     let kept = remove_line_subsets(clone_groups);
     let line_subset_us = t0.elapsed().as_micros();
@@ -390,8 +354,6 @@ pub(super) fn build_groups(
 mod tests {
     use super::*;
 
-    // ── IntervalIndex::is_covered ────────────────────────────────
-
     #[test]
     fn is_covered_empty_index_returns_false() {
         let index = IntervalIndex::new(1);
@@ -402,7 +364,6 @@ mod tests {
     fn is_covered_single_interval_contained() {
         let mut index = IntervalIndex::new(1);
         index.insert(0, 0, 10);
-        // [2, 2+3) = [2, 5) is within [0, 10)
         assert!(index.is_covered(0, 2, 3));
     }
 
@@ -410,7 +371,6 @@ mod tests {
     fn is_covered_single_interval_not_contained() {
         let mut index = IntervalIndex::new(1);
         index.insert(0, 0, 5);
-        // [3, 3+5) = [3, 8) exceeds [0, 5)
         assert!(!index.is_covered(0, 3, 5));
     }
 
@@ -418,7 +378,6 @@ mod tests {
     fn is_covered_exact_boundary() {
         let mut index = IntervalIndex::new(1);
         index.insert(0, 0, 10);
-        // [0, 0+10) = [0, 10) exactly matches [0, 10)
         assert!(index.is_covered(0, 0, 10));
     }
 
@@ -426,7 +385,6 @@ mod tests {
     fn is_covered_at_interval_start() {
         let mut index = IntervalIndex::new(1);
         index.insert(0, 5, 15);
-        // [5, 5+5) = [5, 10) within [5, 15)
         assert!(index.is_covered(0, 5, 5));
     }
 
@@ -435,17 +393,14 @@ mod tests {
         let mut index = IntervalIndex::new(1);
         index.insert(0, 0, 5);
         index.insert(0, 10, 20);
-        // [6, 6+3) = [6, 9) falls in the gap between [0,5) and [10,20)
         assert!(!index.is_covered(0, 6, 3));
     }
 
     #[test]
     fn is_covered_adjacent_intervals_not_merged() {
         let mut index = IntervalIndex::new(1);
-        // Insert non-overlapping intervals that are not adjacent (gap of 1)
         index.insert(0, 0, 5);
         index.insert(0, 6, 10);
-        // [4, 4+3) = [4, 7) spans the gap
         assert!(!index.is_covered(0, 4, 3));
     }
 
@@ -460,13 +415,9 @@ mod tests {
     fn is_covered_different_slots_independent() {
         let mut index = IntervalIndex::new(2);
         index.insert(0, 0, 10);
-        // Slot 1 has no intervals, so not covered
         assert!(!index.is_covered(1, 0, 5));
-        // Slot 0 is covered
         assert!(index.is_covered(0, 0, 5));
     }
-
-    // ── IntervalIndex::insert ────────────────────────────────────
 
     #[test]
     fn insert_non_overlapping() {
@@ -519,14 +470,10 @@ mod tests {
 
     #[test]
     fn insert_out_of_order_overlapping_merges() {
-        // Late insert lands BEFORE an existing interval and overlaps it; both
-        // halves must coalesce so a span crossing the merged region is
-        // detected as covered.
         let mut index = IntervalIndex::new(1);
         index.insert(0, 100, 150);
         index.insert(0, 50, 110); // overlaps [100, 150) on the right
         assert_eq!(index.slots[0], vec![(50, 150)]);
-        // [90, 130) crosses what used to be a fragmentation gap.
         assert!(index.is_covered(0, 90, 40));
     }
 
@@ -536,7 +483,6 @@ mod tests {
         index.insert(0, 0, 5);
         index.insert(0, 10, 15);
         index.insert(0, 20, 25);
-        // Spans all three.
         index.insert(0, 3, 22);
         assert_eq!(index.slots[0], vec![(0, 25)]);
     }
@@ -546,12 +492,9 @@ mod tests {
         let mut index = IntervalIndex::new(1);
         index.insert(0, 0, 5);
         index.insert(0, 10, 15);
-        // Overlaps [0,5) on the left and abuts [10,15) on the right; coalesces both.
         index.insert(0, 3, 10);
         assert_eq!(index.slots[0], vec![(0, 15)]);
     }
-
-    // ── remove_token_subsets ─────────────────────────────────────
 
     #[test]
     fn remove_token_subsets_empty_input() {
@@ -572,7 +515,6 @@ mod tests {
 
     #[test]
     fn remove_token_subsets_no_subsets_both_survive() {
-        // Two groups at non-overlapping positions
         let groups = vec![
             RawGroup {
                 instances: vec![(0, 0), (1, 0)],
@@ -589,7 +531,6 @@ mod tests {
 
     #[test]
     fn remove_token_subsets_strict_subset_removed() {
-        // Large group at [0, 10) and small group at [2, 5) -- subset
         let groups = vec![
             RawGroup {
                 instances: vec![(0, 0), (1, 0)],
@@ -607,8 +548,6 @@ mod tests {
 
     #[test]
     fn remove_token_subsets_partial_overlap_survives() {
-        // Group A covers [0, 10) in files 0 and 1
-        // Group B covers [5, 12) in files 0 and 1 -- partially overlapping, not a subset
         let groups = vec![
             RawGroup {
                 instances: vec![(0, 0), (1, 0)],
@@ -620,13 +559,11 @@ mod tests {
             },
         ];
         let result = remove_token_subsets(groups, 2);
-        // Both survive because [5, 12) is not fully within [0, 10)
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn remove_token_subsets_subset_in_one_file_but_not_other() {
-        // Group B is subset of Group A in file 0 but not in file 1
         let groups = vec![
             RawGroup {
                 instances: vec![(0, 0), (1, 0)],
@@ -638,11 +575,8 @@ mod tests {
             },
         ];
         let result = remove_token_subsets(groups, 2);
-        // B survives because not all instances are covered
         assert_eq!(result.len(), 2);
     }
-
-    // ── build_line_tables ────────────────────────────────────────
 
     fn make_file_data(source: &str) -> FileData {
         use crate::duplicates::tokenize::FileTokens;
@@ -678,7 +612,6 @@ mod tests {
     fn build_line_tables_multiple_lines() {
         let files = vec![make_file_data("abc\ndef\nghi")];
         let tables = build_line_tables(&files);
-        // Newlines at byte positions 3 and 7
         assert_eq!(tables[0], vec![3, 7]);
     }
 
@@ -686,7 +619,6 @@ mod tests {
     fn build_line_tables_trailing_newline() {
         let files = vec![make_file_data("abc\ndef\n")];
         let tables = build_line_tables(&files);
-        // Newlines at byte positions 3 and 7
         assert_eq!(tables[0], vec![3, 7]);
     }
 
@@ -698,8 +630,6 @@ mod tests {
         assert_eq!(tables[0], vec![1]);
         assert_eq!(tables[1], vec![1, 3]);
     }
-
-    // ── build_clone_group ────────────────────────────────────────
 
     #[expect(
         clippy::cast_possible_truncation,
@@ -763,7 +693,6 @@ mod tests {
             instances: vec![(0, 0), (1, 0)],
             length: 3,
         };
-        // min_lines = 5 but clone spans only 1 line
         let result = build_clone_group(&rg, &files, &line_tables, 5, false);
         assert!(result.is_none());
     }
@@ -817,7 +746,6 @@ mod tests {
         let group = result.unwrap();
         assert_eq!(group.instances.len(), 2);
         assert_eq!(group.token_count, 3);
-        // Instances should be sorted by file path
         assert!(group.instances[0].file <= group.instances[1].file);
     }
 
@@ -828,7 +756,6 @@ mod tests {
             make_test_file_data("b.ts", "aa\nbb\ncc\ndd\nee", 5),
         ];
         let line_tables = build_line_tables(&files);
-        // Duplicate instance (0, 0) should be deduplicated
         let rg = RawGroup {
             instances: vec![(0, 0), (0, 0), (1, 0)],
             length: 3,
@@ -838,8 +765,6 @@ mod tests {
         let group = result.unwrap();
         assert_eq!(group.instances.len(), 2);
     }
-
-    // ── remove_line_subsets ──────────────────────────────────────
 
     fn make_clone_group(instances: Vec<(&str, usize, usize)>, token_count: usize) -> CloneGroup {
         CloneGroup {
@@ -874,7 +799,6 @@ mod tests {
 
     #[test]
     fn remove_line_subsets_no_subsets_all_survive() {
-        // Two groups at non-overlapping line ranges
         let groups = vec![
             make_clone_group(vec![("a.ts", 1, 10), ("b.ts", 1, 10)], 20),
             make_clone_group(vec![("a.ts", 50, 60), ("b.ts", 50, 60)], 15),
@@ -885,8 +809,6 @@ mod tests {
 
     #[test]
     fn remove_line_subsets_nested_clone_removed() {
-        // Large group covers lines 1-20 in both files
-        // Small group covers lines 5-10 in both files (strict subset)
         let groups = vec![
             make_clone_group(vec![("a.ts", 1, 20), ("b.ts", 1, 20)], 50),
             make_clone_group(vec![("a.ts", 5, 10), ("b.ts", 5, 10)], 15),
@@ -898,7 +820,6 @@ mod tests {
 
     #[test]
     fn remove_line_subsets_partial_overlap_survives() {
-        // Group B overlaps A in file a.ts but not in b.ts
         let groups = vec![
             make_clone_group(vec![("a.ts", 1, 20), ("b.ts", 1, 20)], 50),
             make_clone_group(vec![("a.ts", 5, 10), ("b.ts", 50, 60)], 15),
@@ -909,7 +830,6 @@ mod tests {
 
     #[test]
     fn remove_line_subsets_different_files_not_subset() {
-        // Groups in completely different files
         let groups = vec![
             make_clone_group(vec![("a.ts", 1, 20), ("b.ts", 1, 20)], 50),
             make_clone_group(vec![("c.ts", 1, 10), ("d.ts", 1, 10)], 15),

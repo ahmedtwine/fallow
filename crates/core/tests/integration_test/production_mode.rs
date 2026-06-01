@@ -59,8 +59,6 @@ fn production_mode_excludes_test_files() {
         })
         .collect();
 
-    // Test files should not appear at all (not even as unused) since
-    // production mode excludes them from discovery.
     assert!(
         !all_file_names.contains(&"utils.test.ts".to_string()),
         "utils.test.ts should not appear in production mode results, found: {all_file_names:?}"
@@ -73,8 +71,6 @@ fn production_mode_disables_dev_dependency_checking() {
     let config = create_production_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // In production mode, unused_dev_dependencies should be empty
-    // because the rule is forced off.
     assert!(
         results.unused_dev_dependencies.is_empty(),
         "unused_dev_dependencies should be empty in production mode, found: {:?}",
@@ -98,8 +94,6 @@ fn production_mode_still_detects_unused_exports() {
         .map(|e| e.export.export_name.as_str())
         .collect();
 
-    // testHelper is only used from the test file which is excluded,
-    // so in production mode it should be unused.
     assert!(
         unused_export_names.contains(&"testHelper"),
         "testHelper should be unused in production mode (test consumer excluded), found: {unused_export_names:?}"
@@ -108,13 +102,10 @@ fn production_mode_still_detects_unused_exports() {
 
 #[test]
 fn production_mode_does_not_exclude_nested_config_files() {
-    // Regression test for #111: **/*.config.* excluded Angular's src/app/app.config.ts
     let root = fixture_path("angular-production-config");
     let config = create_production_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // app.config.ts is a runtime file imported by main.ts, NOT a tool config.
-    // It must be discovered in production mode so app.routes.ts stays reachable.
     let unused_file_names: Vec<String> = results
         .unused_files
         .iter()
@@ -157,8 +148,6 @@ fn non_production_mode_includes_test_files() {
         })
         .collect();
 
-    // In non-production mode, test-only.ts should be detected as unused
-    // (it's not imported by anything)
     assert!(
         unused_file_names.contains(&"test-only.ts".to_string()),
         "test-only.ts should be detected as unused in non-production mode, found: {unused_file_names:?}"
@@ -221,11 +210,6 @@ fn production_mode_resolves_solution_style_tsconfig_paths() {
 
 #[test]
 fn analyze_project_honors_per_analysis_dead_code_production() {
-    // analyze_project (used by the LSP) routes through default_config which
-    // calls config.resolve() directly. When the loaded config uses the
-    // per-analysis production form, default_config must flatten the
-    // production flag for dead-code analysis. Without that flatten,
-    // ResolvedConfig.production silently stays false and test files leak in.
     let dir = tempfile::tempdir().expect("temp dir");
     let root = dir.path();
     std::fs::create_dir_all(root.join("src")).unwrap();

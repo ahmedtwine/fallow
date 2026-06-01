@@ -31,12 +31,11 @@ pub fn push_circular_dep_diagnostics(
             let message = format!("Circular dependency: {}", chain.join(" \u{2192} "));
             let line = cycle.cycle.line.saturating_sub(1);
 
-            // Related info: link to each file in the cycle chain
             let related_info: Vec<DiagnosticRelatedInformation> = cycle
                 .cycle
                 .files
                 .iter()
-                .skip(1) // skip the first file (it's the diagnostic location)
+                .skip(1)
                 .enumerate()
                 .filter_map(|(i, f)| {
                     let file_uri = Url::from_file_path(f).ok()?;
@@ -120,10 +119,6 @@ pub fn push_re_export_cycle_diagnostics(
             fix_hint
         );
 
-        // Emit one Diagnostic per member file so jumping to ANY member lands
-        // on the cycle in the Problems panel. The diagnostic is anchored at
-        // line 1 col 0 because the cycle is file-scoped; per-edge anchoring
-        // is deferred (see issue #515 plan).
         for (idx, member_path) in cycle.cycle.files.iter().enumerate() {
             let Ok(uri) = Url::from_file_path(member_path) else {
                 continue;
@@ -186,7 +181,6 @@ pub fn push_boundary_violation_diagnostics(
             to_name, v.violation.to_zone, v.violation.from_zone,
         );
 
-        // Related info: link to the target file
         let related_info = Url::from_file_path(&v.violation.to_path)
             .ok()
             .map(|target_uri| {
@@ -285,7 +279,6 @@ mod tests {
         let duplication = empty_duplication();
         let diags = build_diagnostics(&results, &duplication, &root);
 
-        // Diagnostic should be on the first file in the cycle
         let uri_a = Url::from_file_path(&file_a).unwrap();
         let file_diags = &diags[&uri_a];
         assert_eq!(file_diags.len(), 1);
@@ -302,12 +295,10 @@ mod tests {
         assert!(d.message.contains("c.ts"));
         assert!(d.message.contains("\u{2192}")); // arrow separator
 
-        // Line should be 0-based
         assert_eq!(d.range.start.line, 1); // 1-based 2 -> 0-based 1
         assert_eq!(d.range.start.character, 20);
         assert_eq!(d.range.end.character, u32::MAX);
 
-        // Related information should point to other files in the cycle
         let related = d.related_information.as_ref().unwrap();
         assert_eq!(related.len(), 2); // file_b and file_c (skips first file)
         assert_eq!(related[0].message, "Step 2 in cycle: b.ts");
@@ -342,7 +333,6 @@ mod tests {
 
         let uri = Url::from_file_path(&file_a).unwrap();
         let d = &diags[&uri][0];
-        // With a single file, skip(1) yields nothing, so related_information is None
         assert!(d.related_information.is_none());
     }
 
@@ -386,10 +376,6 @@ mod tests {
         let duplication = empty_duplication();
         let diags = build_diagnostics(&results, &duplication, &root);
 
-        // Multi-node cycles emit ONE diagnostic per member file (unlike
-        // circular-dep which emits only on the first file). The rationale
-        // lives in `push_re_export_cycle_diagnostics`: jumping to any
-        // member should land the user on the cycle in the Problems panel.
         let uri_a = Url::from_file_path(&file_a).unwrap();
         let uri_b = Url::from_file_path(&file_b).unwrap();
         assert_eq!(diags[&uri_a].len(), 1);
@@ -410,11 +396,9 @@ mod tests {
             "multi-node message must carry the fix hint"
         );
 
-        // Diagnostic anchors at line 1 col 0 (file-scoped).
         assert_eq!(d.range.start.line, 0);
         assert_eq!(d.range.start.character, 0);
 
-        // Code description = docs link.
         let href = d
             .code_description
             .as_ref()
@@ -426,7 +410,6 @@ mod tests {
             "expected docs anchor in helpUri, got {href}"
         );
 
-        // Related information should point to other members (skip self).
         let related = d.related_information.as_ref().unwrap();
         assert_eq!(related.len(), 1);
         assert_eq!(related[0].location.uri, uri_b);
@@ -460,7 +443,6 @@ mod tests {
             d.message.contains("Remove the `export * from './'`"),
             "self-loop message must carry the self-loop fix hint"
         );
-        // Single member: no related info needed.
         assert!(d.related_information.is_none());
     }
 
@@ -501,7 +483,6 @@ mod tests {
         assert!(d.message.contains("core"));
         assert!(d.message.contains("feature"));
 
-        // Line should be 0-based
         assert_eq!(d.range.start.line, 2); // 1-based 3 -> 0-based 2
         assert_eq!(d.range.start.character, 10);
         assert_eq!(d.range.end.character, u32::MAX);

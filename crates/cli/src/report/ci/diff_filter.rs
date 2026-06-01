@@ -86,11 +86,6 @@ impl DiffIndex {
         let mut current_file: Option<String> = None;
         let mut new_line = 0_u64;
         let mut warned_overflow = false;
-        // `rename from <old>` always precedes `rename to <new>` in git's
-        // extended-header block. Track the most-recent `from` so the
-        // subsequent `to` can pair them. Reset on every new `diff --git`
-        // header so an unpaired `from` in one block does not bleed into
-        // the next file's pair.
         let mut pending_rename_from: Option<String> = None;
 
         for line in diff.lines() {
@@ -105,10 +100,6 @@ impl DiffIndex {
             if let Some(rest) = line.strip_prefix("rename to ") {
                 if let Some(from) = pending_rename_from.take() {
                     index.rename_pairs.insert(rest.to_owned(), from);
-                    // A pure-rename diff (similarity 100%) has no `+++ b/`
-                    // line, so the touched-files set never records the new
-                    // path otherwise. Seed it here for the filter-side
-                    // `touches_file` check.
                     index.touched_files.insert(rest.to_owned());
                 }
                 continue;
@@ -265,11 +256,8 @@ pub fn relative_to_diff_path(path: &Path, root: &Path) -> Option<String> {
         return Some(stripped.to_string_lossy().replace('\\', "/"));
     }
     if crate::path_util::is_absolute_path_any_platform(path) {
-        // Absolute under either platform's conventions but outside `root`:
-        // unfilterable (different drive, traversal escape, sibling repo).
         return None;
     }
-    // Genuinely relative: pass through with separator normalization.
     Some(path.to_string_lossy().replace('\\', "/"))
 }
 
@@ -570,9 +558,6 @@ pub fn filter_issues_from_path(
     mode: DiffFilterMode,
     radius: u64,
 ) -> Vec<CiIssue> {
-    // Reject diffs above the size cap before reading them into memory. A
-    // pathological diff (vendored dump, binary blob mistakenly committed)
-    // would otherwise allocate proportional memory before we can filter.
     match std::fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_DIFF_BYTES => {
             eprintln!(
@@ -617,8 +602,6 @@ mod tests {
 
     #[test]
     fn from_unified_diff_caps_added_lines_at_threshold() {
-        // Synthesize a diff with MAX_ADDED_LINES + 100 added lines and verify
-        // we stop indexing past the cap. The exact split: index size <= cap.
         let header =
             "diff --git a/big.txt b/big.txt\n--- a/big.txt\n+++ b/big.txt\n@@ -0,0 +1,100 @@\n";
         let mut body = String::with_capacity(MAX_ADDED_LINES * 16);
@@ -639,8 +622,6 @@ mod tests {
 
     #[test]
     fn filter_issues_from_path_skips_oversize_diff() {
-        // Write a diff just over the byte cap and verify the cap-check
-        // short-circuits, returning issues unfiltered with a warning.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("oversize.diff");
         let mut file = std::fs::File::create(&path).expect("create");
@@ -691,16 +672,6 @@ mod tests {
 
     #[test]
     fn summary_scope_all_keeps_project_level_findings_when_diff_misses_them() {
-        // The bug from #381: a `pnpm.overrides` entry in `package.json`
-        // becomes unused (transitive dep no longer in the resolved tree),
-        // but the PR diff doesn't touch the override line. The default
-        // `Added` filter drops the finding from the summary even though CI
-        // exits non-zero because of the same finding, leaving the user with
-        // a comment body that says "No findings."
-        //
-        // `all` scope bypasses the filter for project-level rules so the
-        // override finding stays in the body. The diff used here doesn't
-        // even include `package.json` to make the bypass clear.
         let dir = tempfile::tempdir().expect("tempdir");
         let diff_path = dir.path().join("pr.diff");
         std::fs::write(
@@ -824,9 +795,6 @@ mod tests {
 
     #[test]
     fn summary_filter_preserves_path_line_fingerprint_sort_order() {
-        // The partition step shuffles project-level issues to the back of
-        // the vec; the post-merge sort restores the canonical ordering the
-        // renderer expects.
         let a = CiIssue {
             rule_id: "fallow/unused-export".into(),
             description: "a".into(),
@@ -844,16 +812,12 @@ mod tests {
             fingerprint: "b".into(),
         };
         let kept = summary_filter_with_scope(vec![a, b], SummaryScope::All, |issues| issues);
-        // `package.json` sorts before `src/a.ts` lexicographically.
         assert_eq!(kept[0].fingerprint, "b");
         assert_eq!(kept[1].fingerprint, "a");
     }
 
     #[test]
     fn range_overlaps_added_hotspot_starting_before_diff_touches_inside() {
-        // Complexity hotspot [10..=120] with PR touching line 115 inside
-        // the function body must count as touched. Edges (start, end) are
-        // both inclusive: a PR at line 10 OR line 120 also counts.
         let diff = "\
 diff --git a/src/big.ts b/src/big.ts
 --- a/src/big.ts
@@ -864,11 +828,8 @@ diff --git a/src/big.ts b/src/big.ts
 ";
         let index = DiffIndex::from_unified_diff(diff);
         assert!(index.range_overlaps_added("src/big.ts", 10, 120));
-        // Different file: never overlaps even at matching lines.
         assert!(!index.range_overlaps_added("src/other.ts", 10, 120));
-        // Range strictly before the touched line.
         assert!(!index.range_overlaps_added("src/big.ts", 10, 100));
-        // Degenerate range (end < start) is never overlap.
         assert!(!index.range_overlaps_added("src/big.ts", 200, 100));
     }
 
@@ -883,15 +844,11 @@ diff --git a/src/a.ts b/src/a.ts
 +new
 ";
         let index = DiffIndex::from_unified_diff(diff);
-        // ComplexityViolation with line=2, line_count=1 -> [2..=2].
         assert!(index.range_overlaps_added("src/a.ts", 2, 2));
     }
 
     #[test]
     fn range_overlaps_added_range_starting_at_zero_collapses_to_one() {
-        // Callers passing `line + line_count` with line=0 must not match
-        // every diff. The implementation lifts `start` to max(start, 1)
-        // so a 1-based diff key never matches a 0-based caller range.
         let diff = "\
 diff --git a/src/a.ts b/src/a.ts
 --- a/src/a.ts
@@ -901,9 +858,7 @@ diff --git a/src/a.ts b/src/a.ts
 +new
 ";
         let index = DiffIndex::from_unified_diff(diff);
-        // Range [0..=0]: lifted to [1..=0], which is empty.
         assert!(!index.range_overlaps_added("src/a.ts", 0, 0));
-        // Range [0..=5]: lifted to [1..=5]; line 2 is in the set.
         assert!(index.range_overlaps_added("src/a.ts", 0, 5));
     }
 
@@ -938,9 +893,6 @@ diff --git a/b b/b
 
     #[test]
     fn delete_only_diff_records_no_added_lines() {
-        // A pure deletion: `+++ /dev/null` keeps current_file = None so
-        // no added lines accumulate. The path NOT touched on the right side
-        // is genuinely absent; range_overlaps_added must return false.
         let diff = "\
 diff --git a/dead.ts b/dead.ts
 deleted file mode 100644
@@ -959,10 +911,6 @@ deleted file mode 100644
 
     #[test]
     fn rename_with_content_hunk_indexes_under_new_path() {
-        // Renames carry the new name in the `+++ b/...` header. The added
-        // line for the new content sits under the new path; callers that
-        // emit findings keyed to the OLD path will miss the overlap, which
-        // is the expected behavior (the old file no longer exists).
         let diff = "\
 diff --git a/src/old.ts b/src/new.ts
 similarity index 90%
@@ -980,18 +928,12 @@ rename to src/new.ts
         assert!(!index.touches_file("src/old.ts"));
         assert!(index.range_overlaps_added("src/new.ts", 1, 5));
         assert!(!index.range_overlaps_added("src/old.ts", 1, 5));
-        // Issue #528: rename pair must be recorded so the review envelope
-        // can populate GitLab's position.old_path with the base-side path.
         assert_eq!(index.old_path_for("src/new.ts"), Some("src/old.ts"));
         assert_eq!(index.old_path_for("src/other.ts"), None);
     }
 
     #[test]
     fn rename_only_diff_records_pair_and_seeds_touched_files() {
-        // Pure rename (100% similarity) has no content hunk and no
-        // `+++ b/` line. The rename pair must still land in the index, and
-        // the new path must show up in `touches_file` so downstream filters
-        // recognise it as part of the change set.
         let diff = "\
 diff --git a/src/keep.ts b/src/moved.ts
 similarity index 100%
@@ -1007,10 +949,6 @@ rename to src/moved.ts
 
     #[test]
     fn unpaired_rename_from_does_not_bleed_into_next_file() {
-        // Defensive: if a malformed diff has a `rename from` without a
-        // matching `rename to` (truncated input, hand-crafted patch), the
-        // pending `from` must be cleared at the next `diff --git` header so
-        // it cannot accidentally pair with a later block's `rename to`.
         let diff = "\
 diff --git a/src/a.ts b/src/a.ts
 rename from src/dropped-from.ts
@@ -1024,9 +962,7 @@ rename from src/b.ts
 rename to src/c.ts
 ";
         let index = DiffIndex::from_unified_diff(diff);
-        // The well-formed pair lands.
         assert_eq!(index.old_path_for("src/c.ts"), Some("src/b.ts"));
-        // The unpaired from does NOT leak into anything else.
         assert_eq!(index.old_path_for("src/dropped-from.ts"), None);
         assert_eq!(index.old_path_for("src/a.ts"), None);
     }

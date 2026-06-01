@@ -340,8 +340,6 @@ pub fn closest_known_kind_name(input: &str) -> Option<&'static str> {
         .map(|(name, _)| name)
 }
 
-// Size assertions to prevent memory regressions.
-// `Suppression` is stored in a Vec per file; `IssueKind` appears in every suppression.
 const _: () = assert!(std::mem::size_of::<Suppression>() == 12);
 const _: () = assert!(std::mem::size_of::<IssueKind>() == 1);
 
@@ -476,10 +474,8 @@ mod tests {
 
     #[test]
     fn issue_kind_from_str_near_misses() {
-        // Case sensitivity — these should NOT match
         assert_eq!(IssueKind::parse("Unused-File"), None);
         assert_eq!(IssueKind::parse("UNUSED-EXPORT"), None);
-        // Typos / near-misses
         assert_eq!(IssueKind::parse("unused_file"), None);
         assert_eq!(IssueKind::parse("unused-files"), None);
     }
@@ -530,8 +526,6 @@ mod tests {
         assert_eq!(IssueKind::from_discriminant(27), None);
     }
 
-    // ── Discriminant uniqueness ─────────────────────────────────
-
     #[test]
     fn discriminant_values_are_unique() {
         let all_kinds = [
@@ -573,14 +567,10 @@ mod tests {
         );
     }
 
-    // ── Discriminant starts at 1 ────────────────────────────────
-
     #[test]
     fn discriminant_starts_at_one() {
         assert_eq!(IssueKind::UnusedFile.to_discriminant(), 1);
     }
-
-    // ── Suppression struct ──────────────────────────────────────
 
     #[test]
     fn suppression_line_zero_is_file_wide() {
@@ -605,8 +595,6 @@ mod tests {
         assert_eq!(s.kind, Some(IssueKind::UnusedExport));
     }
 
-    // ── KNOWN_ISSUE_KIND_NAMES drift guard + Levenshtein ─────────
-
     #[test]
     fn known_issue_kind_names_parses_each_entry() {
         for &name in KNOWN_ISSUE_KIND_NAMES {
@@ -619,7 +607,6 @@ mod tests {
 
     #[test]
     fn closest_known_kind_name_finds_near_misses() {
-        // Common typos
         assert_eq!(
             closest_known_kind_name("unused-exports"),
             Some("unused-export")
@@ -630,7 +617,6 @@ mod tests {
 
     #[test]
     fn closest_known_kind_name_rejects_novel_strings() {
-        // Completely unrelated input should not produce a misleading suggestion.
         assert_eq!(closest_known_kind_name("xyzzy"), None);
         assert_eq!(closest_known_kind_name("foo"), None);
         assert_eq!(closest_known_kind_name(""), None);
@@ -638,8 +624,6 @@ mod tests {
 
     #[test]
     fn closest_known_kind_name_skips_exact_match() {
-        // An exact match has distance 0 and is filtered (the caller should
-        // use IssueKind::parse for the recognized path).
         assert_eq!(closest_known_kind_name("unused-export"), None);
     }
 }

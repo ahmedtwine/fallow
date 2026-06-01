@@ -36,8 +36,6 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-// -- V8 input types ---------------------------------------------------------
-
 /// Top-level shape emitted by Node's `NODE_V8_COVERAGE` directory: one file
 /// per worker / process containing a `result` array of [`ScriptCoverage`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,8 +93,6 @@ pub struct CoverageRange {
     pub count: u64,
 }
 
-// -- Istanbul position type -------------------------------------------------
-
 /// 1-indexed line + 0-indexed column.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IstanbulPosition {
@@ -117,8 +113,6 @@ where
 {
     Ok(Option::<u32>::deserialize(deserializer)?.unwrap_or(0))
 }
-
-// -- V8 offset to line/column mapper ---------------------------------------
 
 /// Pre-computed line-start table for converting V8 source offsets into
 /// Istanbul line/column positions in O(log n) per lookup.
@@ -195,7 +189,6 @@ impl LineOffsetTable {
     /// remaining column.
     #[must_use]
     pub fn position(&self, source_offset: u32) -> IstanbulPosition {
-        // Binary search for the last line_start <= source_offset.
         let line_zero_indexed = match self.line_starts.binary_search(&source_offset) {
             Ok(exact) => exact,
             Err(insertion_point) => insertion_point.saturating_sub(1),
@@ -208,9 +201,6 @@ impl LineOffsetTable {
     }
 }
 
-// Manual Copy impls: the CLI consumer `.copied()`s `CoverageRange` out of a
-// function's `ranges`, and `IstanbulPosition` is a small value type returned by
-// `LineOffsetTable::position`.
 impl Copy for CoverageRange {}
 impl Copy for IstanbulPosition {}
 
@@ -278,8 +268,6 @@ mod tests {
             .encode_utf16()
             .count() as u32;
 
-        // The fixture must actually exercise the multibyte gap, else a byte
-        // implementation would pass this test by accident.
         assert!(
             function_v8_offset < function_byte_offset,
             "fixture must place a multibyte char before the function",
@@ -288,8 +276,6 @@ mod tests {
         let table = LineOffsetTable::from_source(source);
         let pos = table.position(function_v8_offset);
 
-        // Line 1 starts at offset 0, so the column equals the V8 (UTF-16)
-        // offset. A byte model would report `function_byte_offset` instead.
         assert_eq!(pos.line, 1);
         assert_eq!(pos.column, function_v8_offset);
         assert!(
@@ -416,11 +402,9 @@ mod tests {
                 let mut line_start = 0u32;
                 for (index, body) in bodies.iter().enumerate() {
                     let body_units = utf16_len(body);
-                    // Column 0 of each line lands on the line's first offset.
                     let at_start = table.position(line_start);
                     prop_assert_eq!(at_start.line, index as u32 + 1);
                     prop_assert_eq!(at_start.column, 0);
-                    // Offsets inside the line (up to its width) recover the column.
                     for column in 0..=body_units {
                         let pos = table.position(line_start + column);
                         prop_assert_eq!(pos.line, index as u32 + 1);
@@ -445,7 +429,6 @@ mod tests {
                 let table = LineOffsetTable::from_v8_line_lengths(&lengths)
                     .expect("non-empty lengths build a table");
 
-                // Reconstruct the expected line starts: +1 separator per line.
                 let mut starts = vec![0u32];
                 let mut acc = 0u32;
                 for length in &lengths[..lengths.len() - 1] {
@@ -464,7 +447,6 @@ mod tests {
                     prop_assert_eq!(at_start.line, index as u32 + 1);
                     prop_assert_eq!(at_start.column, 0);
 
-                    // Within a non-final line the recorded length bounds the columns.
                     if index + 1 < lengths.len() {
                         for column in 0..=lengths[index] {
                             let pos = table.position(start + column);

@@ -4,9 +4,6 @@ use super::{MigrationResult, source_head};
 
 pub(super) fn generate_toml(result: &MigrationResult) -> String {
     let mut output = String::new();
-    // Strip internal tool tags (`(knip config)`, `(jscpd config)`, ...) from
-    // the comment so the committed config file does not carry implementation
-    // detail. See issue #457.
     let source_comment = result
         .sources
         .iter()
@@ -20,8 +17,6 @@ pub(super) fn generate_toml(result: &MigrationResult) -> String {
         .as_object()
         .expect("config is always an Object");
 
-    // Top-level simple fields first
-    // Note: fallow config uses #[serde(rename_all = "camelCase")] so TOML keys must be camelCase
     for key in &["entry", "ignorePatterns", "ignoreDependencies"] {
         if let Some(value) = obj.get(*key)
             && let Some(arr) = value.as_array()
@@ -61,7 +56,6 @@ pub(super) fn generate_toml(result: &MigrationResult) -> String {
         }
     }
 
-    // [rules] table
     if let Some(rules) = obj.get("rules")
         && let Some(rules_obj) = rules.as_object()
         && !rules_obj.is_empty()
@@ -74,7 +68,6 @@ pub(super) fn generate_toml(result: &MigrationResult) -> String {
         }
     }
 
-    // [duplicates] table
     if let Some(dupes) = obj.get("duplicates")
         && let Some(dupes_obj) = dupes.as_object()
         && !dupes_obj.is_empty()

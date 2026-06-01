@@ -1,7 +1,5 @@
 use super::common::{create_config, fixture_path};
 
-// ── ESLint relative extends chain (issue #198) ──────────────────
-
 #[test]
 fn eslint_relative_extends_config_is_not_reported_unused() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -83,16 +81,12 @@ fn eslint_relative_extends_config_is_not_reported_unused() {
     );
 }
 
-// ── Type-only circular dependency filtering ──────────────────
-
 #[test]
 fn type_only_bidirectional_import_not_reported_as_cycle() {
     let root = fixture_path("type-only-cycle");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // user.ts and post.ts have `import type` from each other.
-    // This is NOT a runtime cycle and should not be reported.
     assert!(
         results.circular_dependencies.is_empty(),
         "type-only bidirectional imports should not be reported as circular dependencies, got: {:?}",
@@ -110,8 +104,6 @@ fn type_only_cycle_still_detects_unused_exports() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // The value exports (createUser, createPost) are used by index.ts.
-    // No files should be reported as unused.
     let unused_file_names: Vec<String> = results
         .unused_files
         .iter()
@@ -134,18 +126,12 @@ fn type_only_cycle_still_detects_unused_exports() {
     );
 }
 
-// ── Duplicate export common-importer filtering ───────────────
-
 #[test]
 fn unrelated_route_files_not_flagged_as_duplicate_exports() {
     let root = fixture_path("route-duplicate-exports");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // foo/page.ts and bar/page.ts both export `Area` and `handler`.
-    // Each page is imported by its own router (foo/router.ts, bar/router.ts),
-    // not by a shared file. No common importer exists for the page files.
-    // Neither `Area` nor `handler` should be flagged as duplicates.
     let route_dupes: Vec<&str> = results
         .duplicate_exports
         .iter()
@@ -164,8 +150,6 @@ fn shared_util_duplicates_with_common_importer_still_flagged() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // shared/utils.ts and shared/helpers.ts both export `formatDate`.
-    // Both are imported by index.ts (shared importer) -- should be flagged.
     let format_date_dupe = results
         .duplicate_exports
         .iter()
@@ -181,20 +165,8 @@ fn shared_util_duplicates_with_common_importer_still_flagged() {
     );
 }
 
-// ── Broken tsconfig extends chain (issue #97) ────────────────
-
 #[test]
 fn broken_tsconfig_extends_does_not_poison_sibling_resolution() {
-    // Solution-style `packages/my-app/tsconfig.json` references
-    // `tsconfig.app.json` (valid) and `tsconfig.spec.json` (extends a
-    // non-existent `../../tsconfig.json`). Before the fix, the broken
-    // sibling's extends chain failed `oxc_resolver::resolve_file` for ALL
-    // files in the workspace, including `main.ts` which is only covered by
-    // the valid `tsconfig.app.json`. Every relative import was reported as
-    // unresolved.
-    //
-    // The fallback in `resolve_file_with_tsconfig_fallback` retries via
-    // `resolver.resolve(dir, specifier)`, bypassing tsconfig discovery.
     let root = fixture_path("tsconfig-broken-extends");
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
@@ -238,8 +210,6 @@ fn broken_tsconfig_path_alias_is_not_misclassified_as_unlisted_dependency() {
     );
 }
 
-// ── Bun bare runtime module is a platform builtin (issue #642) ──
-
 #[test]
 fn bun_bare_runtime_module_is_not_unlisted() {
     let root = fixture_path("issue-642-bun-builtin");
@@ -266,8 +236,6 @@ fn bun_bare_runtime_module_is_not_unlisted() {
         "bare `bun` value and type imports must not surface as unlisted dependencies: {unlisted_names:?}"
     );
 }
-
-// ── Wildcard tsconfig paths keep bare imports correctly classified (issue #327) ──
 
 #[test]
 fn wildcard_tsconfig_paths_do_not_misclassify_bare_imports() {
@@ -305,9 +273,6 @@ fn wildcard_tsconfig_paths_do_not_misclassify_bare_imports() {
         "no imports should be unresolved in the wildcard-paths fixture: {unresolved_specifiers:?}"
     );
 
-    // Positive case: the wildcard rewrite `*` -> `./src/*` still works after
-    // the fix, so `import { greeting } from "helpers"` resolves to
-    // `./src/helpers.ts` and the file is reachable (not flagged as unused).
     let unused_files: Vec<String> = results
         .unused_files
         .iter()
@@ -652,7 +617,6 @@ fn missing_extends_keeps_local_tsconfig_paths_without_base_url() {
     std::fs::write(
         root.join("tsconfig.json"),
         r##"{
-            // missing inherited config should not hide local compilerOptions
             "extends": "./node_modules/@scope/missing/tsconfig.json",
             "compilerOptions": {
                 "paths": {
@@ -1614,10 +1578,6 @@ fn glimmer_typescript_imports_use_tsconfig_path_aliases() {
     let config = create_config(root);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Normalise to forward slashes so the `ends_with("app/services/...")`
-    // assertions below match on Windows too. The sibling
-    // `rootdirs_relative_imports_resolve_under_broken_extends_chain` test
-    // already does this; this one was missed.
     let unused_file_paths: Vec<String> = results
         .unused_files
         .iter()
@@ -1647,8 +1607,6 @@ fn glimmer_typescript_imports_use_tsconfig_path_aliases() {
             .collect::<Vec<_>>()
     );
 }
-
-// ── Interface-mediated class member usage (issue #132) ──────
 
 #[test]
 fn interface_member_usage_does_not_flag_implementer_members() {
@@ -1684,8 +1642,6 @@ fn interface_member_usage_does_not_flag_implementer_members() {
         "unrelated members should still be reported: {unused_members:?}"
     );
 }
-
-// ── Prisma config file (issue #281) ─────────────────────────
 
 #[test]
 fn prisma_config_ts_is_recognized_as_entry_point() {
@@ -1822,8 +1778,6 @@ generator json {
          unused_dev={unused_dev:?}"
     );
 }
-
-// ── Prisma custom generator providers (issue #288) ──────────────
 
 #[test]
 fn prisma_custom_generator_provider_is_credited() {
@@ -2105,8 +2059,6 @@ model User {
     );
 }
 
-// ── node:module register() loader hook (issue #293) ──────────────
-
 #[test]
 fn node_module_register_loader_is_credited_as_used_dependency() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -2226,10 +2178,6 @@ fn node_module_register_new_url_loader_hooks_are_used_exports() {
 
 #[test]
 fn node_module_register_legacy_loader_hook_exports_are_used() {
-    // Issue #589: loaders shipped for older Node releases export the legacy
-    // hook names `getFormat` / `getSource` / `transformSource`. Crediting
-    // those names keeps real-world legacy loaders out of `unused-export`
-    // findings without crediting random helper exports on the same file.
     let dir = tempfile::tempdir().expect("temp dir");
     let root = dir.path();
 

@@ -10,8 +10,6 @@ fn tokenize_no_skip(code: &str) -> Vec<SourceToken> {
     tokenize_file(&path, code, false).tokens
 }
 
-// ── Basic import filtering ────────────────────────────────────
-
 #[test]
 fn skip_imports_removes_value_import() {
     let tokens = tokenize_skip_imports("import { useState } from 'react';");
@@ -60,8 +58,6 @@ fn skip_imports_removes_type_import() {
         "Type import should be stripped when skip_imports is true"
     );
 }
-
-// ── Non-import code preserved ─────────────────────────────────
 
 #[test]
 fn skip_imports_preserves_runtime_code() {
@@ -112,8 +108,6 @@ fn skip_imports_preserves_export_all() {
     assert!(has_export, "Export * should be preserved (not an import)");
 }
 
-// ── require() NOT filtered ────────────────────────────────────
-
 #[test]
 fn skip_imports_does_not_filter_require() {
     let tokens = tokenize_skip_imports("const x = require('foo');");
@@ -126,8 +120,6 @@ fn skip_imports_does_not_filter_require() {
         "require() is a CallExpression, not an ImportDeclaration"
     );
 }
-
-// ── Token count comparison ────────────────────────────────────
 
 #[test]
 fn skip_imports_reduces_token_count() {
@@ -155,8 +147,6 @@ fn skip_imports_disabled_preserves_imports() {
     );
 }
 
-// ── Multiple imports ──────────────────────────────────────────
-
 #[test]
 fn skip_imports_removes_sorted_import_block() {
     let code = r"import { A } from './a';
@@ -180,8 +170,6 @@ export function process() {
     assert!(has_export, "Export function should be preserved");
 }
 
-// ── Dynamic import() NOT filtered ─────────────────────────────
-
 #[test]
 fn skip_imports_does_not_filter_dynamic_import() {
     let tokens = tokenize_skip_imports("const mod = import('./module');");
@@ -190,8 +178,6 @@ fn skip_imports_does_not_filter_dynamic_import() {
         "Dynamic import() expression should NOT be filtered (it's a CallExpression)"
     );
 }
-
-// ── Cross-language + skip_imports combined ─────────────────────
 
 #[test]
 fn skip_imports_with_cross_language() {

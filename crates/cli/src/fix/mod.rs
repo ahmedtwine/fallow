@@ -53,8 +53,6 @@ pub struct FixOptions<'a> {
     reason = "orchestrator threads results across 5 per-issue-type fixers + the post-#454 commit + envelope assembly; splitting harms locality of the wire-format authoring"
 )]
 pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
-    // In non-TTY environments (CI, AI agents), require --yes or --dry-run
-    // to prevent accidental destructive operations.
     if !opts.dry_run && !opts.yes && !std::io::stdin().is_terminal() {
         let msg = "fix command requires --yes (or --force) in non-interactive environments. \
                    Use --dry-run to preview changes first, then pass --yes to confirm.";
@@ -105,7 +103,6 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
     let mut fixes: Vec<serde_json::Value> = Vec::new();
     let mut plan = FixPlan::new();
 
-    // Group exports by file path so we can apply all fixes to a single in-memory copy.
     let mut exports_by_file: FxHashMap<PathBuf, Vec<&fallow_core::results::UnusedExport>> =
         FxHashMap::default();
     for finding in &results.unused_exports {
@@ -115,11 +112,6 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
             .push(&finding.export);
     }
 
-    // Files with at least one unresolved import have an incomplete local
-    // usage graph, so their "this export is unused" findings are lower
-    // confidence; the export fixer withholds removals there (issue #602).
-    // Paths are absolute (the detector stores them absolute; see the
-    // path-anchored-finding convention), matching `UnusedExport.path`.
     let unresolved_import_files: FxHashSet<PathBuf> = results
         .unresolved_imports
         .iter()
@@ -157,7 +149,6 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
         &mut fixes,
     );
 
-    // Group unused enum members by file path for batch editing.
     if !results.unused_enum_members.is_empty() {
         let mut enum_members_by_file: FxHashMap<PathBuf, Vec<&fallow_core::results::UnusedMember>> =
             FxHashMap::default();
@@ -204,29 +195,14 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
     let catalog_skipped = catalog_summary.skipped + empty_catalog_summary.skipped;
     let catalog_comment_lines_removed = catalog_summary.comment_lines_removed;
 
-    // Materialize hash-mismatch + mixed-EOL skip records on BOTH the dry-run
-    // and apply paths: the fixers' `read_source_with_hash_check` calls push
-    // to `plan.skipped()` regardless of dry_run, and the acceptance criterion
-    // is that dry-run surfaces both kinds of skips without writes. The skip
-    // records appear in the same `fixes` array the JSON renderer serializes,
-    // so consumers see one stream.
     let plan_skip_records = build_skipped_records(opts.root, plan.skipped(), opts.quiet);
     fixes.extend(plan_skip_records.iter().cloned());
 
-    // A recoverable skip (hash mismatch / mixed line endings) means a fix
-    // the user asked for could not complete; it flips the non-zero exit
-    // code. Intentional skips (low-confidence export preservation, #602) do
-    // NOT, so classify from the enum here before `commit` consumes `plan`.
     let has_recoverable_skip = plan
         .skipped()
         .iter()
         .any(|skip| !skip.reason.is_intentional());
 
-    // Commit the batched plan: stage every queued write, then promote.
-    // Stage failure leaves every target file at its original content; rename
-    // failure is reported per-path (the rename primitive is per-file atomic
-    // but there is no atomic multi-rename on POSIX). The dry-run path
-    // returns an empty outcome and bypasses commit entirely.
     let commit_outcome = if opts.dry_run {
         CommitOutcome::empty_for_dry_run()
     } else {
@@ -235,8 +211,6 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
         outcome
     };
 
-    // Strip the __target sidechannel field before serialization. It is a
-    // correlation hint, not part of the public JSON contract.
     strip_target_sidechannel(&mut fixes);
 
     let content_changed_count = plan_skip_records
@@ -251,11 +225,6 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
             r.get("skip_reason").and_then(serde_json::Value::as_str) == Some("mixed_line_endings")
         })
         .count();
-    // Low-confidence export skips (issue #602) are INTENTIONAL: the export
-    // was deliberately preserved, so they do NOT flip `had_write_error`
-    // (unlike the two recoverable skips above). The combined counter sums
-    // both off-graph-directory and unresolved-import skips; the per-record
-    // `skip_reason` keeps the two distinguishable for agents.
     let low_confidence_count = plan_skip_records
         .iter()
         .filter(|r| {
@@ -281,13 +250,6 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
                     .unwrap_or(false)
             })
             .count();
-        // The legacy `skipped` counter pre-dates #454 and meant "catalog /
-        // YAML fix skipped due to consumer / multi-doc / line-out-of-range
-        // guard". Hash-mismatch + mixed-EOL skips carry the same
-        // `skipped: true` flag for consumer convenience but are counted
-        // separately via `skipped_content_changed` /
-        // `skipped_mixed_line_endings`; exclude them here so the existing
-        // counter keeps its prior meaning.
         let skipped_count = fixes
             .iter()
             .filter(|f| {
@@ -509,8 +471,6 @@ fn emit_human_summary(
         );
     }
     if low_confidence_count > 0 {
-        // `low_confidence_count` of 1 is the common case (a single mock /
-        // e2e file), so pluralization matters here.
         let files_word = if low_confidence_count == 1 {
             "file"
         } else {

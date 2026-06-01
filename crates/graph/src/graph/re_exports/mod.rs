@@ -82,23 +82,8 @@ impl ModuleGraph {
             return Vec::new();
         }
 
-        // Surface re-export cycles up front via Tarjan SCC over the
-        // re-export subgraph (barrel -> source). A cycle is almost always a
-        // real bug in the barrel structure: silent termination via an
-        // iteration cap hid these for years. Cycles still terminate
-        // naturally via the dedup-by-`from_file` check inside each
-        // propagation helper, so this pass is purely diagnostic.
-        //
-        // The function also emits one `tracing::warn!` per cycle for
-        // operators running with `RUST_LOG=warn`; the returned vec is the
-        // structured surface consumed by the user-visible finding type.
         let cycles = find_re_export_cycles(&self.modules, &re_export_info);
 
-        // Precompute barrels that are transitively star-re-exported from entry points.
-        // These get entry-point-like treatment: all source exports are marked used.
-        // Entry points often expose public APIs through multiple `export *`
-        // barrels, so direct targets alone are not enough.
-        // Computing this once avoids O(modules) per call inside the hot loop.
         let mut entry_star_targets: FxHashSet<FileId> = self
             .modules
             .iter()
@@ -128,40 +113,15 @@ impl ModuleGraph {
             }
         }
 
-        // Pre-build reverse edge index: target FileId -> edge indices.
-        // This avoids O(all_edges) scans per star re-export in the hot loop.
-        // For barrel-heavy monorepos (Vue/Nuxt), star re-exports dominate the
-        // iteration cost, without this index, each call to propagate_star_re_export
-        // linearly scans all edges to find those targeting the barrel.
         let mut edges_by_target: FxHashMap<FileId, Vec<usize>> = FxHashMap::default();
         for (idx, edge) in self.edges.iter().enumerate() {
             edges_by_target.entry(edge.target).or_default().push(idx);
         }
 
-        // For each re-export, if the barrel's exported symbol has references,
-        // propagate those references to the source module's original export.
-        // Iterate until no new references are added (handles chains of arbitrary depth).
-        //
-        // Termination: each propagation helper adds references only after a
-        // dedup-by-`from_file` check, so the total monotone growth across
-        // iterations is bounded by `|files| * |exports|`. Once an iteration
-        // adds zero references, the fixpoint is reached and the loop exits.
-        //
-        // The `safety_cap` is a defensive backstop: a chain of length K
-        // converges in at most K iterations, and K cannot exceed the number
-        // of re-export edges. If the cap fires, something has violated
-        // monotonicity, which is a real bug and warrants a loud diagnostic.
         let safety_cap = re_export_info.len().saturating_add(1);
         let mut changed = true;
         let mut iteration: usize = 0;
-        // Reuse a single HashSet across iterations to avoid repeated allocations.
-        // In barrel-heavy monorepos, this loop can run up to safety_cap * re_export_info.len()
-        // * target_exports.len() times, reusing with .clear() avoids O(n) allocations.
         let mut existing_refs: FxHashSet<FileId> = FxHashSet::default();
-        // Track every (source, exported_name) pair we synthesise a stub for so a
-        // later value-bearing triggering edge can downgrade a type-only stub.
-        // Real `export type Foo` declarations on the source are NOT in this set
-        // and stay type-only; only synthesised bridge stubs ever flip.
         let mut synthetic_stubs: FxHashSet<(FileId, String)> = FxHashSet::default();
 
         while changed && iteration < safety_cap {
@@ -204,8 +164,6 @@ impl ModuleGraph {
         }
 
         if iteration >= safety_cap && changed {
-            // Should never fire in practice. If it does, propagation lost its
-            // monotonicity invariant and the bug needs a loud diagnostic.
             tracing::error!(
                 iterations = iteration,
                 safety_cap,
@@ -235,7 +193,6 @@ fn find_re_export_cycles(
 ) -> Vec<GraphReExportCycle> {
     let mut cycles: Vec<GraphReExportCycle> = Vec::new();
 
-    // Collect unique nodes (FileIds appearing as either endpoint).
     let mut node_index: FxHashMap<FileId, usize> = FxHashMap::default();
     let mut nodes: Vec<FileId> = Vec::new();
     for entry in re_export_info {
@@ -253,11 +210,6 @@ fn find_re_export_cycles(
         return cycles;
     }
 
-    // Build adjacency list: barrel -> source. Dedup parallel edges (same
-    // pair via multiple re-exports) so the SCC walk doesn't revisit.
-    // Self-edges (a barrel re-exporting from itself) are pathological in
-    // their own right; warn separately and exclude from the SCC pass so
-    // the cycle diagnostic stays focused on barrel-to-barrel loops.
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut seen_edge: FxHashSet<(usize, usize)> = FxHashSet::default();
     let mut seen_self_loop: FxHashSet<FileId> = FxHashSet::default();
@@ -297,16 +249,12 @@ fn find_re_export_cycles(
         }
     }
 
-    // Iterative Tarjan's SCC over the re-export subgraph.
     let sccs = tarjan_scc(n, &adj);
 
     for scc in &sccs {
         if scc.len() < 2 {
             continue;
         }
-        // Resolve each FileId to its PathBuf once. Sort by Path::display()
-        // string to match the existing diagnostic-output sort (also stable
-        // across platforms because PathBuf comparison is byte-wise).
         let mut triples: Vec<(PathBuf, String, FileId)> = scc
             .iter()
             .map(|&idx| {

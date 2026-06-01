@@ -1,7 +1,5 @@
 use super::helpers::*;
 
-// ---- find_test_only_dependencies tests ----
-
 /// A dependency imported only from a root-level test file should be flagged.
 #[test]
 fn test_only_dep_from_root_test_file() {

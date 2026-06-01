@@ -794,9 +794,6 @@ fn runtime_target_from_str(target: &str) -> crate::output_envelope::CoverageSetu
     use crate::output_envelope::CoverageSetupRuntimeTarget as T;
     match target {
         "browser" => T::Browser,
-        // Node is the conservative default; the upstream
-        // `FrameworkKind::runtime_targets()` only ever yields `"node"` or
-        // `"browser"`.
         _ => T::Node,
     }
 }
@@ -2122,10 +2119,6 @@ mod tests {
             node_entry_path: "src/server.ts".to_owned(),
         };
         let recipe = recipe_contents(&context);
-        // Without this line the trial user finishes setup, wires the beacon,
-        // and has no idea the dashboard's Untracked filter needs a second
-        // CI step. Regression test for BLOCK 2 from the public-readiness
-        // panel (2026-04-22).
         assert!(
             recipe.contains("fallow coverage upload-inventory"),
             "recipe missing upload-inventory CI instruction:\n{recipe}"

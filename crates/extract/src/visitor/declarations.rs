@@ -35,9 +35,7 @@ impl ModuleInfoExtractor {
             Declaration::FunctionDeclaration(func) => {
                 if let Some(id) = func.id.as_ref() {
                     let name = ExportName::Named(id.name.to_string());
-                    // Check if this is an overload — same-named export already exists
                     if let Some(existing) = self.exports.iter_mut().find(|e| e.name == name) {
-                        // Update to the implementation (last declaration wins)
                         existing.span = id.span;
                         existing.is_type_only = is_type_only;
                     } else {
@@ -126,9 +124,6 @@ impl ModuleInfoExtractor {
                 });
             }
             Declaration::TSModuleDeclaration(module) => {
-                // `declare namespace` / `declare module` are type-only (ambient).
-                // Runtime namespaces (`export namespace Foo { ... }`) compile to
-                // real JavaScript objects and are NOT type-only.
                 let ns_type_only = module.declare || is_type_only;
                 match &module.id {
                     TSModuleDeclarationName::Identifier(id) => {
@@ -332,7 +327,6 @@ impl ModuleInfoExtractor {
     ) {
         if let BindingPattern::ObjectPattern(obj_pat) = &declarator.id {
             if obj_pat.rest.is_some() {
-                // Rest element captures remaining properties — mark as whole-object use
                 self.whole_object_uses.push(ident_name.to_string());
             } else {
                 for prop in &obj_pat.properties {

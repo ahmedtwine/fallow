@@ -13,9 +13,6 @@ use super::FileData;
 /// billion. This is safe for JS/TS codebases (even very large monorepos
 /// have at most tens of millions of tokens).
 pub(super) fn rank_reduce(files: &[FileData]) -> Vec<Vec<u32>> {
-    // Single-pass: assign ranks on first encounter. The exact rank values
-    // don't matter as long as equal hashes get equal ranks. Skipping the
-    // sort+dedup saves O(N log N) and a second allocation.
     let total: usize = files.iter().map(|f| f.hashed_tokens.len()).sum();
     let mut hash_to_rank: FxHashMap<u64, u32> =
         FxHashMap::with_capacity_and_hasher(total / 2, rustc_hash::FxBuildHasher);

@@ -150,7 +150,6 @@ pub fn find_unresolved_catalog_references(
     let mut findings = Vec::new();
 
     for reference in &state.consumers.referenced_with_locations {
-        // Is the (catalog, package) pair already valid?
         if catalog_has_entry(
             &state.data,
             &reference.catalog_name,
@@ -159,10 +158,6 @@ pub fn find_unresolved_catalog_references(
             continue;
         }
 
-        // User-written consumer globs are project-root-relative with forward
-        // slashes, but `consumer_path` is stored as an absolute filesystem
-        // path. Strip the root before matching so `packages/**/package.json`
-        // matches the consumer path correctly on every platform.
         let consumer_path_str = reference
             .consumer_path
             .strip_prefix(root)
@@ -296,17 +291,9 @@ fn collect_catalog_consumers(pkg_paths: &[PathBuf], root: &Path) -> CatalogConsu
         let Ok(pkg) = serde_json::from_str::<PackageJson>(&raw_source) else {
             continue;
         };
-        // For `hardcoded_consumers` keep the relative-path storage that
-        // shipped with #329 (the JSON consumer contract uses relative paths
-        // and the #329 integration test asserts that shape).
         let relative_path = pkg_path
             .strip_prefix(root)
             .map_or_else(|_| pkg_path.clone(), Path::to_path_buf);
-        // For `ConsumerReference.consumer_path` keep the absolute path so the
-        // path-anchored filters that other finding types use
-        // (`filter_results_by_changed_files`, `filter_to_workspaces`'s
-        // `starts_with` check) work without a separate root-join pass. JSON
-        // output strips the root via `serde_path::serialize`.
         let absolute_path = pkg_path.clone();
 
         let line_map = scan_dep_lines(&raw_source);
@@ -329,10 +316,6 @@ fn collect_catalog_consumers(pkg_paths: &[PathBuf], root: &Path) -> CatalogConsu
                         package_name: name.clone(),
                         catalog_name: catalog.to_string(),
                     });
-                    // Fall back to line 1 (file top) on the rare minified
-                    // form where `"dependencies": {"react": "..."}` shares a
-                    // line so the LSP diagnostic still lands inside the file
-                    // instead of off-screen at line 0.
                     let line = line_map.line_for(section, name).unwrap_or(1);
                     consumers.referenced_with_locations.push(ConsumerReference {
                         package_name: name.clone(),
@@ -432,7 +415,6 @@ fn scan_dep_lines(source: &str) -> DepLineMap {
         let line_no = u32::try_from(idx).unwrap_or(u32::MAX).saturating_add(1);
         let trimmed = raw_line.trim();
 
-        // Detect entering a known dep section by `"<section>":` followed by `{`.
         if current_section.is_none() {
             for section in [
                 DepSection::Dependencies,
@@ -444,17 +426,11 @@ fn scan_dep_lines(source: &str) -> DepLineMap {
                 if trimmed.starts_with(&needle) && raw_line.contains('{') {
                     current_section = Some(section);
                     section_depth_at_open = current_depth.saturating_add(1);
-                    // Fall through to the brace-counting pass below so this
-                    // line's own `{` increments depth.
                     break;
                 }
             }
         }
 
-        // Count braces for depth tracking. Quoted strings are not skipped
-        // because package.json is plain JSON: any unbalanced brace inside a
-        // quoted value would fail upstream serde_json parse, so the scanner
-        // never sees such inputs.
         let mut opens: u32 = 0;
         let mut closes: u32 = 0;
         let mut in_string = false;
@@ -484,7 +460,6 @@ fn scan_dep_lines(source: &str) -> DepLineMap {
 
         let depth_before = current_depth;
         let depth_after_opens = depth_before.saturating_add(opens);
-        // Inside an active dep section, record keys at exactly section_depth_at_open.
         if let Some(section) = current_section
             && depth_before == section_depth_at_open
             && let Some(name) = parse_json_key(trimmed)
@@ -494,7 +469,6 @@ fn scan_dep_lines(source: &str) -> DepLineMap {
 
         current_depth = depth_after_opens.saturating_sub(closes);
 
-        // Section ends when depth drops below where we entered.
         if current_section.is_some() && current_depth < section_depth_at_open {
             current_section = None;
         }
@@ -579,15 +553,11 @@ mod tests {
         assert_eq!(map.line_for(DepSection::Dependencies, "react"), Some(4));
         assert_eq!(map.line_for(DepSection::Dependencies, "lodash"), Some(5));
         assert_eq!(map.line_for(DepSection::DevDependencies, "vitest"), Some(8));
-        // Not present in either section
         assert_eq!(map.line_for(DepSection::Dependencies, "vitest"), None);
     }
 
     #[test]
     fn scan_dep_lines_ignores_nested_object_keys() {
-        // `peerDependenciesMeta.react.optional` must not be misread as a
-        // peerDependencies entry. The outer key sits at the section-open
-        // depth; the `react` nested key sits one deeper and must be skipped.
         let source = r#"{
   "peerDependencies": {
     "react": "*"
@@ -601,8 +571,6 @@ mod tests {
 "#;
         let map = scan_dep_lines(source);
         assert_eq!(map.line_for(DepSection::PeerDependencies, "react"), Some(3));
-        // `react` from peerDependenciesMeta is not in our tracked sections.
-        // Make sure we did not stash it under PeerDependencies a second time.
         let peer_react_hits = map
             .entries
             .iter()

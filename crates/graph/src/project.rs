@@ -247,15 +247,12 @@ mod tests {
 
     #[test]
     fn workspace_for_file_nested_workspaces() {
-        // When a file could match multiple workspaces, the first match wins.
-        // This tests the behavior with nested workspace roots.
         let files = vec![make_file(0, "/project/packages/ui/components/Button.ts")];
         let workspaces = vec![
             make_workspace("root", "/project"),
             make_workspace("ui", "/project/packages/ui"),
         ];
         let state = ProjectState::new(files, workspaces);
-        // Both workspaces match, but find() returns the first one
         let ws = state.workspace_for_file(FileId(0)).unwrap();
         assert_eq!(ws.name, "root");
     }

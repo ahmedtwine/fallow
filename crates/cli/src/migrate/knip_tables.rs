@@ -159,8 +159,6 @@ mod tests {
     use super::*;
     use rustc_hash::FxHashSet;
 
-    // -- KNIP_RULE_MAP --------------------------------------------------------
-
     #[test]
     fn rule_map_has_no_empty_keys_or_values() {
         for (knip, fallow) in KNIP_RULE_MAP {
@@ -202,8 +200,6 @@ mod tests {
         );
     }
 
-    // -- KNIP_UNMAPPABLE_FIELDS -----------------------------------------------
-
     #[test]
     fn unmappable_fields_is_non_empty() {
         assert!(
@@ -237,8 +233,6 @@ mod tests {
         }
     }
 
-    // -- KNIP_UNMAPPABLE_ISSUE_TYPES ------------------------------------------
-
     #[test]
     fn unmappable_issue_types_is_non_empty() {
         assert!(
@@ -257,8 +251,6 @@ mod tests {
             );
         }
     }
-
-    // -- KNIP_PLUGIN_KEYS -----------------------------------------------------
 
     #[test]
     fn plugin_keys_is_non_empty() {

@@ -109,22 +109,17 @@ define_plugin! {
     resolve_config(config_path, source, _root) {
         let mut result = PluginResult::default();
 
-        // Extract import sources as referenced dependencies
         let imports = config_parser::extract_imports(source, config_path);
         for imp in &imports {
             let dep = crate::resolve::extract_package_name(imp);
             result.referenced_dependencies.push(dep);
         }
 
-        // addons -> referenced dependencies
-        // Handles both string form ("@storybook/addon-essentials") and
-        // object form ({ name: "@storybook/addon-essentials", options: {} })
         let addons = config_parser::extract_config_shallow_strings(source, config_path, "addons");
         for addon in &addons {
             let dep = crate::resolve::extract_package_name(addon);
             result.referenced_dependencies.push(dep);
         }
-        // Second pass: extract all string values from addons (catches object { name: "..." } form)
         let addon_strings =
             config_parser::extract_config_property_strings(source, config_path, "addons");
         for s in &addon_strings {
@@ -134,8 +129,6 @@ define_plugin! {
             }
         }
 
-        // framework -> referenced dependency
-        // Can be a string or an object with a `.name` property
         if let Some(framework) =
             config_parser::extract_config_string(source, config_path, &["framework"])
         {
@@ -148,7 +141,6 @@ define_plugin! {
             result.referenced_dependencies.push(dep);
         }
 
-        // stories -> additional entry patterns (if string values)
         let stories = config_parser::extract_config_string_array(source, config_path, &["stories"]);
         result.extend_entry_patterns(stories);
 
@@ -160,8 +152,6 @@ define_plugin! {
                 .push((resolve_static_dir_from(config_path, &from), normalize_mount(to.as_deref())));
         }
 
-        // core.builder -> referenced dependency
-        // Can be a string or an object with a `.name` property
         if let Some(builder) =
             config_parser::extract_config_string(source, config_path, &["core", "builder"])
         {
@@ -174,7 +164,6 @@ define_plugin! {
             result.referenced_dependencies.push(dep);
         }
 
-        // typescript.reactDocgen -> referenced dependency
         if let Some(docgen) = config_parser::extract_config_string(
             source,
             config_path,

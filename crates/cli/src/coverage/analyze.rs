@@ -47,8 +47,6 @@ pub struct AnalyzeArgs {
     pub importance: bool,
 }
 
-// Manual `Debug` so `CoverageSubcommand::Analyze` formatting cannot expose a
-// CLI-provided API key through future trace/debug output.
 impl fmt::Debug for AnalyzeArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnalyzeArgs")
@@ -184,8 +182,6 @@ fn run_local(path: &Path, args: &AnalyzeArgs, ctx: &RunContext<'_>) -> ExitCode 
         min_severity: None,
         report_only: false,
         runtime_coverage: Some(runtime_coverage),
-        // `coverage analyze` is a focused runtime-only command; PR-scope
-        // line filtering belongs on `fallow audit` and `fallow health`.
     }) {
         Ok(result) => result,
         Err(code) => return code,
@@ -434,8 +430,6 @@ fn build_index_from_analysis(
                 && !unused_export_lines
                     .get(*path)
                     .is_some_and(|lines| lines.contains(&function.line));
-            // Computed over the repo-relative `rel` so it agrees with the
-            // static-inventory producer's stable_id for the same function.
             let stable_id = function_identity_id(&rel, &function.name, function.line);
             let info = StaticFunctionInfo {
                 path: PathBuf::from(&rel),
@@ -824,10 +818,6 @@ fn cloud_warnings(
             },
         })
         .collect::<Vec<_>>();
-    // Only synthesize the empty-window warning if the server did not already
-    // emit one. The server's `no_runtime_data` message includes the projectId
-    // when present, so dedup-by-(code,message) cannot catch this case; the
-    // CLI defers to the server's variant unconditionally when both apply.
     let server_emitted_no_runtime_data = warnings
         .iter()
         .any(|warning| warning.code == "no_runtime_data");
@@ -900,9 +890,6 @@ fn match_cloud_function(
     function: &CloudRuntimeFunction,
     static_index: &StaticIndex,
 ) -> Option<StaticFunctionInfo> {
-    // Tier 1: cross-surface stable-id join. Strongest match, survives line
-    // moves. Only fires when the cloud has been migrated to emit `stableId`
-    // (fallow-cloud#63); `None` for the current cloud.
     if let Some(stable_id) = function.stable_id.as_deref()
         && let Some(info) = static_index.by_stable_id.get(stable_id)
     {
@@ -910,17 +897,11 @@ fn match_cloud_function(
     }
     let path = normalize_runtime_path(Path::new(&function.file_path));
     let line = function.start_line.or(function.line_number)?;
-    // Tier 2: exact (path, name, line).
     if let Some(info) =
         static_index
             .by_key
             .get(&(path.clone(), function.function_name.clone(), line))
     {
-        // Diagnostic: the cloud carried a stable_id that did NOT join in tier 1
-        // yet (path, name, line) did. This means the producer and consumer
-        // disagree on the identity hash (typically a path-space divergence).
-        // Surface it under RUST_LOG so the silent fuzzy-tier masking is
-        // field-observable instead of invisible.
         if let Some(stable_id) = function.stable_id.as_deref()
             && stable_id != info.stable_id
         {
@@ -934,7 +915,6 @@ fn match_cloud_function(
         }
         return Some(info.clone());
     }
-    // Tier 3: fuzzy nearest candidate within a line tolerance.
     static_index
         .by_path_name
         .get(&(path, function.function_name.clone()))
@@ -1064,10 +1044,6 @@ fn print_runtime_json(
     use crate::output_envelope::{CoverageAnalyzeOutput, CoverageAnalyzeSchemaVersion};
     use fallow_types::envelope::{ElapsedMs, ToolVersion};
 
-    // Schema-derived constant: the schema-version enum has a single variant
-    // serialized as `"1"`; the legacy `RUNTIME_COVERAGE_SCHEMA_VERSION`
-    // constant is retained for the cloud client surface but the wire-shape
-    // source of truth is now the typed enum.
     debug_assert_eq!(
         RUNTIME_COVERAGE_SCHEMA_VERSION, "1",
         "the schema-version enum has one variant serialized as \"1\"; bump CoverageAnalyzeSchemaVersion if the constant moves"
@@ -1357,11 +1333,6 @@ mod tests {
 
     #[test]
     fn cloud_warnings_dedupe_server_and_cli_no_runtime_data() {
-        // Empty window: server adds no_runtime_data; CLI's empty-summary
-        // branch must defer to the server's variant unconditionally so the
-        // user never sees the same code twice. Caught live against
-        // api.fallow.cloud during the v2.57.0 smoke (both --repo nonexistent
-        // and --project-id apps/dashboard returned duplicates).
         let snapshot = CloudRuntimeContext {
             repo: "nonexistent-repo".to_owned(),
             window: crate::coverage::cloud_client::CloudRuntimeWindow { period_days: 30 },
@@ -1399,10 +1370,6 @@ mod tests {
 
     #[test]
     fn cloud_warnings_dedupe_when_server_message_includes_project_id() {
-        // Regression: with --project-id set, the server's no_runtime_data
-        // message embeds the projectId ("... apps/dashboard in fallow-cloud
-        // ...") while the CLI's variant does not, so dedup-by-(code,message)
-        // does not catch the duplicate. Defer to code-only check.
         let snapshot = CloudRuntimeContext {
             repo: "fallow-cloud".to_owned(),
             window: crate::coverage::cloud_client::CloudRuntimeWindow { period_days: 30 },
@@ -1494,9 +1461,6 @@ mod tests {
 
     #[test]
     fn stable_runtime_id_emits_eight_hex_chars() {
-        // Schema regex: ^fallow:prod:[0-9a-f]{8}$. Local sidecar already
-        // emits 8 chars; cloud merge must match. Caught live during the
-        // v2.57.0 jsonschema validation pass against the published schema.
         let path = PathBuf::from("src/foo.ts");
         let id = stable_runtime_id("prod", &path, "doThing", 42);
         let suffix = id

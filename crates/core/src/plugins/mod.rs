@@ -179,12 +179,6 @@ impl PluginResult {
     }
 }
 
-// Strip a leading `./` from project-relative entry patterns. Globset compiles
-// patterns with `literal_separator(true)`, so `./src/app.ts` would never match
-// the project-relative path `src/app.ts` that appears in the file index.
-// Plugins that source entries directly from user config (Webpack `entry`,
-// Rollup `input`, Rspack/Rsbuild/Rolldown variants) commonly carry the leading
-// `./` verbatim.
 fn normalize_entry_pattern(pattern: String) -> String {
     pattern
         .strip_prefix("./")
@@ -934,8 +928,6 @@ fn builtin_entry_point_role(name: &str) -> EntryPointRole {
 ///
 /// All fields except `struct` and `enablers` are optional and default to `&[]` / `vec![]`.
 macro_rules! define_plugin {
-    // Variant with `resolve_config: imports_only`: generates a resolve_config method
-    // that extracts imports from config files and registers them as referenced dependencies.
     (
         struct $name:ident => $display:expr,
         enablers: $enablers:expr
@@ -998,9 +990,6 @@ macro_rules! define_plugin {
         }
     };
 
-    // Variant with custom resolve_config body: generates a resolve_config method
-    // with the caller-supplied block. Parameter names are caller-controlled (use
-    // `_root` for unused params to satisfy clippy).
     (
         struct $name:ident => $display:expr,
         enablers: $enablers:expr
@@ -1063,7 +1052,6 @@ macro_rules! define_plugin {
         }
     };
 
-    // Base variant: no resolve_config.
     (
         struct $name:ident => $display:expr,
         enablers: $enablers:expr
@@ -1243,8 +1231,6 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    // ── is_enabled_with_deps edge cases ──────────────────────────
-
     #[test]
     fn is_enabled_with_deps_exact_match() {
         let plugin = nextjs::NextJsPlugin;
@@ -1306,8 +1292,6 @@ mod tests {
         }
     }
 
-    // ── PluginResult::is_empty ───────────────────────────────────
-
     #[test]
     fn plugin_result_is_empty_when_default() {
         let r = PluginResult::default();
@@ -1359,11 +1343,8 @@ mod tests {
         assert!(!r.is_empty());
     }
 
-    // ── is_enabled_with_deps prefix matching ─────────────────────
-
     #[test]
     fn is_enabled_with_deps_prefix_match() {
-        // Storybook plugin uses prefix enabler "@storybook/"
         let plugin = storybook::StorybookPlugin;
         let deps = vec!["@storybook/react".to_string()];
         assert!(plugin.is_enabled_with_deps(&deps, Path::new("/project")));
@@ -1371,7 +1352,6 @@ mod tests {
 
     #[test]
     fn is_enabled_with_deps_prefix_no_match_without_slash() {
-        // "@storybook/" prefix should NOT match "@storybookish" (different package)
         let plugin = storybook::StorybookPlugin;
         let deps = vec!["@storybookish".to_string()];
         assert!(!plugin.is_enabled_with_deps(&deps, Path::new("/project")));
@@ -1379,7 +1359,6 @@ mod tests {
 
     #[test]
     fn is_enabled_with_deps_multiple_enablers() {
-        // Vitest plugin has multiple enablers
         let plugin = vitest::VitestPlugin;
         let deps_vitest = vec!["vitest".to_string()];
         let deps_none = vec!["mocha".to_string()];
@@ -1387,11 +1366,8 @@ mod tests {
         assert!(!plugin.is_enabled_with_deps(&deps_none, Path::new("/project")));
     }
 
-    // ── Plugin trait default implementations ─────────────────────
-
     #[test]
     fn plugin_default_methods_return_empty() {
-        // Use a simple plugin to test default trait methods
         let plugin = commitizen::CommitizenPlugin;
         assert!(
             plugin.tooling_dependencies().is_empty() || !plugin.tooling_dependencies().is_empty()
@@ -1416,8 +1392,6 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // ── is_enabled_with_deps exact and prefix ────────────────────
-
     #[test]
     fn is_enabled_with_deps_exact_and_prefix_both_work() {
         let plugin = storybook::StorybookPlugin;
@@ -1437,8 +1411,6 @@ mod tests {
         let deps_cf = vec!["@remix-run/cloudflare".to_string()];
         assert!(plugin.is_enabled_with_deps(&deps_cf, Path::new("/project")));
     }
-
-    // ── Plugin trait default implementations ──────────────────────
 
     struct MinimalPlugin;
     impl Plugin for MinimalPlugin {
@@ -1518,8 +1490,6 @@ mod tests {
         assert!(!MinimalPlugin.is_enabled_with_deps(&deps, Path::new("/")));
     }
 
-    // ── All built-in plugins have unique names ───────────────────
-
     #[test]
     fn all_builtin_plugin_names_are_unique() {
         let plugins = registry::builtin::create_builtin_plugins();
@@ -1555,8 +1525,6 @@ mod tests {
             }
         }
     }
-
-    // ── Enabler patterns for all categories ──────────────────────
 
     #[test]
     fn framework_plugins_enablers() {
@@ -1824,10 +1792,6 @@ mod tests {
 
     #[test]
     fn macro_passes_through_virtual_package_suffixes() {
-        // Synthetic smoke check: a plugin defined via define_plugin! that
-        // declares virtual_package_suffixes returns those suffixes from the
-        // trait method. Guards against future macro regressions where the
-        // field name silently drops out of one of the three variants.
         define_plugin! {
             struct MacroSuffixSmokePlugin => "macro-suffix-smoke",
             enablers: &["macro-suffix-smoke"],

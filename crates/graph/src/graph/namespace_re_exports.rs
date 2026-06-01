@@ -69,17 +69,6 @@ pub(super) fn propagate_namespace_re_exports(
     graph: &mut ModuleGraph,
     module_by_id: &FxHashMap<FileId, &ResolvedModule>,
 ) {
-    // Collect every `export * as Name from './source'` edge across all barrels.
-    // Tuple: (barrel_file_id, source_file_id, exported_name).
-    //
-    // Note: `is_type_only` is intentionally not filtered here. A
-    // `export type * as Ns from './bar'` re-export may still have its
-    // accessed members consumed from type positions on the source file,
-    // and the existing `attach_direct_export_references` two-namespace
-    // (type vs value) split runs on the synthesised `Ns` stub on the
-    // barrel, not on the source target. Crediting at the target here
-    // keeps `unused-type` findings on type members of `./bar` accurate
-    // for type-only namespace re-exports, matching the value case.
     let ns_edges: Vec<(FileId, FileId, String)> = graph
         .modules
         .iter()
@@ -106,19 +95,8 @@ pub(super) fn propagate_namespace_re_exports(
             continue;
         };
 
-        // Walk forward through named re-exports so consumers that import
-        // `Foo` from an OUTER barrel (rather than the original `export * as`
-        // barrel) also match. This mirrors the multi-hop fix from issue #310.
         let reachable = enumerate_reachable_barrels(graph, *barrel_file_id, exported_name);
 
-        // Entry-point barrel: namespace is exposed to external consumers.
-        // Without seeing their code, fallow conservatively credits every
-        // target export. Mirrors `propagate_entry_point_star` in Phase 4.
-        // `consumer_file_id` is set to the seed barrel itself because there
-        // is no real importing file: the barrel is the entry-point and the
-        // namespace is consumed externally. Using the barrel as the synthetic
-        // `from_file` keeps the reference attributable in dedup checks
-        // (`attach_reference` skips duplicates per `source_id`).
         if reachable.iter().any(|(file_id, _)| {
             graph
                 .modules
@@ -215,10 +193,6 @@ fn collect_consumer_credits(
     pending: &mut Vec<PendingCredit>,
 ) {
     for consumer in module_by_id.values() {
-        // A barrel that contains the seed namespace re-export does not also
-        // "consume" the binding through itself; skip to avoid spurious
-        // self-credits. (Outer named-re-export barrels are still scanned for
-        // their own consumers via the reachable set.)
         if consumer.file_id == seed_barrel_file {
             continue;
         }
@@ -240,9 +214,6 @@ fn collect_consumer_credits(
                 continue;
             }
 
-            // If the binding is reported as unused, the consumer has no
-            // accesses to record. Skip without scanning to avoid emitting a
-            // SymbolReference for what was effectively dead code.
             if consumer.unused_import_bindings.contains(consumer_local) {
                 continue;
             }
@@ -416,9 +387,6 @@ mod tests {
 
     #[test]
     fn issue_324_simple_namespace_re_export_credits_target_members() {
-        // source-module.ts exports `someExportedSymbol`, `anotherSymbol`
-        // barrel.ts re-exports as `export * as MyNamespace from './source-module'`
-        // main.ts imports { MyNamespace } and accesses MyNamespace.someExportedSymbol
         let files = vec![
             discovered_file(0, "/project/main.ts", 100),
             discovered_file(1, "/project/barrel.ts", 50),
@@ -481,11 +449,6 @@ mod tests {
 
     #[test]
     fn issue_324_multi_hop_named_re_export_chain_credits_target() {
-        // Multi-hop variant (implement-skill rule from incident 2026-05-08):
-        // source.ts: export const used = ...
-        // inner-barrel.ts: export * as Ns from './source'
-        // outer-barrel.ts: export { Ns } from './inner-barrel'   (named re-export, NOT namespace)
-        // main.ts: import { Ns } from './outer-barrel'; Ns.used()
         let files = vec![
             discovered_file(0, "/project/main.ts", 100),
             discovered_file(1, "/project/outer-barrel.ts", 50),
@@ -551,7 +514,6 @@ mod tests {
 
     #[test]
     fn issue_324_whole_object_use_credits_all_target_exports() {
-        // main.ts: import { Ns } from './barrel'; Object.values(Ns)
         let files = vec![
             discovered_file(0, "/project/main.ts", 100),
             discovered_file(1, "/project/barrel.ts", 50),
@@ -595,8 +557,6 @@ mod tests {
 
     #[test]
     fn issue_324_entry_point_barrel_credits_all_target_exports() {
-        // No internal consumer. The barrel IS the entry point and exposes
-        // `export * as Ns from './source'` externally; credit all source exports.
         let files = vec![
             discovered_file(0, "/project/index.ts", 100),
             discovered_file(1, "/project/source.ts", 50),
@@ -632,14 +592,6 @@ mod tests {
 
     #[test]
     fn issue_324_synthetic_export_propagates_through_star_chain_on_target() {
-        // source-barrel.ts: export * from './impl'
-        // barrel.ts: export * as Ns from './source-barrel'
-        // main.ts: import { Ns } from './barrel'; Ns.deepMember()
-        //
-        // The target file (source-barrel) has NO own export named `deepMember`;
-        // it forwards through `export *` to impl.ts. The synthetic-export
-        // helper stubs `deepMember` on source-barrel so Phase 4 chain
-        // resolution carries the credit through to impl.ts.
         let files = vec![
             discovered_file(0, "/project/main.ts", 100),
             discovered_file(1, "/project/barrel.ts", 50),
@@ -713,8 +665,6 @@ mod tests {
 
     #[test]
     fn issue_324_unused_binding_skipped() {
-        // Consumer imports `Ns` but never accesses it.
-        // The binding goes into unused_import_bindings, so no credits emerge.
         let files = vec![
             discovered_file(0, "/project/main.ts", 100),
             discovered_file(1, "/project/barrel.ts", 50),
@@ -762,10 +712,6 @@ mod tests {
 
     #[test]
     fn issue_324_renamed_local_binding_still_credits_members() {
-        // import { Foo as MyFoo } from './barrel'; MyFoo.X()
-        // The reachable-set lookup keys on `imported_name="Foo"` (the
-        // exported name at the barrel); the member-access match keys on
-        // `local_name="MyFoo"` (the renamed local binding).
         let files = vec![
             discovered_file(0, "/project/main.ts", 100),
             discovered_file(1, "/project/barrel.ts", 50),
@@ -835,10 +781,6 @@ mod tests {
 
     #[test]
     fn issue_324_plain_export_star_not_credited_by_this_pass() {
-        // `export * from './source'` is NOT a namespace re-export
-        // (imported_name=*, exported_name=*); Phase 4 already handles it.
-        // Phase 2c must not interfere: if the consumer doesn't import any
-        // re-exported name, the only credits should come from Phase 4 or 2.
         let files = vec![
             discovered_file(0, "/project/main.ts", 100),
             discovered_file(1, "/project/barrel.ts", 50),

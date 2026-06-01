@@ -280,7 +280,6 @@ fn collect_unused_from_source(
     findings: &mut Vec<UnusedDependencyOverride>,
 ) {
     for entry in &data.entries {
-        // Skip misconfigured entries; they are reported by the sibling detector.
         let Some(parsed) = entry.parsed_key.as_ref() else {
             continue;
         };
@@ -291,10 +290,6 @@ fn collect_unused_from_source(
             continue;
         }
 
-        // Parent-chain semantics: if EITHER parent OR target is declared or
-        // present in the resolved lockfile, consider the override used. This
-        // covers CVE-fix pins where only the transitive target is lockfile-
-        // visible.
         let target_declared = declared.contains(&parsed.target_package);
         let target_resolved = resolved.contains(&parsed.target_package);
         let parent_declared = parsed
@@ -317,8 +312,6 @@ fn collect_unused_from_source(
             continue;
         }
 
-        // The lockfile-aware check degrades to package.json-only when the
-        // lockfile is missing or malformed, so keep the conservative hint.
         let hint = Some(HINT_MAY_BE_TRANSITIVE.to_string());
 
         findings.push(UnusedDependencyOverride {
@@ -391,13 +384,6 @@ fn collect_misconfigured_from_source(
             continue;
         }
 
-        // `target_package` is the parsed package name when the key parses
-        // (always for `EmptyValue` findings, never for `UnparsableKey`).
-        // Surfacing it lets JSON `add-to-config` actions emit a paste-ready
-        // suppression value that matches the actual suppression matcher (which
-        // also keys on `target_package`); without it, a raw_key like
-        // `"react@<18"` would suggest `{ package: "react@<18" }` that does not
-        // suppress the finding (suppressor uses just `"react"`).
         let target_package = entry.parsed_key.as_ref().map(|p| p.target_package.clone());
 
         findings.push(MisconfiguredDependencyOverride {
@@ -488,8 +474,7 @@ mod tests {
 
     #[test]
     fn lock_key_npm_alias() {
-        // `debug@npm:obug@^1.0.2` keys must resolve to the consumer-facing name
-        // because the override matcher keys on that name, not on the alias.
+        // Resolve npm aliases to the consumer-facing name.
         assert_eq!(
             package_name_from_lock_key("debug@npm:obug@^1.0.2"),
             Some("debug".to_string())

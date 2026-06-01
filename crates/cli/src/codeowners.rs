@@ -132,9 +132,6 @@ impl CodeOwners {
                 continue;
             }
 
-            // GitLab section header: `[Name]`, `^[Name]`, `[Name][N]`, optionally
-            // followed by section default owners. Update the running defaults
-            // and move on; section headers never produce a rule.
             if let Some((name, defaults)) = parse_section_header(line) {
                 current_section = Some(name);
                 current_section_owners = defaults;
@@ -142,7 +139,6 @@ impl CodeOwners {
                 continue;
             }
 
-            // GitLab exclusion pattern: `!path` clears ownership for matching files.
             let (negate, rest) = if let Some(after) = line.strip_prefix('!') {
                 (true, after.trim_start())
             } else {
@@ -156,8 +152,6 @@ impl CodeOwners {
             let inline_owners = parts.collect::<Vec<_>>();
 
             let (effective_owner, owner_count): (&str, u32) = if negate {
-                // Negations clear ownership on match, so an owner token is
-                // irrelevant. GitLab doesn't require one anyway.
                 ("", 0)
             } else if let Some(owner) = inline_owners.first() {
                 (
@@ -170,7 +164,6 @@ impl CodeOwners {
                     u32::try_from(current_section_owners.len()).unwrap_or(u32::MAX),
                 )
             } else {
-                // Pattern without owners and no section default, skip.
                 continue;
             };
 
@@ -214,7 +207,6 @@ impl CodeOwners {
     /// GitLab-style exclusion (`!path`).
     pub fn owner_of(&self, relative_path: &Path) -> Option<&str> {
         let matches = self.globs.matches(relative_path);
-        // Last match wins: highest index = last rule in file order
         matches.iter().max().and_then(|&idx| {
             if self.is_negation[idx] {
                 None
@@ -354,7 +346,6 @@ fn parse_section_header(line: &str) -> Option<(String, Vec<String>)> {
     }
     let mut after = &rest[close + 1..];
 
-    // Optional `[N]` approval count.
     if let Some(inner) = after.strip_prefix('[') {
         let n_close = inner.find(']')?;
         let count = &inner[..n_close];
@@ -364,8 +355,6 @@ fn parse_section_header(line: &str) -> Option<(String, Vec<String>)> {
         after = &inner[n_close + 1..];
     }
 
-    // The remainder must be empty or start with whitespace. Otherwise this
-    // line isn't a section header, e.g. `[abc]def @owner` stays a rule.
     if !after.is_empty() && !after.starts_with(char::is_whitespace) {
         return None;
     }
@@ -384,21 +373,18 @@ fn parse_section_header(line: &str) -> Option<(String, Vec<String>)> {
 /// - No `/` in pattern: matches in any directory (`*.js` → `**/*.js`)
 /// - Contains `/` (non-trailing): root-relative as-is
 fn translate_pattern(pattern: &str) -> String {
-    // Strip leading `/` — globset matches from root by default
     let (anchored, rest) = if let Some(p) = pattern.strip_prefix('/') {
         (true, p)
     } else {
         (false, pattern)
     };
 
-    // Trailing `/` means directory contents
     let expanded = if let Some(p) = rest.strip_suffix('/') {
         format!("{p}/**")
     } else {
         rest.to_string()
     };
 
-    // If not anchored and no directory separator, match in any directory
     if !anchored && !expanded.contains('/') {
         format!("**/{expanded}")
     } else {
@@ -412,9 +398,7 @@ fn translate_pattern(pattern: &str) -> String {
 /// For monorepo structures (`packages/auth/...`), returns `packages`.
 pub fn directory_group(relative_path: &Path) -> &str {
     let s = relative_path.to_str().unwrap_or("");
-    // Use forward-slash normalized path
     let s = if s.contains('\\') {
-        // Windows paths: handled by caller normalizing, but be safe
         return s.split(['/', '\\']).next().unwrap_or(s);
     } else {
         s
@@ -430,8 +414,6 @@ pub fn directory_group(relative_path: &Path) -> &str {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    // ── translate_pattern ──────────────────────────────────────────
 
     #[test]
     fn translate_bare_glob() {
@@ -460,7 +442,6 @@ mod tests {
 
     #[test]
     fn translate_double_star() {
-        // Pattern already contains `/`, so it's root-relative — no extra prefix
         assert_eq!(translate_pattern("**/test_*.py"), "**/test_*.py");
     }
 
@@ -468,8 +449,6 @@ mod tests {
     fn translate_single_file() {
         assert_eq!(translate_pattern("Makefile"), "**/Makefile");
     }
-
-    // ── parse ──────────────────────────────────────────────────────
 
     #[test]
     fn parse_simple_codeowners() {
@@ -505,8 +484,6 @@ mod tests {
         let co = CodeOwners::parse("").unwrap();
         assert_eq!(co.owner_of(Path::new("anything.ts")), None);
     }
-
-    // ── owner_of ───────────────────────────────────────────────────
 
     #[test]
     fn owner_of_last_match_wins() {
@@ -556,7 +533,6 @@ mod tests {
 
     #[test]
     fn owner_of_specific_overrides_general() {
-        // Later, more specific rule wins
         let content = "\
             * @default\n\
             /src/ @frontend\n\
@@ -569,8 +545,6 @@ mod tests {
         );
         assert_eq!(co.owner_of(Path::new("src/app.ts")), Some("@frontend"));
     }
-
-    // ── owner_and_rule_of ──────────────────────────────────────────
 
     #[test]
     fn owner_and_rule_of_returns_owner_and_pattern() {
@@ -597,8 +571,6 @@ mod tests {
         assert_eq!(co.owner_and_rule_of(Path::new("README.md")), None);
     }
 
-    // ── directory_group ────────────────────────────────────────────
-
     #[test]
     fn directory_group_simple() {
         assert_eq!(directory_group(Path::new("src/utils/index.ts")), "src");
@@ -617,8 +589,6 @@ mod tests {
         );
     }
 
-    // ── discover ───────────────────────────────────────────────────
-
     #[test]
     fn discover_nonexistent_root() {
         let result = CodeOwners::discover(Path::new("/nonexistent/path"));
@@ -628,8 +598,6 @@ mod tests {
         assert!(err.contains("--group-by directory"));
     }
 
-    // ── from_file ──────────────────────────────────────────────────
-
     #[test]
     fn from_file_nonexistent() {
         let result = CodeOwners::from_file(Path::new("/nonexistent/CODEOWNERS"));
@@ -638,7 +606,6 @@ mod tests {
 
     #[test]
     fn from_file_real_codeowners() {
-        // Use the project's own CODEOWNERS file
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -648,15 +615,12 @@ mod tests {
         let path = root.join(".github/CODEOWNERS");
         if path.exists() {
             let co = CodeOwners::from_file(&path).unwrap();
-            // Our CODEOWNERS has `* @bartwaardenburg`
             assert_eq!(
                 co.owner_of(Path::new("src/anything.ts")),
                 Some("@bartwaardenburg")
             );
         }
     }
-
-    // ── edge cases ─────────────────────────────────────────────────
 
     #[test]
     fn email_owner() {
@@ -672,11 +636,8 @@ mod tests {
         assert_eq!(co.owner_of(Path::new("app.ts")), Some("@org/frontend-team"));
     }
 
-    // ── GitLab section headers ─────────────────────────────────────
-
     #[test]
     fn gitlab_section_header_skipped_as_rule() {
-        // Previously produced: `invalid CODEOWNERS pattern '[Section'`.
         let content = "[Section Name]\n*.ts @owner\n";
         let co = CodeOwners::parse(content).unwrap();
         assert_eq!(co.owners.len(), 1);
@@ -745,8 +706,6 @@ mod tests {
 
     #[test]
     fn gitlab_section_defaults_reset_between_sections() {
-        // Section1 declares @team-a. Section2 declares no defaults. A bare
-        // pattern inside Section2 inherits nothing and is dropped.
         let content = "\
             [Section1] @team-a\n\
             foo/\n\
@@ -768,8 +727,6 @@ mod tests {
 
     #[test]
     fn gitlab_rules_before_first_section_retain_inline_owners() {
-        // Matches the reproduction in issue #127: rules before the first
-        // section header use their own inline owners.
         let content = "\
             * @default-owner\n\
             [Utilities] @utils-team\n\
@@ -785,7 +742,6 @@ mod tests {
 
     #[test]
     fn gitlab_issue_127_reproduction() {
-        // Verbatim CODEOWNERS from issue #127.
         let content = "\
 # Default section (no header, rules before first section)
 * @default-owner
@@ -808,8 +764,6 @@ src/components/
         );
     }
 
-    // ── GitLab exclusion patterns (negation) ───────────────────────
-
     #[test]
     fn gitlab_negation_last_match_clears_ownership() {
         let content = "\
@@ -823,7 +777,6 @@ src/components/
 
     #[test]
     fn gitlab_negation_only_clears_when_last_match() {
-        // A more specific positive rule after the negation wins again.
         let content = "\
             * @default\n\
             !src/\n\
@@ -844,8 +797,6 @@ src/components/
         );
         assert_eq!(co.owner_and_rule_of(Path::new("src/vendor/lib.js")), None);
     }
-
-    // ── section header parser ──────────────────────────────────────
 
     #[test]
     fn parse_section_header_variants() {
@@ -877,15 +828,12 @@ src/components/
 
     #[test]
     fn parse_section_header_rejects_malformed() {
-        // Not a section header; should parse as a rule elsewhere.
         assert_eq!(parse_section_header("[unclosed"), None);
         assert_eq!(parse_section_header("[]"), None);
         assert_eq!(parse_section_header("[abc]def @owner"), None);
         assert_eq!(parse_section_header("[Section][] @owner"), None);
         assert_eq!(parse_section_header("[Section][abc] @owner"), None);
     }
-
-    // ── section_of / section_and_owners_of / has_sections ─────────
 
     #[test]
     fn has_sections_false_without_headers() {
@@ -920,7 +868,6 @@ src/components/
 
     #[test]
     fn section_of_returns_some_none_for_pre_section_rule() {
-        // `* @default` sits before any section header.
         let content = "\
             * @default\n\
             [Billing] @billing-team\n\
@@ -975,8 +922,6 @@ src/components/
 
     #[test]
     fn section_and_owners_of_same_owners_distinct_sections() {
-        // Issue #133: billing and notifications share @core-reviewers, but are
-        // distinct sections and must produce distinct groups.
         let content = "\
             [billing] @core-reviewers @alice @bob\n\
             src/billing/\n\
@@ -1028,8 +973,6 @@ src/components/
 
     #[test]
     fn non_section_bracket_pattern_parses_as_rule() {
-        // `[abc]def` is not a section header (non-whitespace after `]`),
-        // so it falls through to regular glob parsing as a character class.
         let content = "[abc]def @owner\n";
         let co = CodeOwners::parse(content).unwrap();
         assert_eq!(co.owners.len(), 1);

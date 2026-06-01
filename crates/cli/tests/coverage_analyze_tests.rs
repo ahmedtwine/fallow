@@ -132,9 +132,6 @@ fn coverage_analyze_cloud_fetches_percent_encoded_runtime_context() {
         request.starts_with("GET /v1/coverage/acme%2Fweb/runtime-context?"),
         "request path was not percent-encoded: {request}"
     );
-    // ureq is built without the gzip feature; advertising identity-encoding
-    // keeps the response body decodable as raw JSON. Caught the missing-gzip
-    // bug live against api.fallow.cloud during the v2.57.0 release smoke.
     let lower = request.to_lowercase();
     assert!(
         lower.contains("accept-encoding: identity"),

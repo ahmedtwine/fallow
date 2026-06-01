@@ -38,15 +38,11 @@ fn vite_rollup_input_path_helpers_seed_entry_points() {
         );
     }
 
-    // CSS entry inputs must be preserved like any other entry, not dropped.
     assert!(
         !names.contains(&"index.css".to_string()),
         "index.css is a rollupOptions.input path-helper entry and should be reachable. Got: {names:?}"
     );
 
-    // Control: a file referenced by nothing and declared in no entry stays
-    // flagged, proving the path-helper seeding is scoped to real config entries
-    // rather than blanket-crediting the project.
     assert!(
         names.contains(&"orphan.ts".to_string()),
         "orphan.ts is referenced by nothing and must remain unused. Got: {names:?}"

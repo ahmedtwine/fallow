@@ -11,10 +11,8 @@
 pub fn extract_script_file_refs(script: &str) -> Vec<String> {
     let mut refs = Vec::new();
 
-    // Runners whose next argument is a file path
     const RUNNERS: &[&str] = &["node", "ts-node", "tsx", "babel-node"];
 
-    // Split on shell operators to handle chained commands
     for segment in script.split(&['&', '|', ';'][..]) {
         let segment = segment.trim();
         if segment.is_empty() {
@@ -26,7 +24,6 @@ pub fn extract_script_file_refs(script: &str) -> Vec<String> {
             continue;
         }
 
-        // Skip leading `npx`/`pnpx`/`yarn`/`pnpm exec` to find the actual command
         let mut start = 0;
         if matches!(tokens.first(), Some(&"npx" | &"pnpx")) {
             start = 1;
@@ -40,21 +37,16 @@ pub fn extract_script_file_refs(script: &str) -> Vec<String> {
 
         let cmd = tokens[start];
 
-        // Check if the command is a known runner
         if RUNNERS.contains(&cmd) {
-            // Collect ALL file path arguments after the runner (handles
-            // `node --test file1.mjs file2.mjs ...` and similar multi-file patterns)
             for &token in &tokens[start + 1..] {
                 if token.starts_with('-') {
                     continue;
                 }
-                // Must look like a file path (contains '/' or '.' extension)
                 if looks_like_file_path(token) {
                     refs.push(token.to_string());
                 }
             }
         } else {
-            // Scan all tokens for bare file paths (e.g. `./scripts/build.js`)
             for &token in &tokens[start..] {
                 if token.starts_with('-') {
                     continue;
@@ -81,8 +73,6 @@ pub fn looks_like_file_path(token: &str) -> bool {
     if extensions.iter().any(|ext| token.ends_with(ext)) {
         return true;
     }
-    // Only treat tokens with `/` as paths if they look like actual file paths,
-    // not URLs or scoped package names like @scope/package
     token.starts_with("./")
         || token.starts_with("../")
         || (token.contains('/') && !token.starts_with('@') && !token.contains("://"))
@@ -101,8 +91,6 @@ pub fn looks_like_script_file(token: &str) -> bool {
     if !extensions.iter().any(|ext| token.ends_with(ext)) {
         return false;
     }
-    // Must contain a path separator or start with ./ to distinguish from
-    // bare package names like `webpack.js`
     token.contains('/') || token.starts_with("./") || token.starts_with("../")
 }
 
@@ -110,7 +98,6 @@ pub fn looks_like_script_file(token: &str) -> bool {
 mod tests {
     use super::*;
 
-    // extract_script_file_refs tests (Issue 3)
     #[test]
     fn script_node_runner() {
         let refs = extract_script_file_refs("node utilities/generate-coverage-badge.js");
@@ -167,7 +154,6 @@ mod tests {
         assert_eq!(refs, vec!["scripts/a.js", "scripts/b.ts"]);
     }
 
-    // looks_like_file_path tests
     #[test]
     fn file_path_with_extension() {
         assert!(looks_like_file_path("scripts/build.js"));
@@ -186,7 +172,6 @@ mod tests {
         assert!(!looks_like_file_path("build"));
     }
 
-    // looks_like_script_file tests
     #[test]
     fn script_file_with_path() {
         assert!(looks_like_script_file("scripts/build.js"));
@@ -196,15 +181,9 @@ mod tests {
 
     #[test]
     fn not_script_file_bare_name() {
-        // Bare names without path separator should not match
         assert!(!looks_like_script_file("webpack.js"));
         assert!(!looks_like_script_file("build"));
     }
-
-    // Negative-guard tests (shared with scripts::could_be_file_path):
-    // tokens whose syntax precludes a Unix path must not be classified as
-    // script file references, even when their suffix matches a known
-    // extension.
 
     #[test]
     fn looks_like_file_path_rejects_gha_fragments() {

@@ -222,8 +222,6 @@ mod tests {
         assert_eq!(config.ignore, vec!["test/**"]);
     }
 
-    // ── TOML deserialization ────────────────────────────────────────
-
     #[test]
     fn health_config_toml_all_fields() {
         let toml_str = r#"
@@ -244,8 +242,6 @@ ignore = ["generated/**", "vendor/**"]
         assert_eq!(config.max_cognitive, 15);
         assert!(config.ignore.is_empty());
     }
-
-    // ── Serialize roundtrip ─────────────────────────────────────────
 
     #[test]
     fn health_config_json_roundtrip() {
@@ -285,8 +281,6 @@ ignore = ["generated/**", "vendor/**"]
         assert!(config.suggest_inline_suppression);
     }
 
-    // ── Zero thresholds ─────────────────────────────────────────────
-
     #[test]
     fn health_config_zero_thresholds() {
         let json = r#"{"maxCyclomatic": 0, "maxCognitive": 0}"#;
@@ -294,8 +288,6 @@ ignore = ["generated/**", "vendor/**"]
         assert_eq!(config.max_cyclomatic, 0);
         assert_eq!(config.max_cognitive, 0);
     }
-
-    // ── Large thresholds ────────────────────────────────────────────
 
     #[test]
     fn health_config_large_thresholds() {
@@ -305,19 +297,12 @@ ignore = ["generated/**", "vendor/**"]
         assert_eq!(config.max_cognitive, u16::MAX);
     }
 
-    // ── OwnershipConfig ─────────────────────────────────────────────
-
     #[test]
     fn ownership_config_default_has_bot_patterns() {
         let cfg = OwnershipConfig::default();
-        // Brackets are escaped because globset treats `[abc]` as a class;
-        // the literal `[bot]` pattern requires escaping.
         assert!(cfg.bot_patterns.iter().any(|p| p == r"*\[bot\]*"));
         assert!(cfg.bot_patterns.iter().any(|p| p == "dependabot*"));
         assert!(cfg.bot_patterns.iter().any(|p| p == "github-actions*"));
-        // `*noreply*` is intentionally NOT a default. See `default_bot_patterns`
-        // for why: it would filter out the majority of real GitHub contributors
-        // who commit from `<id>+<handle>@users.noreply.github.com`.
         assert!(
             !cfg.bot_patterns.iter().any(|p| p == "*noreply*"),
             "*noreply* must not be a default bot pattern (filters real human \
@@ -348,7 +333,6 @@ ignore = ["generated/**", "vendor/**"]
 
     #[test]
     fn ownership_config_email_mode_kebab_case() {
-        // EmailMode variants round-trip through their kebab-case JSON form.
         for (mode, repr) in [
             (EmailMode::Raw, "\"raw\""),
             (EmailMode::Handle, "\"handle\""),

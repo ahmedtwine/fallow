@@ -281,14 +281,9 @@ pub fn actionable_error_hint(operation: &str, code: &str) -> Option<&'static str
         ("refresh", "invalid_token") => Some(
             "your stored license token is missing required claims. Reactivate with: fallow license activate --trial --email <addr>",
         ),
-        // Trial + refresh are license-JWT flows: a stale / invalid JWT is
-        // fixed by reactivating via the trial endpoint.
         ("refresh" | "trial", "unauthorized") => Some(
             "authentication failed. Reactivate with: fallow license activate --trial --email <addr>",
         ),
-        // upload-inventory uses a separate API key (`fallow_live_k1_*`), not
-        // the license JWT. Reactivating the trial does NOT rotate the API
-        // key. Point users at key generation instead.
         ("upload-inventory", "unauthorized") => Some(
             "authentication failed. Generate an API key at https://fallow.cloud/settings#api-keys and set FALLOW_API_KEY on the runner. Note: this key is separate from the license JWT; `fallow license activate --trial` will not fix this error.",
         ),
@@ -298,9 +293,6 @@ pub fn actionable_error_hint(operation: &str, code: &str) -> Option<&'static str
         ("upload-inventory", "payload_too_large") => Some(
             "inventory exceeds the 200,000-function server limit. Scope the walk with --exclude-paths, or open an issue if this is a legitimately large repo.",
         ),
-        // upload-static-findings uses the same live API key class as
-        // upload-inventory. A publishable ingest key (`fallow_pub_k1_*`) is
-        // rejected here with a scope error, so point users at a live key.
         ("upload-static-findings", "unauthorized") => Some(
             "authentication failed. Generate a live API key at https://fallow.cloud/settings#api-keys and set FALLOW_API_KEY on the runner. Note: a publishable ingest key (fallow_pub_k1_) is not accepted here, and `fallow license activate --trial` will not fix this error.",
         ),
@@ -373,8 +365,6 @@ fn redact_bearer_tokens(detail: &str) -> String {
             token_end += 1;
         }
         if token_end == token_start {
-            // `Bearer` followed by no token character: preserve as-is and
-            // advance past the literal so we do not infinite-loop.
             out.push_str(BEARER);
             cursor = token_end;
             continue;
@@ -517,12 +507,6 @@ mod tests {
             body: r#"{"error":true,"code":"unauthorized"}"#.to_owned(),
         };
         let message = http_status_message(&mut response, "upload-inventory");
-        // API keys are a distinct secret from the license JWT. Sending trial
-        // users to `license activate --trial` when they get a 401 on upload
-        // is a dead-end support loop. The hint MUST both direct them to the
-        // API-keys page AND explain that the trial flow won't fix it, so we
-        // require the disqualifier to appear adjacent to "will not fix".
-        // Regression test for BLOCK 3 from the public-readiness panel.
         assert!(
             message.contains("https://fallow.cloud/settings#api-keys"),
             "expected api-keys URL, got: {message}"
@@ -632,9 +616,8 @@ mod tests {
     #[expect(unsafe_code, reason = "env var mutation requires unsafe")]
     fn ca_bundle_read_errors_are_reported_as_client_setup_errors() {
         let prior = std::env::var(CA_BUNDLE_ENV).ok();
-        // SAFETY: env mutation is unsafe because it is not thread-safe. This
-        // test serializes its own writes and restores the prior value before
-        // returning; no other test in this module touches FALLOW_CA_BUNDLE.
+        // SAFETY: This test owns the CA_BUNDLE_ENV mutation and restores the
+        // previous value before returning.
         unsafe {
             std::env::set_var(CA_BUNDLE_ENV, "/definitely/missing/fallow-ca.pem");
         }
@@ -642,7 +625,8 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains(CA_BUNDLE_ENV));
         assert!(message.contains("failed to read PEM bundle"));
-        // SAFETY: see the `set_var` safety note above.
+        // SAFETY: Restore the process environment to the value captured before
+        // the test mutation.
         unsafe {
             if let Some(value) = prior {
                 std::env::set_var(CA_BUNDLE_ENV, value);
@@ -707,9 +691,6 @@ mod tests {
 
     #[test]
     fn sanitize_network_error_preserves_literal_bearer_when_no_token_follows() {
-        // `Bearer ` followed by a non-token byte (e.g. `@`) leaves the prefix
-        // untouched so we do not corrupt non-secret prose that mentions the
-        // literal `Bearer `.
         let input = "Bearer @other";
         let output = sanitize_network_error(input);
         assert_eq!(output, input);
@@ -840,16 +821,13 @@ mod tests {
         );
     }
 
-    // Env-var assertions run in one test to avoid interleaving with parallel
-    // tests that also touch `FALLOW_API_URL`. Restores the prior value.
     #[test]
     #[expect(unsafe_code, reason = "env var mutation requires unsafe")]
     fn api_url_respects_env_override_and_default() {
         let prior = std::env::var("FALLOW_API_URL").ok();
 
-        // SAFETY: env mutation is unsafe because it is not thread-safe. This
-        // test serializes its own writes and restores the prior value before
-        // returning; no other test in this module touches FALLOW_API_URL.
+        // SAFETY: This test owns the FALLOW_API_URL mutation while validating
+        // default URL behavior.
         unsafe {
             std::env::remove_var("FALLOW_API_URL");
         }
@@ -858,7 +836,7 @@ mod tests {
             "https://api.fallow.cloud/v1/coverage/repo/inventory",
         );
 
-        // SAFETY: see the `remove_var` safety note above.
+        // SAFETY: Set a scoped override for this test case only.
         unsafe {
             std::env::set_var("FALLOW_API_URL", "http://127.0.0.1:3000/");
         }
@@ -867,7 +845,8 @@ mod tests {
             "http://127.0.0.1:3000/v1/coverage/a/inventory",
         );
 
-        // SAFETY: see the `remove_var` safety note above.
+        // SAFETY: Restore the process environment to the value captured before
+        // the test mutation.
         unsafe {
             if let Some(value) = prior {
                 std::env::set_var("FALLOW_API_URL", value);

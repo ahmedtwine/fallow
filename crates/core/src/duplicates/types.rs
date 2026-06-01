@@ -4,7 +4,6 @@ use serde::Serialize;
 
 use fallow_types::serde_path;
 
-// Re-export the canonical types from fallow-config.
 pub use fallow_config::{DetectionMode, DuplicatesConfig};
 
 /// A single instance of duplicated code at a specific location.
@@ -138,13 +137,11 @@ impl DuplicationReport {
     /// and instances within each group are sorted by file path then line.
     /// Clone families are sorted by their file set.
     pub fn sort(&mut self) {
-        // Sort instances within each clone group
         for group in &mut self.clone_groups {
             group
                 .instances
                 .sort_by(|a, b| a.file.cmp(&b.file).then(a.start_line.cmp(&b.start_line)));
         }
-        // Sort clone groups by first instance
         self.clone_groups
             .sort_by(|a, b| match (a.instances.first(), b.instances.first()) {
                 (Some(ai), Some(bi)) => ai
@@ -156,7 +153,6 @@ impl DuplicationReport {
                 (None, None) => std::cmp::Ordering::Equal,
             });
 
-        // Sort instances within each family's groups
         for family in &mut self.clone_families {
             for group in &mut family.groups {
                 group
@@ -175,7 +171,6 @@ impl DuplicationReport {
                     (None, None) => std::cmp::Ordering::Equal,
                 });
         }
-        // Sort families by their file set
         self.clone_families.sort_by(|a, b| a.files.cmp(&b.files));
     }
 }

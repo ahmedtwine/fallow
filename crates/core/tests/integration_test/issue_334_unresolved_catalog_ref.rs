@@ -40,10 +40,6 @@ fn detects_unresolved_named_and_default_catalog_references() {
     let config = config_for_fixture(root, vec![]);
     let results = fallow_core::analyze(&config).expect("analysis should succeed");
 
-    // Strip the project root so the test asserts on the project-root-relative
-    // form regardless of where the fixture lives on disk. The path is stored
-    // as absolute internally (matching the convention for path-anchored
-    // findings); serde_path::serialize strips the root for JSON output.
     let strip = |p: &std::path::Path| -> String {
         p.strip_prefix(&config.root)
             .unwrap_or(p)
@@ -79,7 +75,6 @@ fn detects_unresolved_named_and_default_catalog_references() {
         "unexpected unresolved-catalog-reference findings: {actual:?}",
     );
 
-    // No false positives for the four valid references.
     let valid_references = [
         ("react17", "react"),
         ("default", "is-even"),
@@ -108,13 +103,11 @@ fn unresolved_findings_carry_line_numbers_and_available_alternatives() {
         .iter()
         .find(|r| r.reference.entry_name == "old-react")
         .expect("old-react finding must be present");
-    // Line 7 in packages/app/package.json (1-based).
     assert_eq!(
         old_react.reference.line, 7,
         "old-react line, got {}",
         old_react.reference.line
     );
-    // react18 declares old-react, so it should appear in the alternatives.
     assert!(
         old_react
             .reference
@@ -149,8 +142,6 @@ fn unresolved_findings_carry_line_numbers_and_available_alternatives() {
 fn ignore_catalog_references_filters_by_package_and_catalog_and_consumer() {
     let root = fixture_path("issue-334-unresolved-catalog-ref");
 
-    // Suppress only `future-dep` in `catalog:upcoming` for the placeholder
-    // workspace. The other two findings (old-react, missing-pkg) must remain.
     let ignore = vec![IgnoreCatalogReferenceRule {
         package: "future-dep".to_string(),
         catalog: Some("upcoming".to_string()),
@@ -174,7 +165,6 @@ fn ignore_catalog_references_filters_by_package_and_catalog_and_consumer() {
         "unrelated finding old-react must NOT be suppressed",
     );
 
-    // Consumer glob with a wildcard suppresses everything under that subtree.
     let glob_ignore = vec![IgnoreCatalogReferenceRule {
         package: "old-react".to_string(),
         catalog: None,

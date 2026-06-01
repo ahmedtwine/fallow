@@ -1,7 +1,5 @@
 use super::helpers::*;
 
-// ---- find_unlisted_dependencies tests ----
-
 #[test]
 fn unlisted_dep_detected_when_not_in_package_json() {
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("axios", false)]);
@@ -73,7 +71,6 @@ fn dev_dep_not_reported_as_unlisted() {
 
 #[test]
 fn builtin_modules_not_reported_as_unlisted() {
-    // Import "fs" (a Node.js builtin) - should never be unlisted
     let files = vec![DiscoveredFile {
         id: FileId(0),
         path: PathBuf::from("/project/src/index.ts"),
@@ -83,9 +80,6 @@ fn builtin_modules_not_reported_as_unlisted() {
         path: PathBuf::from("/project/src/index.ts"),
         source: EntryPointSource::PackageJsonMain,
     }];
-    // NpmPackage("fs") would be the resolve result if it were npm.
-    // But in practice, builtins are tracked as NpmPackage in package_usage.
-    // The key filter is is_builtin_module in find_unlisted_dependencies.
     let resolved_modules = vec![ResolvedModule {
         file_id: FileId(0),
         path: PathBuf::from("/project/src/index.ts"),
@@ -230,7 +224,6 @@ fn plugin_virtual_prefixes_not_reported_as_unlisted() {
     let config = test_config(PathBuf::from("/project"));
     let line_offsets: LineOffsetsMap<'_> = FxHashMap::default();
 
-    // Use a non-path-alias virtual prefix (not "#" which is_path_alias catches)
     let (graph2, resolved_modules2) = build_graph_with_npm_imports(&[("@theme/Layout", false)]);
 
     let mut plugin_result2 = AggregatedPluginResult::default();
@@ -283,7 +276,6 @@ fn plugin_tooling_deps_not_reported_as_unlisted() {
 #[test]
 fn peer_dep_not_reported_as_unlisted() {
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("react", false)]);
-    // react is listed as a peer dep only, not in deps/devDeps
     let pkg: PackageJson = serde_json::from_str(r#"{"peerDependencies": {"react": "^18.0.0"}}"#)
         .expect("test pkg json");
 
@@ -306,11 +298,8 @@ fn peer_dep_not_reported_as_unlisted() {
     );
 }
 
-// ---- Additional coverage: unlisted dep in workspace scope ----
-
 #[test]
 fn unlisted_dep_detected_across_multiple_files() {
-    // Two files both import the same unlisted package — should deduplicate per file
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -478,12 +467,8 @@ fn dynamic_import_unlisted_dep_has_import_site() {
     assert_eq!(unlisted[0].imported_from[0].col, 2);
 }
 
-// ---- virtual_package_suffixes suppression ----
-
 #[test]
 fn vitest_mocks_package_not_reported_as_unlisted_via_suffix() {
-    // Imports like `@aws-sdk/__mocks__` should not be flagged when Vitest plugin
-    // contributes `/__mocks__` as a virtual package suffix.
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("@aws-sdk/__mocks__", false)]);
     let pkg = make_pkg(&[], &["vitest"], &[]);
     let config = test_config(PathBuf::from("/project"));
@@ -540,8 +525,6 @@ fn plain_mocks_package_not_reported_as_unlisted_via_suffix() {
     );
 }
 
-// ---- Additional coverage: find_unlisted_dependencies with optional dep listed ----
-
 #[test]
 fn optional_dep_not_reported_as_unlisted() {
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("sharp", false)]);
@@ -565,11 +548,8 @@ fn optional_dep_not_reported_as_unlisted() {
     );
 }
 
-// ---- @types/<package> unlisted dependency false positive tests ----
-
 #[test]
 fn type_only_import_with_at_types_package_not_unlisted() {
-    // `import type { Feature } from 'geojson'` with @types/geojson in devDeps
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("geojson", true)]);
     let pkg = make_pkg(&[], &["@types/geojson"], &[]);
     let config = test_config(PathBuf::from("/project"));
@@ -593,8 +573,6 @@ fn type_only_import_with_at_types_package_not_unlisted() {
 
 #[test]
 fn value_import_with_at_types_package_not_unlisted() {
-    // `import { Feature } from 'geojson'` (value import syntax) with @types/geojson in devDeps.
-    // TypeScript resolves types from @types/ and erases the import — the bare package is not needed.
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("geojson", false)]);
     let pkg = make_pkg(&[], &["@types/geojson"], &[]);
     let config = test_config(PathBuf::from("/project"));
@@ -618,7 +596,6 @@ fn value_import_with_at_types_package_not_unlisted() {
 
 #[test]
 fn scoped_type_only_import_with_at_types_package_not_unlisted() {
-    // `import type { Foo } from '@scope/pkg'` with @types/scope__pkg in devDeps
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("@scope/pkg", true)]);
     let pkg = make_pkg(&[], &["@types/scope__pkg"], &[]);
     let config = test_config(PathBuf::from("/project"));
@@ -642,8 +619,6 @@ fn scoped_type_only_import_with_at_types_package_not_unlisted() {
 
 #[test]
 fn at_types_without_bare_package_suppresses_regardless_of_import_style() {
-    // `import { Feature } from 'geojson'` + `import type { Point } from 'geojson'`
-    // with only @types/geojson — suppressed because @types/ presence means types-only usage
     let (graph, resolved_modules) =
         build_graph_with_npm_imports(&[("geojson", false), ("geojson", true)]);
     let pkg = make_pkg(&[], &["@types/geojson"], &[]);
@@ -668,7 +643,6 @@ fn at_types_without_bare_package_suppresses_regardless_of_import_style() {
 
 #[test]
 fn no_at_types_still_flags_unlisted() {
-    // `import { axios } from 'axios'` with NO @types/axios — still flagged
     let (graph, resolved_modules) = build_graph_with_npm_imports(&[("axios", false)]);
     let pkg = make_pkg(&[], &[], &[]);
     let config = test_config(PathBuf::from("/project"));

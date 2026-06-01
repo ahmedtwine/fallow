@@ -89,7 +89,6 @@ export const helper{i} = () => value{i} + 1;
         std::fs::write(temp_dir.join(format!("src/module{i}.ts")), content).unwrap();
     }
 
-    // Entry point imports from the first half of modules
     let used_count = file_count / 2;
     let imports: Vec<String> = (0..used_count)
         .map(|i| format!("import {{ value{i} }} from './module{i}';"))
@@ -128,7 +127,6 @@ pub fn create_dupe_project(
     )
     .unwrap();
 
-    // Generate shared duplicated code blocks (~30 lines each)
     let dupe_groups = file_count / 25;
     let blocks: Vec<String> = (0..dupe_groups)
         .map(|g| {
@@ -165,23 +163,19 @@ pub fn create_dupe_project(
         })
         .collect();
 
-    // ~40% of files get at least one dupe block, each group appears in 2-3 files
     let dupe_file_count = file_count * 2 / 5;
     for i in 0..file_count {
         let mut content = String::new();
-        // Unique content
         writeln!(
             &mut content,
             "export const unique_{i} = (v: string): string => `${{v}}_{i}`;\n"
         )
         .unwrap();
-        // Add dupe block if within dupe range
         if i < dupe_file_count && !blocks.is_empty() {
             let group = i % blocks.len();
             content.push_str(&blocks[group]);
             content.push('\n');
         }
-        // More unique filler
         writeln!(&mut content, "export const helper_{i} = {i};").unwrap();
         std::fs::write(temp_dir.join(format!("src/module{i}.ts")), content).unwrap();
     }

@@ -6,10 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
 
-// ---------------------------------------------------------------------------
-// schema command
-// ---------------------------------------------------------------------------
-
 #[test]
 fn schema_outputs_valid_json() {
     let output = run_fallow_raw(&["schema"]);
@@ -743,10 +739,6 @@ fn serde_has_skip_serializing_if(attrs: &[syn::Attribute], expected: &str) -> bo
     })
 }
 
-// ---------------------------------------------------------------------------
-// config-schema command
-// ---------------------------------------------------------------------------
-
 #[test]
 fn config_schema_outputs_valid_json() {
     let output = run_fallow_raw(&["config-schema"]);
@@ -764,10 +756,6 @@ fn config_schema_is_json_schema() {
         "config-schema should be a JSON Schema document"
     );
 }
-
-// ---------------------------------------------------------------------------
-// plugin-schema command
-// ---------------------------------------------------------------------------
 
 #[test]
 fn plugin_schema_outputs_valid_json() {

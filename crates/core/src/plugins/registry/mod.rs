@@ -20,10 +20,6 @@ use helpers::{
     process_static_patterns,
 };
 
-// ESLint is included because each workspace owns its own eslint.config.{mjs,js,...}
-// that may import a shared workspace eslint-config package. Those transitive deps
-// (e.g. eslint-config-next, eslint-plugin-react) are declared in the workspace's
-// devDependencies and will be flagged as unused if we skip config parsing here.
 fn must_parse_workspace_config_when_root_active(plugin_name: &str) -> bool {
     matches!(
         plugin_name,
@@ -155,8 +151,6 @@ impl AggregatedPluginResult {
         for rule in &mut self.provided_dependencies {
             *rule = rule.prefixed(ws_prefix);
         }
-        // Path aliases: the alias key (prefix) is unchanged, but the
-        // replacement directory is prefixed so it resolves from the root.
         for (_, replacement) in &mut self.path_aliases {
             *replacement = format!("{ws_prefix}/{replacement}");
         }
@@ -302,8 +296,6 @@ impl PluginRegistry {
         let _span = tracing::info_span!("run_plugins").entered();
         let mut result = AggregatedPluginResult::default();
 
-        // Phase 1: Determine which plugins are active
-        // Compute deps once to avoid repeated Vec<String> allocation per plugin
         let all_deps = pkg.all_dependency_names();
         let script_packages = script_activation_packages(pkg, root, &all_deps, production_mode);
         let active: Vec<&dyn Plugin> = self
@@ -325,19 +317,14 @@ impl PluginRegistry {
             "active plugins"
         );
 
-        // Warn when meta-frameworks are active but their generated configs are missing.
-        // Without these, tsconfig extends chains break and import resolution fails.
         check_meta_framework_prerequisites(&active, root);
 
-        // Silent-fail diagnostics for the plugin system (#479).
         self.emit_silent_fail_diagnostics(&active, &all_deps, root, discovered_files);
 
-        // Phase 2: Collect static patterns from active plugins
         for plugin in &active {
             process_static_patterns(*plugin, root, &mut result);
         }
 
-        // Phase 2b: Process external plugins (includes inline framework definitions)
         process_external_plugins(
             &self.external_plugins,
             &all_deps,
@@ -346,11 +333,6 @@ impl PluginRegistry {
             &mut result,
         );
 
-        // Phase 3: Find and parse config files for dynamic resolution
-        // Pre-compile all config patterns. Source-extension root-anchored
-        // patterns are wrapped with `**/` so they match nested files via the
-        // discovered file set (Phase 3a), letting Phase 3b skip those plugins
-        // and avoid a per-directory stat storm on large monorepos.
         let config_matchers: Vec<(&dyn Plugin, Vec<globset::GlobMatcher>)> = active
             .iter()
             .filter(|p| !p.config_patterns().is_empty())
@@ -370,10 +352,6 @@ impl PluginRegistry {
             .collect();
 
         use rayon::prelude::*;
-        // Build relative paths lazily: only needed when config matchers exist
-        // or plugins have package_json_config_key. Skip entirely for projects
-        // with no config-parsing plugins (e.g., only React), avoiding O(files)
-        // String allocations.
         let needs_relative_files = !config_matchers.is_empty()
             || active.iter().any(|p| p.package_json_config_key().is_some());
         let relative_files: Vec<(PathBuf, String)> = if needs_relative_files {
@@ -393,9 +371,6 @@ impl PluginRegistry {
         };
 
         if !config_matchers.is_empty() {
-            // Phase 3a: Match config files from discovered source files. Per-file
-            // glob matching is parallelized: on monorepos with tens of thousands
-            // of source files, the file-scan cost dominates the plugins phase.
             let mut resolved_plugins: FxHashSet<&str> = FxHashSet::default();
 
             for (plugin, matchers) in &config_matchers {
@@ -431,11 +406,6 @@ impl PluginRegistry {
                 }
             }
 
-            // Phase 3b: Filesystem fallback for JSON config files.
-            // JSON files (angular.json, project.json) are not in the discovered file set
-            // because fallow only discovers JS/TS/CSS/Vue/etc. files. In production
-            // mode, source-extension configs (`*.config.*`, dotfiles) are also
-            // excluded from the walker, so the FS walk runs for those patterns too.
             let json_configs = discover_config_files(
                 &config_matchers,
                 &resolved_plugins,
@@ -468,7 +438,6 @@ impl PluginRegistry {
             }
         }
 
-        // Phase 4: Package.json inline config fallback.
         process_package_json_inline_configs(
             &active,
             &config_matchers,
@@ -503,7 +472,6 @@ impl PluginRegistry {
         let _span = tracing::info_span!("run_plugins").entered();
         let mut result = AggregatedPluginResult::default();
 
-        // Phase 1: Determine which plugins are active (with pre-computed deps)
         let all_deps = pkg.all_dependency_names();
         let script_packages = script_activation_packages(pkg, root, &all_deps, production_mode);
         let workspace_files: Vec<PathBuf> = relative_files
@@ -530,9 +498,6 @@ impl PluginRegistry {
             "active plugins"
         );
 
-        // Silent-fail diagnostics (#479); the shared dedupe set means the
-        // same external plugin's enabler typo or pattern collision only warns
-        // once per process even when this fast path runs per workspace.
         self.emit_silent_fail_diagnostics(&active, &all_deps, root, &workspace_files);
 
         process_external_plugins(
@@ -543,18 +508,14 @@ impl PluginRegistry {
             &mut result,
         );
 
-        // Early exit if no plugins are active (common for leaf workspace packages)
         if active.is_empty() && result.active_plugins.is_empty() {
             return result;
         }
 
-        // Phase 2: Collect static patterns from active plugins
         for plugin in &active {
             process_static_patterns(*plugin, root, &mut result);
         }
 
-        // Phase 3: Find and parse config files using pre-compiled matchers
-        // Only check matchers for plugins that are active in this workspace
         let active_names: FxHashSet<&str> = active.iter().map(|p| p.name()).collect();
         let workspace_matchers: Vec<_> = precompiled_config_matchers
             .iter()
@@ -603,10 +564,6 @@ impl PluginRegistry {
             }
         }
 
-        // Phase 3b: Filesystem fallback for JSON config files at the project root.
-        // Config files like angular.json live at the monorepo root, but Angular is
-        // only active in workspace packages. Check the project root for unresolved
-        // config patterns.
         let ws_json_configs = if root == project_root {
             discover_config_files(
                 &workspace_matchers,
@@ -622,7 +579,6 @@ impl PluginRegistry {
                 production_mode,
             )
         };
-        // Parse discovered JSON config files
         for (abs_path, plugin) in &ws_json_configs {
             if let Ok(source) = std::fs::read_to_string(abs_path) {
                 let plugin_result = plugin.resolve_config(abs_path, &source, root);
@@ -771,12 +727,6 @@ pub(crate) fn detect_pattern_collisions(
 ) -> Vec<PluginDiagnostic> {
     use rustc_hash::FxHashMap;
 
-    // Owners are stored as a Vec to preserve REGISTRATION ORDER: owners[0]
-    // is the plugin that wins Phase 3a config matching, and the warning text
-    // names it as the winner. A `FxHashSet` is held alongside to dedupe a
-    // single plugin that legitimately lists the same pattern twice in its
-    // own `config_patterns` (rare but legal) so it does not look like a
-    // self-vs-self collision.
     let mut pattern_owners: FxHashMap<String, (Vec<String>, FxHashSet<String>)> =
         FxHashMap::default();
 

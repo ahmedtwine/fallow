@@ -133,7 +133,6 @@ pub struct ChurnResult {
 /// Returns an error if the input is not a recognized duration format or ISO date,
 /// the numeric part is invalid, or the duration is zero.
 pub fn parse_since(input: &str) -> Result<SinceDuration, String> {
-    // Try ISO date first (YYYY-MM-DD)
     if is_iso_date(input) {
         return Ok(SinceDuration {
             git_after: input.to_string(),
@@ -141,7 +140,6 @@ pub fn parse_since(input: &str) -> Result<SinceDuration, String> {
         });
     }
 
-    // Parse duration: number + unit
     let (num_str, unit) = split_number_unit(input)?;
     let num: u64 = num_str
         .parse()
@@ -220,8 +218,6 @@ pub fn is_git_repo(root: &Path) -> bool {
         .stderr(std::process::Stdio::null());
     command.status().is_ok_and(|s| s.success())
 }
-
-// ── Churn cache ──────────────────────────────────────────────────
 
 /// Maximum size of a churn cache file (64 MB). The incremental cache stores
 /// per-commit events, so it needs more headroom than the old aggregate rows.
@@ -334,7 +330,6 @@ fn save_churn_cache(
     };
     let _ = std::fs::create_dir_all(cache_dir);
     let data = bitcode::encode(&cache);
-    // Write to temp file then rename for atomic update (avoids partial reads by concurrent processes)
     let tmp = cache_dir.join("churn.bin.tmp");
     if std::fs::write(&tmp, data).is_ok() {
         let _ = std::fs::rename(&tmp, cache_dir.join("churn.bin"));
@@ -396,8 +391,6 @@ pub fn analyze_churn_cached(
     let result = build_churn_result(state, shallow_clone);
     Some((result, false))
 }
-
-// ── Internal ──────────────────────────────────────────────────────
 
 impl ChurnCache {
     fn into_event_state(self) -> ChurnEventState {
@@ -510,7 +503,6 @@ fn parse_git_log_events(stdout: &str, root: &Path) -> ChurnEventState {
             continue;
         }
 
-        // Header lines have shape: "<ts>|<email>"
         if let Some((ts_str, email)) = line.split_once('|')
             && let Ok(ts) = ts_str.parse::<u64>()
         {
@@ -519,14 +511,12 @@ fn parse_git_log_events(stdout: &str, root: &Path) -> ChurnEventState {
             continue;
         }
 
-        // Backwards-compat: bare timestamp (legacy format or test fixtures).
         if let Ok(ts) = line.parse::<u64>() {
             current_timestamp = Some(ts);
             current_author_idx = None;
             continue;
         }
 
-        // Numstat line: "10\t5\tpath/to/file"
         if let Some((added, deleted, path)) = parse_numstat_line(line) {
             let abs_path = root.join(path);
             let ts = current_timestamp.unwrap_or(now_secs);
@@ -595,7 +585,6 @@ fn build_churn_result(state: ChurnEventState, shallow_clone: bool) -> ChurnResul
 
             let commits = timestamps.len() as u32;
             let trend = compute_trend(&timestamps);
-            // Round per-author weighted sums for cache stability.
             for c in authors.values_mut() {
                 c.weighted_commits = (c.weighted_commits * 100.0).round() / 100.0;
             }
@@ -653,7 +642,6 @@ fn parse_numstat_line(line: &str) -> Option<(u32, u32, &str)> {
     let deleted_str = parts.next()?;
     let path = parts.next()?;
 
-    // Binary files show "-" for added/deleted — skip them
     let added: u32 = added_str.parse().ok()?;
     let deleted: u32 = deleted_str.parse().ok()?;
 
@@ -721,8 +709,6 @@ fn split_number_unit(input: &str) -> Result<(&str, &str), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── parse_since ──────────────────────────────────────────────
 
     #[test]
     fn parse_since_months_short() {
@@ -805,8 +791,6 @@ mod tests {
         assert!(parse_since("months").is_err());
     }
 
-    // ── parse_numstat_line ───────────────────────────────────────
-
     #[test]
     fn numstat_normal() {
         let (a, d, p) = parse_numstat_line("10\t5\tsrc/file.ts").unwrap();
@@ -828,8 +812,6 @@ mod tests {
         assert_eq!(p, "src/empty.ts");
     }
 
-    // ── compute_trend ────────────────────────────────────────────
-
     #[test]
     fn trend_empty_is_stable() {
         assert_eq!(compute_trend(&[]), ChurnTrend::Stable);
@@ -842,21 +824,18 @@ mod tests {
 
     #[test]
     fn trend_accelerating() {
-        // 2 old commits, 5 recent commits
         let timestamps = vec![100, 200, 800, 850, 900, 950, 1000];
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Accelerating);
     }
 
     #[test]
     fn trend_cooling() {
-        // 5 old commits, 2 recent commits
         let timestamps = vec![100, 150, 200, 250, 300, 900, 1000];
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Cooling);
     }
 
     #[test]
     fn trend_stable_even_distribution() {
-        // 3 old commits, 3 recent commits → ratio = 1.0 → stable
         let timestamps = vec![100, 200, 300, 700, 800, 900];
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Stable);
     }
@@ -867,8 +846,6 @@ mod tests {
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Stable);
     }
 
-    // ── is_iso_date ──────────────────────────────────────────────
-
     #[test]
     fn iso_date_valid() {
         assert!(is_iso_date("2025-06-01"));
@@ -877,7 +854,6 @@ mod tests {
 
     #[test]
     fn iso_date_with_time_rejected() {
-        // Only exact YYYY-MM-DD (10 chars) is accepted
         assert!(!is_iso_date("2025-06-01T00:00:00"));
     }
 
@@ -889,16 +865,12 @@ mod tests {
         assert!(!is_iso_date("abcd-ef-gh"));
     }
 
-    // ── Display ──────────────────────────────────────────────────
-
     #[test]
     fn trend_display() {
         assert_eq!(ChurnTrend::Accelerating.to_string(), "accelerating");
         assert_eq!(ChurnTrend::Stable.to_string(), "stable");
         assert_eq!(ChurnTrend::Cooling.to_string(), "cooling");
     }
-
-    // ── parse_git_log ───────────────────────────────────────────
 
     #[test]
     fn parse_git_log_single_commit() {
@@ -953,7 +925,6 @@ mod tests {
     #[test]
     fn parse_git_log_weighted_commits_are_positive() {
         let root = Path::new("/project");
-        // Use a timestamp near "now" to ensure weight doesn't decay to zero
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -967,51 +938,29 @@ mod tests {
         );
     }
 
-    // ── compute_trend edge cases ─────────────────────────────────
-
     #[test]
     fn trend_boundary_1_5x_ratio() {
-        // Exactly 1.5x ratio (3 recent : 2 old) → boundary between stable and accelerating
-        // midpoint = 100 + (1000-100)/2 = 550
-        // old: 100, 200 (2 timestamps <= 550)
-        // recent: 600, 800, 1000 (3 timestamps > 550)
-        // ratio = 3/2 = 1.5 — NOT > 1.5, so stable
         let timestamps = vec![100, 200, 600, 800, 1000];
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Stable);
     }
 
     #[test]
     fn trend_just_above_1_5x() {
-        // midpoint = 100 + (1000-100)/2 = 550
-        // old: 100 (1 timestamp <= 550)
-        // recent: 600, 800, 1000 (3 timestamps > 550)
-        // ratio = 3/1 = 3.0 → accelerating
         let timestamps = vec![100, 600, 800, 1000];
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Accelerating);
     }
 
     #[test]
     fn trend_boundary_0_67x_ratio() {
-        // Exactly 0.67x ratio → boundary between cooling and stable
-        // midpoint = 100 + (1000-100)/2 = 550
-        // old: 100, 200, 300 (3 timestamps <= 550)
-        // recent: 600, 1000 (2 timestamps > 550)
-        // ratio = 2/3 = 0.666... < 0.67 → cooling
         let timestamps = vec![100, 200, 300, 600, 1000];
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Cooling);
     }
 
     #[test]
     fn trend_two_timestamps_different() {
-        // Only 2 timestamps: midpoint = 100 + (200-100)/2 = 150
-        // old: 100 (1 timestamp <= 150)
-        // recent: 200 (1 timestamp > 150)
-        // ratio = 1/1 = 1.0 → stable
         let timestamps = vec![100, 200];
         assert_eq!(compute_trend(&timestamps), ChurnTrend::Stable);
     }
-
-    // ── parse_since additional coverage ─────────────────────────
 
     #[test]
     fn parse_since_week_singular() {
@@ -1043,7 +992,6 @@ mod tests {
 
     #[test]
     fn parse_since_overflow_number_rejected() {
-        // Number too large for u64
         let result = parse_since("99999999999999999999d");
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1065,11 +1013,8 @@ mod tests {
         assert!(parse_since("0y").is_err());
     }
 
-    // ── parse_numstat_line additional coverage ──────────────────
-
     #[test]
     fn numstat_missing_path() {
-        // Only two tab-separated fields, no path
         assert!(parse_numstat_line("10\t5").is_none());
     }
 
@@ -1085,13 +1030,11 @@ mod tests {
 
     #[test]
     fn numstat_only_added_is_binary() {
-        // Added is "-" but deleted is numeric
         assert!(parse_numstat_line("-\t5\tsrc/file.ts").is_none());
     }
 
     #[test]
     fn numstat_only_deleted_is_binary() {
-        // Added is numeric but deleted is "-"
         assert!(parse_numstat_line("10\t-\tsrc/file.ts").is_none());
     }
 
@@ -1111,11 +1054,8 @@ mod tests {
         assert_eq!(p, "src/big.ts");
     }
 
-    // ── is_iso_date additional coverage ─────────────────────────
-
     #[test]
     fn iso_date_wrong_separator_positions() {
-        // Dashes in wrong positions
         assert!(!is_iso_date("20-25-0601"));
         assert!(!is_iso_date("202506-01-"));
     }
@@ -1134,8 +1074,6 @@ mod tests {
     fn iso_date_letters_in_month() {
         assert!(!is_iso_date("2025-ab-01"));
     }
-
-    // ── split_number_unit additional coverage ───────────────────
 
     #[test]
     fn split_number_unit_valid() {
@@ -1163,12 +1101,9 @@ mod tests {
         assert!(err.contains("requires a unit suffix"));
     }
 
-    // ── parse_git_log additional coverage ───────────────────────
-
     #[test]
     fn parse_git_log_numstat_before_timestamp_uses_now() {
         let root = Path::new("/project");
-        // No timestamp line before the numstat line
         let output = "10\t5\tsrc/no_ts.ts\n";
         let (result, _) = parse_git_log(output, root);
         assert_eq!(result.len(), 1);
@@ -1176,7 +1111,6 @@ mod tests {
         assert_eq!(churn.commits, 1);
         assert_eq!(churn.lines_added, 10);
         assert_eq!(churn.lines_deleted, 5);
-        // Without a timestamp, it falls back to now_secs, so weight should be ~1.0
         assert!(
             churn.weighted_commits > 0.9,
             "weight should be near 1.0 when timestamp defaults to now"
@@ -1194,7 +1128,6 @@ mod tests {
     #[test]
     fn parse_git_log_trend_is_computed_per_file() {
         let root = Path::new("/project");
-        // Two commits far apart for one file, recent-heavy for another
         let output = "\
 1000\n5\t1\tsrc/old.ts\n\
 2000\n3\t1\tsrc/old.ts\n\
@@ -1208,7 +1141,6 @@ mod tests {
         let hot = &result[&PathBuf::from("/project/src/hot.ts")];
         assert_eq!(old.commits, 2);
         assert_eq!(hot.commits, 5);
-        // hot.ts has 4 recent vs 1 old => accelerating
         assert_eq!(hot.trend, ChurnTrend::Accelerating);
     }
 
@@ -1219,7 +1151,6 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        // One commit from 180 days ago (two half-lives) should weigh ~0.25
         let old_ts = now - (180 * 86_400);
         let output = format!("{old_ts}\n10\t5\tsrc/old.ts\n");
         let (result, _) = parse_git_log(&output, root);
@@ -1253,11 +1184,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        // A commit right now should weigh exactly 1.00
         let output = format!("{now}\n1\t0\tsrc/a.ts\n");
         let (result, _) = parse_git_log(&output, root);
         let churn = &result[&PathBuf::from("/project/src/a.ts")];
-        // Weighted commits are rounded to 2 decimal places
         let decimals = format!("{:.2}", churn.weighted_commits);
         assert_eq!(
             churn.weighted_commits.to_string().len(),
@@ -1265,8 +1194,6 @@ mod tests {
             "weighted_commits should be rounded to at most 2 decimal places"
         );
     }
-
-    // ── ChurnTrend serde ────────────────────────────────────────
 
     #[test]
     fn trend_serde_serialization() {
@@ -1283,8 +1210,6 @@ mod tests {
             "\"cooling\""
         );
     }
-
-    // ── parse_git_log: author tracking ──────────────────────────
 
     #[test]
     fn parse_git_log_extracts_author_email() {
@@ -1320,7 +1245,6 @@ mod tests {
     #[test]
     fn parse_git_log_aggregates_per_author() {
         let root = Path::new("/project");
-        // alice touches index.ts twice, bob once.
         let output = "\
 1700000000|alice@example.com
 1\t0\tsrc/index.ts
@@ -1344,7 +1268,6 @@ mod tests {
 
     #[test]
     fn parse_git_log_legacy_bare_timestamp_still_parses() {
-        // Backwards-compat path: header has no `|email` suffix.
         let root = Path::new("/project");
         let output = "1700000000\n10\t5\tsrc/index.ts\n";
         let (result, pool) = parse_git_log(output, root);
@@ -1353,8 +1276,6 @@ mod tests {
         assert_eq!(churn.commits, 1);
         assert!(churn.authors.is_empty());
     }
-
-    // ── intern_author ──────────────────────────────────────────
 
     #[test]
     fn intern_author_returns_existing_index() {
@@ -1375,8 +1296,6 @@ mod tests {
         assert_eq!(intern_author("carol@x", &mut pool, &mut index), 2);
         assert_eq!(intern_author("alice@x", &mut pool, &mut index), 0);
     }
-
-    // ── incremental cache ───────────────────────────────────────
 
     fn git(root: &Path, args: &[&str]) {
         let status = std::process::Command::new("git")

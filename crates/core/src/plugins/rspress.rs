@@ -44,8 +44,6 @@ mod tests {
     fn inactive_without_rspress() {
         let plugin = RspressPlugin;
         assert!(!plugin.is_enabled_with_deps(&["react".to_string()], Path::new("/p")));
-        // A near-miss package that merely starts with `rspress` but is not the
-        // scope prefix must not activate the plugin.
         assert!(!plugin.is_enabled_with_deps(&["rspress-plugin-foo".to_string()], Path::new("/p")));
     }
 
@@ -59,8 +57,6 @@ mod tests {
     #[test]
     fn theme_prefix_covers_bare_and_subpath_imports() {
         let prefixes = RspressPlugin.virtual_module_prefixes();
-        // Bare `@theme` (the reported repro) matches the `@theme/` entry via the
-        // exact-bare branch; `@theme/Layout` matches as an ordinary prefix.
         assert!(
             prefixes
                 .iter()
@@ -76,8 +72,6 @@ mod tests {
                 .iter()
                 .any(|prefix| matches_virtual_prefix(prefix, "@theme-original/Layout"))
         );
-        // A real scoped package sharing the `@theme` lexical start must NOT be
-        // swallowed.
         assert!(
             !prefixes
                 .iter()

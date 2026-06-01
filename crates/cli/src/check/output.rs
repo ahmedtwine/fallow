@@ -7,16 +7,7 @@ use rustc_hash::FxHashSet;
 use super::TraceOptions;
 use crate::{error::emit_error, report};
 
-// ── Trace output ─────────────────────────────────────────────────
-
-/// Handle `--trace`, `--trace-file`, `--trace-dependency` early returns.
-///
-/// `script_used_packages` is the set of binary names referenced from package.json
-/// scripts and CI configs; `trace_dependency` consults it so script-only tooling
-/// (microbundle, vitest, eslint) shows as used instead of being false-flagged.
-///
-/// Returns `Some(code)` if a trace was handled (caller should return),
-/// `None` if no trace was active and control should continue.
+/// Handle `--trace`, `--trace-file`, and `--trace-dependency` early returns.
 pub(super) fn handle_trace_output(
     graph: &ModuleGraph,
     trace_opts: &TraceOptions,
@@ -73,8 +64,6 @@ pub(super) fn handle_trace_output(
     None
 }
 
-// ── SARIF output ─────────────────────────────────────────────────
-
 /// Write SARIF output to a file if `--sarif-file` was specified.
 pub fn write_sarif_file(
     results: &fallow_core::results::AnalysisResults,
@@ -85,7 +74,6 @@ pub fn write_sarif_file(
     let sarif = report::build_sarif(results, &config.root, &config.rules);
     match serde_json::to_string_pretty(&sarif) {
         Ok(json) => {
-            // Ensure parent directories exist
             if let Some(parent) = sarif_path.parent()
                 && !parent.as_os_str().is_empty()
                 && let Err(e) = std::fs::create_dir_all(parent)
@@ -109,8 +97,6 @@ pub fn write_sarif_file(
         }
     }
 }
-
-// ── Cross-reference output ───────────────────────────────────────
 
 /// Run duplication cross-reference and print combined findings.
 pub fn run_cross_reference(
@@ -140,8 +126,6 @@ pub(super) fn parse_trace_spec(spec: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── parse_trace_spec ────────────────────────────────────────
 
     #[test]
     fn parse_trace_spec_simple() {
@@ -175,7 +159,6 @@ mod tests {
 
     #[test]
     fn parse_trace_spec_multiple_colons_uses_last() {
-        // Handles Windows-style paths like C:\src\utils.ts:foo
         let result = parse_trace_spec("C:\\src\\utils.ts:foo");
         assert_eq!(result, Some(("C:\\src\\utils.ts", "foo")));
     }
@@ -186,8 +169,6 @@ mod tests {
         assert_eq!(result, Some(("packages/core:src/index.ts", "myExport")));
     }
 
-    // ── handle_trace_output with no trace active ────────────────
-
     #[test]
     fn handle_trace_output_returns_none_when_no_trace_active() {
         let trace_opts = TraceOptions {
@@ -196,14 +177,8 @@ mod tests {
             trace_dependency: None,
             performance: false,
         };
-        // We can't construct a ModuleGraph easily, but when no trace option
-        // is active, the function short-circuits to None without touching
-        // the graph. Verify by checking that the function signature accepts
-        // the empty trace opts correctly.
         assert!(!trace_opts.any_active());
     }
-
-    // ── write_sarif_file ────────────────────────────────────────
 
     fn make_resolved_config() -> fallow_config::ResolvedConfig {
         fallow_config::ResolvedConfig {
@@ -260,7 +235,6 @@ mod tests {
         let content = std::fs::read_to_string(&sarif_path).expect("read sarif");
         let parsed: serde_json::Value =
             serde_json::from_str(&content).expect("parse sarif as json");
-        // SARIF output should have a "$schema" or "version" field
         assert!(parsed.get("$schema").is_some() || parsed.get("version").is_some());
     }
 

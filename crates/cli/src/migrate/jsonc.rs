@@ -13,9 +13,6 @@ pub(super) fn generate_jsonc(result: &MigrationResult) -> String {
         .config
         .as_object()
         .expect("config is always an Object");
-    // Strip internal tool tags (`(knip config)`, `(jscpd config)`, ...) from
-    // the comment so the committed config file does not carry implementation
-    // detail. See issue #457.
     let source_comment = result
         .sources
         .iter()
@@ -25,7 +22,6 @@ pub(super) fn generate_jsonc(result: &MigrationResult) -> String {
     let _ = writeln!(output, "  // Migrated from {source_comment}");
 
     let mut entries: Vec<(&String, &serde_json::Value)> = obj.iter().collect();
-    // Sort keys for consistent output
     let key_order = [
         "entry",
         "ignorePatterns",
@@ -45,7 +41,6 @@ pub(super) fn generate_jsonc(result: &MigrationResult) -> String {
     for (i, (key, value)) in entries.iter().enumerate() {
         let is_last = i == total - 1;
         let serialized = serde_json::to_string_pretty(value).unwrap_or_default();
-        // Indent the serialized value by 2 spaces (but the first line is on the key line)
         let indented = indent_json_value(&serialized, 2);
         if is_last {
             let _ = writeln!(output, "  \"{key}\": {indented}");
@@ -65,7 +60,6 @@ pub(super) fn indent_json_value(json: &str, spaces: usize) -> String {
     if lines.len() <= 1 {
         return json.to_string();
     }
-    // First line stays as-is, subsequent lines get indented
     let first = lines.remove(0);
     let rest: Vec<String> = lines.iter().map(|l| format!("{indent}{l}")).collect();
     let mut result = first.to_string();

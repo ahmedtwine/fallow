@@ -69,7 +69,6 @@ pub struct AnalysisCounts {
     reason = "vital-sign aggregation keeps the metric definitions in one ordered block; percentile indices, dep counts, hotspot counts, and LOC per file are bounded by project size"
 )]
 pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
-    // Cyclomatic complexity: always available from parsed modules
     let mut all_cyclomatic: Vec<u16> = input
         .selected_modules()
         .flat_map(|m| m.complexity.iter().map(|c| c.cyclomatic))
@@ -100,7 +99,6 @@ pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
         u32::from(all_cyclomatic[idx])
     };
 
-    // Dead code percentages: only available when analysis pipeline ran
     let (dead_file_pct, dead_export_pct, unused_dep_count, circular_dep_count) =
         if let Some(ref counts) = input.analysis_counts {
             let dfp = if input.total_files > 0 {
@@ -140,7 +138,6 @@ pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
         }
     });
 
-    // Maintainability average: from file scores
     let maintainability_avg = input.file_scores.and_then(|scores| {
         if scores.is_empty() {
             return None;
@@ -159,7 +156,6 @@ pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
         Some((low_count as f64 / scores.len() as f64 * 1000.0).round() / 10.0)
     });
 
-    // Hotspot count: files with score >= threshold
     let hotspot_count = input.hotspots.map(|entries| {
         entries
             .iter()
@@ -178,13 +174,11 @@ pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
             .count() as u32
     });
 
-    // Total LOC: always available from parsed modules
     let total_loc: u64 = input
         .selected_modules()
         .map(|m| m.line_offsets.len() as u64)
         .sum();
 
-    // Build raw counts for percentage referents ("63.5% (N of M)")
     let counts = input.analysis_counts.as_ref().map(|ac| VitalSignsCounts {
         total_files: input.total_files,
         total_exports: ac.total_exports,
@@ -196,7 +190,6 @@ pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
         total_deps: ac.total_deps,
     });
 
-    // Unit size risk profile: bin functions by line count
     let all_line_counts: Vec<u32> = input
         .selected_modules()
         .flat_map(|m| m.complexity.iter().map(|c| c.line_count))
@@ -216,7 +209,6 @@ pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
         Some(compute_size_risk_profile(&all_line_counts))
     };
 
-    // Unit interfacing risk profile: bin functions by param count
     let unit_interfacing_profile = if all_cyclomatic.is_empty() {
         None
     } else {
@@ -227,7 +219,6 @@ pub fn compute_vital_signs(input: &VitalSignsInput<'_>) -> VitalSigns {
         Some(compute_interfacing_risk_profile(&all_param_counts))
     };
 
-    // Coupling concentration: p95 fan-in and % of files above it
     let (p95_fan_in, coupling_high_pct) = if let Some(scores) = input.file_scores {
         compute_coupling_concentration(scores)
     } else {
@@ -339,8 +330,6 @@ fn compute_coupling_concentration(scores: &[FileHealthScore]) -> (Option<u32>, O
     let idx = idx.min(fan_ins.len()) - 1;
     let p95 = fan_ins[idx] as u32;
 
-    // Use a floor of 10 for the "high coupling" threshold to avoid flagging
-    // small projects where p95 fan-in is naturally low
     let threshold = (p95 as usize).max(10);
     let high_count = fan_ins.iter().filter(|&&fi| fi > threshold).count();
     let high_pct = (high_count as f64 / fan_ins.len() as f64 * 1000.0).round() / 10.0;
@@ -354,27 +343,20 @@ fn compute_coupling_concentration(scores: &[FileHealthScore]) -> (Option<u32>, O
 /// Missing metrics (from pipelines that didn't run) don't penalize.
 /// `total_files` is used to normalize the hotspot count penalty.
 pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore {
-    // Round each penalty to 1dp BEFORE subtracting so that JSON consumers
-    // can reproduce the score as `100 - sum(penalties)`.
     let round1 = |v: f64| -> f64 { (v * 10.0).round() / 10.0 };
 
     let mut score = 100.0_f64;
 
-    // Dead file penalty: 0.2 points per percent, max 15
     let dead_files_penalty = vs.dead_file_pct.map(|dfp| round1((dfp * 0.2).min(15.0)));
     if let Some(p) = dead_files_penalty {
         score -= p;
     }
 
-    // Dead export penalty: 0.2 points per percent, max 15
     let dead_exports_penalty = vs.dead_export_pct.map(|dep| round1((dep * 0.2).min(15.0)));
     if let Some(p) = dead_exports_penalty {
         score -= p;
     }
 
-    // Complexity penalty: prefer scale-invariant critical-complexity density
-    // when current vital signs provide it. Fall back to the legacy average for
-    // older snapshots/tests that predate the tail metric.
     let complexity_penalty = if let Some(critical_pct) = vs.critical_complexity_pct {
         round1((critical_pct * 4.0).min(20.0))
     } else {
@@ -382,8 +364,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
     };
     score -= complexity_penalty;
 
-    // P90 is retained for backward-compatible output, but new runs fold
-    // complexity tail risk into the scale-invariant complexity penalty.
     let p90_penalty = if vs.critical_complexity_pct.is_some() {
         0.0
     } else {
@@ -391,8 +371,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
     };
     score -= p90_penalty;
 
-    // Maintainability penalty: prefer percentage of low-MI files over mean MI
-    // so a large low-quality tail is not diluted by many trivial files.
     let maintainability_penalty = if let Some(low_pct) = vs.maintainability_low_pct {
         Some(round1((low_pct * 1.5).min(15.0)))
     } else {
@@ -403,10 +381,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
         score -= p;
     }
 
-    // Hotspot penalty: prefer coverage of the top 1% within-project ranking.
-    // The legacy fixed score threshold can be unreachable when churn and
-    // density maxima live in different files; scoring against the percentile
-    // bucket lets the dimension use its full 10-point budget.
     let hotspot_penalty = if let Some(top_pct_count) = vs.hotspot_top_pct_count {
         if total_files > 0 {
             let top_pct_bucket = (total_files as f64 * 0.01).ceil().max(1.0);
@@ -429,7 +403,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
         score -= p;
     }
 
-    // Unused dep penalty: prefer density per 1k files, cap 25.
     let unused_deps_penalty = if let Some(per_k) = vs.unused_deps_per_k_files {
         Some(round1((per_k * 0.5).min(25.0)))
     } else {
@@ -440,7 +413,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
         score -= p;
     }
 
-    // Circular dep penalty: prefer density per 1k files, cap 25.
     let circular_deps_penalty = if let Some(per_k) = vs.circular_deps_per_k_files {
         Some(round1((per_k * 0.5).min(25.0)))
     } else {
@@ -451,8 +423,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
         score -= p;
     }
 
-    // Unit size penalty: prefer functions >60 LOC per 1k functions. The legacy
-    // percentage floor diluted thousands of oversized functions in large repos.
     let unit_size_penalty = if let Some(per_k) = vs.functions_over_60_loc_per_k {
         Some(round1((per_k * 0.5).min(10.0)))
     } else {
@@ -464,8 +434,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
         score -= p;
     }
 
-    // Coupling concentration penalty: prefer the percentage of high fan-in files
-    // over p95 so heavy-tailed hubs above p99 still contribute.
     let coupling_penalty = if let Some(high_pct) = vs.coupling_high_pct {
         Some(round1((high_pct * 0.5).min(5.0)))
     } else {
@@ -476,7 +444,6 @@ pub fn compute_health_score(vs: &VitalSigns, total_files: usize) -> HealthScore 
         score -= p;
     }
 
-    // Duplication penalty: 1 point per percent above 5%, max 10
     let duplication_penalty = vs
         .duplication_pct
         .map(|dp| round1(((dp - 5.0).max(0.0) * 1.0).min(10.0)));
@@ -563,7 +530,6 @@ fn git_branch(root: &Path) -> Option<String> {
         .filter(|o| o.status.success())
         .and_then(|o| {
             let name = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            // Detached HEAD returns "HEAD" — treat as None
             if name == "HEAD" { None } else { Some(name) }
         })
 }
@@ -606,14 +572,12 @@ pub(crate) fn chrono_timestamp() -> String {
         .unwrap_or_default();
     let secs = now.as_secs();
 
-    // Simple UTC conversion (no leap seconds, good enough for timestamps)
     let days = secs / SECS_PER_DAY;
     let time_secs = secs % SECS_PER_DAY;
     let hours = time_secs / 3600;
     let minutes = (time_secs % 3600) / 60;
     let seconds = time_secs % 60;
 
-    // Convert days since epoch to y/m/d
     let (year, month, day) = days_to_ymd(days);
 
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
@@ -621,7 +585,6 @@ pub(crate) fn chrono_timestamp() -> String {
 
 /// Convert days since Unix epoch to (year, month, day).
 const fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    // Algorithm from Howard Hinnant's date library (public domain)
     let z = days + 719_468;
     let era = z / 146_097;
     let doe = z - era * 146_097;
@@ -647,14 +610,12 @@ pub fn save_snapshot(
     let path = explicit_path.map_or_else(
         || {
             let dir = root.join(".fallow").join("snapshots");
-            // Use the snapshot timestamp for the filename (replace colons for Windows compat)
             let filename = snapshot.timestamp.replace(':', "-");
             dir.join(format!("{filename}.json"))
         },
         Path::to_path_buf,
     );
 
-    // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create snapshot directory: {e}"))?;
@@ -696,7 +657,6 @@ pub fn load_snapshots(root: &Path) -> Vec<VitalSignsSnapshot> {
         }
     }
 
-    // Sort by timestamp (ISO 8601 sorts lexicographically)
     snapshots.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
     snapshots
 }
@@ -731,7 +691,6 @@ pub fn compute_trend(
 
     let mut metrics = Vec::new();
 
-    // Health Score — higher is better
     if let (Some(prev_score), Some(cur_score)) = (prev.score, current_score) {
         metrics.push(make_metric(
             "score",
@@ -745,7 +704,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Dead File % — lower is better
     if let (Some(prev_val), Some(cur_val)) =
         (prev.vital_signs.dead_file_pct, current_vs.dead_file_pct)
     {
@@ -767,7 +725,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Dead Export % — lower is better
     if let (Some(prev_val), Some(cur_val)) =
         (prev.vital_signs.dead_export_pct, current_vs.dead_export_pct)
     {
@@ -789,7 +746,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Avg Cyclomatic — lower is better
     {
         metrics.push(make_metric(
             "avg_cyclomatic",
@@ -803,7 +759,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Maintainability — higher is better
     if let (Some(prev_val), Some(cur_val)) = (
         prev.vital_signs.maintainability_avg,
         current_vs.maintainability_avg,
@@ -820,7 +775,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Unused Deps — lower is better
     if let (Some(prev_val), Some(cur_val)) = (
         prev.vital_signs.unused_dep_count,
         current_vs.unused_dep_count,
@@ -837,7 +791,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Circular Deps — lower is better
     if let (Some(prev_val), Some(cur_val)) = (
         prev.vital_signs.circular_dep_count,
         current_vs.circular_dep_count,
@@ -854,7 +807,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Hotspot Count — lower is better
     if let (Some(prev_val), Some(cur_val)) =
         (prev.vital_signs.hotspot_count, current_vs.hotspot_count)
     {
@@ -870,7 +822,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Unit size very-high-risk % — lower is better
     if let (Some(prev_profile), Some(cur_profile)) = (
         &prev.vital_signs.unit_size_profile,
         &current_vs.unit_size_profile,
@@ -887,7 +838,6 @@ pub fn compute_trend(
         ));
     }
 
-    // P95 fan-in — lower is better
     if let (Some(prev_val), Some(cur_val)) = (prev.vital_signs.p95_fan_in, current_vs.p95_fan_in) {
         metrics.push(make_metric(
             "p95_fan_in",
@@ -901,7 +851,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Duplication % — lower is better
     if let (Some(prev_val), Some(cur_val)) =
         (prev.vital_signs.duplication_pct, current_vs.duplication_pct)
     {
@@ -923,7 +872,6 @@ pub fn compute_trend(
         ));
     }
 
-    // Determine overall direction
     let (improving, declining) =
         metrics
             .iter()
@@ -1044,7 +992,6 @@ mod tests {
         reason = "test values are trivially small"
     )]
     fn make_modules() -> Vec<fallow_core::extract::ModuleInfo> {
-        // Cyclomatic values: 2, 4, 6, 8, 10, 12, 14, 16, 18, 20
         (0..10)
             .map(|i| make_module(i, (i as u16 + 1) * 2))
             .collect()
@@ -1073,9 +1020,7 @@ mod tests {
             analysis_counts: None,
         };
         let vs = compute_vital_signs(&input);
-        // avg of 2,4,6,8,10,12,14,16,18,20 = 11.0
         assert!((vs.avg_cyclomatic - 11.0).abs() < f64::EPSILON);
-        // p90 of sorted [2,4,6,8,10,12,14,16,18,20] at index ceil(10*0.9)-1 = 8 → value 18
         assert_eq!(vs.p90_cyclomatic, 18);
     }
 
@@ -1207,7 +1152,6 @@ mod tests {
         assert!(saved_path.exists());
         assert!(saved_path.starts_with(root.join(".fallow/snapshots")));
 
-        // Load and verify
         let content = std::fs::read_to_string(&saved_path).unwrap();
         let loaded: VitalSignsSnapshot = serde_json::from_str(&content).unwrap();
         assert_eq!(loaded.snapshot_schema_version, SNAPSHOT_SCHEMA_VERSION);
@@ -1258,11 +1202,8 @@ mod tests {
 
     #[test]
     fn days_to_ymd_known_date() {
-        // 2026-03-25 is 20,537 days since epoch
         assert_eq!(days_to_ymd(20_537), (2026, 3, 25));
     }
-
-    // --- compute_health_score ---
 
     #[test]
     fn health_score_perfect() {
@@ -1284,14 +1225,12 @@ mod tests {
 
     #[test]
     fn health_score_no_optional_metrics() {
-        // Only avg_cyclomatic and p90_cyclomatic are always present
         let vs = VitalSigns {
             avg_cyclomatic: 1.0,
             p90_cyclomatic: 2,
             ..Default::default()
         };
         let score = compute_health_score(&vs, 0);
-        // Only complexity penalties apply (both 0 since below thresholds)
         assert!((score.score - 100.0).abs() < f64::EPSILON);
         assert_eq!(score.grade, "A");
         assert!(score.penalties.dead_files.is_none());
@@ -1309,9 +1248,6 @@ mod tests {
             ..Default::default()
         };
         let score = compute_health_score(&vs, 100);
-        // dead_file: min(50*0.2, 15) = 10
-        // dead_export: min(30*0.2, 15) = 6
-        // total penalty: 16
         assert!((score.score - 84.0).abs() < 0.1);
         assert_eq!(score.grade, "B");
     }
@@ -1324,9 +1260,6 @@ mod tests {
             ..Default::default()
         };
         let score = compute_health_score(&vs, 100);
-        // complexity: min((5.5-1.5)*5, 20) = 20
-        // p90: min(15-10, 10) = 5
-        // total penalty: 25
         assert!((score.score - 75.0).abs() < 0.1);
         assert_eq!(score.grade, "B");
     }
@@ -1357,9 +1290,7 @@ mod tests {
             hotspot_count: Some(5),
             ..Default::default()
         };
-        // 5 hotspots in 100 files = 5% = 10 points
         let score_100 = compute_health_score(&vs, 100);
-        // 5 hotspots in 1000 files = 0.5% = 1 point
         let score_1000 = compute_health_score(&vs, 1000);
         assert!(score_1000.score > score_100.score);
     }
@@ -1408,7 +1339,6 @@ mod tests {
         let score = compute_health_score(&vs, 100);
         assert_eq!(score.penalties.duplication, Some(5.0));
 
-        // Below threshold: 4% duplication should not penalize
         let vs_low = VitalSigns {
             duplication_pct: Some(4.0),
             ..vs.clone()
@@ -1416,7 +1346,6 @@ mod tests {
         let score_low = compute_health_score(&vs_low, 100);
         assert_eq!(score_low.penalties.duplication, Some(0.0));
 
-        // At cap: 20% should cap at 10 points
         let vs_high = VitalSigns {
             duplication_pct: Some(20.0),
             ..vs
@@ -1471,8 +1400,6 @@ mod tests {
         assert_eq!(score.grade, "D");
     }
 
-    // --- load_snapshots ---
-
     #[test]
     fn load_snapshots_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -1490,7 +1417,6 @@ mod tests {
         let older = make_test_snapshot("2026-01-01T00:00:00Z", Some(72.0));
         let newer = make_test_snapshot("2026-03-01T00:00:00Z", Some(78.0));
 
-        // Write newer first to test sorting
         std::fs::write(
             snap_dir.join("2026-03-01T00-00-00Z.json"),
             serde_json::to_string(&newer).unwrap(),
@@ -1541,8 +1467,6 @@ mod tests {
         assert!(loaded.is_empty());
     }
 
-    // --- compute_trend ---
-
     #[test]
     fn compute_trend_no_snapshots() {
         let vs = make_test_vital_signs();
@@ -1579,7 +1503,6 @@ mod tests {
         assert_eq!(trend.snapshots_loaded, 1);
         assert_eq!(trend.overall_direction, TrendDirection::Improving);
 
-        // Score should be improving (72 → 78)
         let score_metric = trend.metrics.iter().find(|m| m.name == "score").unwrap();
         assert_eq!(score_metric.direction, TrendDirection::Improving);
         assert!((score_metric.delta - 6.0).abs() < f64::EPSILON);
@@ -1604,7 +1527,6 @@ mod tests {
         let counts = make_test_counts();
 
         let trend = compute_trend(&vs, &counts, Some(78.0), &[older, newer]).unwrap();
-        // Should compare against newer (72.0), not older (60.0)
         assert_eq!(trend.compared_to.score, Some(72.0));
         assert_eq!(trend.snapshots_loaded, 2);
     }
@@ -1624,8 +1546,6 @@ mod tests {
         assert!(dead_files.previous_count.is_some());
         assert!(dead_files.current_count.is_some());
     }
-
-    // --- test helpers ---
 
     fn make_test_vital_signs() -> VitalSigns {
         VitalSigns {

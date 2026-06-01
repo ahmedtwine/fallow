@@ -7,8 +7,6 @@ use rustc_hash::FxHashSet;
 
 use crate::error::emit_error;
 
-// ── Workspace filtering ──────────────────────────────────────────
-
 /// Scope results to the union of the given workspace roots.
 ///
 /// The full cross-workspace graph is still built (so cross-package imports
@@ -24,7 +22,6 @@ pub fn filter_to_workspaces(
     let pkg_jsons: Vec<PathBuf> = ws_roots.iter().map(|r| r.join("package.json")).collect();
     let in_pkg_jsons = |p: &Path| pkg_jsons.iter().any(|pkg| p == pkg);
 
-    // File-scoped issues: retain only those under any workspace root
     results.unused_files.retain(|f| any_under(&f.file.path));
     results.unused_exports.retain(|e| any_under(&e.export.path));
     results.unused_types.retain(|e| any_under(&e.export.path));
@@ -41,7 +38,6 @@ pub fn filter_to_workspaces(
         .unresolved_imports
         .retain(|i| any_under(&i.import.path));
 
-    // Dependency issues: scope to matching workspaces' package.json files
     results
         .unused_dependencies
         .retain(|d| in_pkg_jsons(&d.dep.path));
@@ -58,12 +54,10 @@ pub fn filter_to_workspaces(
         .test_only_dependencies
         .retain(|d| in_pkg_jsons(&d.dep.path));
 
-    // Unlisted deps: keep only if any importing file is in a matched workspace
     results
         .unlisted_dependencies
         .retain(|d| d.dep.imported_from.iter().any(|s| any_under(&s.path)));
 
-    // Duplicate exports: filter locations to workspace, drop groups with < 2
     for dup in &mut results.duplicate_exports {
         dup.export.locations.retain(|loc| any_under(&loc.path));
     }
@@ -71,37 +65,25 @@ pub fn filter_to_workspaces(
         .duplicate_exports
         .retain(|d| d.export.locations.len() >= 2);
 
-    // Circular deps: keep cycles where at least one file is in a matched workspace
     results
         .circular_dependencies
         .retain(|c| c.cycle.files.iter().any(|f| any_under(f)));
 
-    // Re-export cycles: same workspace-scoping shape as circular deps.
     results
         .re_export_cycles
         .retain(|c| c.cycle.files.iter().any(|f| any_under(f)));
 
-    // Boundary violations: keep if the importing file is in a matched workspace
     results
         .boundary_violations
         .retain(|v| any_under(&v.violation.from_path));
 
-    // Stale suppressions: keep if the file is in a matched workspace
     results.stale_suppressions.retain(|s| any_under(&s.path));
 
-    // Catalog entries live in the project-root pnpm-workspace.yaml, not per-workspace.
-    // Workspace scoping is asking "show me findings for this subset of packages";
-    // catalog hygiene is a whole-project concern, so drop it when --workspace narrows.
     results.unused_catalog_entries.clear();
     results.empty_catalog_groups.clear();
-    // Unresolved catalog references are anchored at consumer package.json paths,
-    // so they ARE workspace-scoped: retain only findings under the active set.
     results
         .unresolved_catalog_references
         .retain(|r| any_under(&r.reference.path));
-    // Dependency overrides live in the project-root pnpm-workspace.yaml or
-    // root package.json's pnpm.overrides, not per-workspace. Same reasoning as
-    // unused-catalog-entries: drop when --workspace narrows.
     results.unused_dependency_overrides.clear();
     results.misconfigured_dependency_overrides.clear();
 }
@@ -300,19 +282,10 @@ fn find_matches(
     Ok(hits)
 }
 
-// ── Changed-file filtering ───────────────────────────────────────
-
-// `filter_changed_files`, `try_get_changed_files`, `get_changed_files`, and
-// `ChangedFilesError` were promoted to `fallow_core::changed_files` so the LSP
-// (which depends on `fallow-core` but not `fallow-cli`) can reuse the exact
-// same filter and git-resolution logic. Re-exported below for the existing
-// internal call sites in this crate.
 pub use fallow_core::changed_files::{
     filter_results_by_changed_files as filter_changed_files, get_changed_files,
     try_get_changed_files,
 };
-
-// ── Diff-line filtering (issue #424) ─────────────────────────────
 
 /// Drop findings whose source line is not inside an added hunk of the
 /// supplied unified diff. Range-shaped findings (clone instances live in
@@ -356,10 +329,8 @@ pub fn filter_results_by_diff(
         }
     };
 
-    // File-only findings: keep when the file appears anywhere in the diff.
     results.unused_files.retain(|f| touches_file(&f.file.path));
 
-    // Point findings: keep when the source line is an added line.
     results
         .unused_exports
         .retain(|e| line_in_diff(&e.export.path, e.export.line));
@@ -379,11 +350,6 @@ pub fn filter_results_by_diff(
         .unresolved_imports
         .retain(|i| line_in_diff(&i.import.path, i.import.line));
 
-    // Unlisted dependencies: keep if any importing site is in the diff.
-    // The package-name finding wraps an aggregate of import sites; we
-    // narrow the sites to the in-diff subset first so a future renderer
-    // can show only the relevant ones, then drop the finding entirely if
-    // nothing remains.
     for unlisted in &mut results.unlisted_dependencies {
         unlisted
             .dep
@@ -394,21 +360,6 @@ pub fn filter_results_by_diff(
         .unlisted_dependencies
         .retain(|d| !d.dep.imported_from.is_empty());
 
-    // Duplicate exports: group-level retention without narrowing the
-    // locations list. A PR that adds ONE new duplicate against an
-    // existing off-diff location is exactly the case this filter must
-    // surface: the PR caused the duplicate, so the finding belongs in
-    // the review comment even though only one location is in the diff.
-    // Keep the finding if ANY location is in the diff, and KEEP ALL
-    // locations so the renderer can show the conflict pair (in-diff
-    // location + off-diff sibling) for context and so the
-    // `add-to-config` action has the full list to suppress.
-    //
-    // Diverges from `filter_to_workspaces` (which DOES narrow + drop
-    // below 2) because workspace scoping asks "show me only THIS
-    // workspace's duplicates", whereas the diff filter asks "show me
-    // duplicates THIS PR caused or touched", which inherently spans
-    // diff and non-diff locations.
     results.duplicate_exports.retain(|d| {
         d.export
             .locations
@@ -416,51 +367,22 @@ pub fn filter_results_by_diff(
             .any(|loc| line_in_diff(&loc.path, loc.line))
     });
 
-    // Circular dependencies: keep cycle if any file in the cycle is in
-    // the diff. File-level rather than line-level because the cycle's
-    // line/col anchors at the import site of the first file only, but
-    // the cycle itself spans every file in `files[]`.
     results
         .circular_dependencies
         .retain(|c| c.cycle.files.iter().any(|f| touches_file(f)));
 
-    // Re-export cycles: same file-level treatment as circular deps; the
-    // diagnostic anchors at line 1 col 0 of each member so line-level
-    // diff matching would over-prune.
     results
         .re_export_cycles
         .retain(|c| c.cycle.files.iter().any(|f| touches_file(f)));
 
-    // Boundary violations: drop when the importing source line is not in
-    // the diff. The violation anchors at the offending `import` statement
-    // in `from_path`, so use that.
     results
         .boundary_violations
         .retain(|v| line_in_diff(&v.violation.from_path, v.violation.line));
 
-    // Stale suppressions: drop when the suppression's source line is not
-    // in the diff. A stale `// fallow-ignore-next-line` is still real
-    // even when the PR doesn't touch it, but the diff filter is opt-in
-    // noise reduction, so consistent line-level treatment is the choice.
     results
         .stale_suppressions
         .retain(|s| line_in_diff(&s.path, s.line));
-
-    // Project-level findings (deps, catalog, override) bypass the filter.
-    // These anchor at fixed lines inside `package.json` /
-    // `pnpm-workspace.yaml` that a PR rarely touches even when the PR
-    // semantically caused the finding (e.g., removing the last consumer
-    // of a dep). See `pr_comment::PROJECT_LEVEL_RULE_IDS` for the
-    // canonical list and rationale.
-    //   unused_dependencies, unused_dev_dependencies,
-    //   unused_optional_dependencies, type_only_dependencies,
-    //   test_only_dependencies, unused_catalog_entries,
-    //   empty_catalog_groups, unresolved_catalog_references,
-    //   unused_dependency_overrides, misconfigured_dependency_overrides
-    // are NOT touched here.
 }
-
-// ── Changed workspaces ───────────────────────────────────────────
 
 /// Given a list of discovered workspaces and a set of changed file paths,
 /// return the indices of workspaces that contain any changed file.
@@ -704,8 +626,6 @@ mod tests {
         let ws_root = PathBuf::from("/project/packages/ui");
         filter_to_workspace(&mut results, &ws_root);
 
-        // "helper" had only 1 location in workspace — dropped
-        // "utils" had 2 locations in workspace — kept
         assert_eq!(results.duplicate_exports.len(), 1);
         assert_eq!(results.duplicate_exports[0].export.export_name, "utils");
     }
@@ -828,8 +748,6 @@ mod tests {
         assert_eq!(results.unused_class_members[0].member.member_name, "init");
     }
 
-    // ── filter_changed_files ────────────────────────────────────────
-
     #[test]
     fn filter_changed_files_keeps_only_changed() {
         let mut results = AnalysisResults::default();
@@ -882,7 +800,6 @@ mod tests {
 
         filter_changed_files(&mut results, &changed);
 
-        // Dependency-level issues are NOT filtered by changed files
         assert_eq!(results.unused_dependencies.len(), 1);
         assert_eq!(results.unused_dev_dependencies.len(), 1);
     }
@@ -948,7 +865,6 @@ mod tests {
 
         filter_changed_files(&mut results, &changed);
 
-        // Only one location is in changed files -> group dropped
         assert!(results.duplicate_exports.is_empty());
     }
 
@@ -1051,8 +967,6 @@ mod tests {
 
         assert!(results.unlisted_dependencies.is_empty());
     }
-
-    // ── filter_to_workspace: additional coverage ───────────────────
 
     #[test]
     fn filter_to_workspace_scopes_optional_dependencies() {
@@ -1182,7 +1096,6 @@ mod tests {
         let ws_root = PathBuf::from("/project/packages/ui");
         filter_to_workspace(&mut results, &ws_root);
 
-        // Kept because at least one file is in the workspace
         assert_eq!(results.circular_dependencies.len(), 1);
     }
 
@@ -1222,8 +1135,6 @@ mod tests {
         filter_to_workspace(&mut results, &ws_root);
         assert_eq!(results.total_issues(), 0);
     }
-
-    // ── filter_changed_files: additional coverage ──────────────────
 
     #[test]
     fn filter_changed_files_filters_types_by_path() {
@@ -1363,7 +1274,6 @@ mod tests {
 
         filter_changed_files(&mut results, &changed);
 
-        // Dependency-level issues are NOT filtered by changed files
         assert_eq!(results.unused_optional_dependencies.len(), 1);
         assert_eq!(results.type_only_dependencies.len(), 1);
         assert_eq!(results.test_only_dependencies.len(), 1);
@@ -1545,8 +1455,6 @@ mod tests {
         assert_eq!(results.unresolved_imports[0].import.specifier, "./missing");
     }
 
-    // ── multi-workspace resolution ──────────────────────────────────
-
     fn ws(name: &str, rel: &str) -> fallow_config::WorkspaceInfo {
         fallow_config::WorkspaceInfo {
             root: PathBuf::from("/project").join(rel),
@@ -1579,8 +1487,6 @@ mod tests {
 
     #[test]
     fn find_matches_exact_name_short_circuits_glob_metachars() {
-        // Package named `web-[staging]` contains glob metachars. Exact-name
-        // short-circuit must match it without attempting to compile as a glob.
         let workspaces = vec![ws("web-[staging]", "apps/web-staging")];
         let rels = rel(&workspaces);
         let hits = find_matches(
@@ -1602,7 +1508,6 @@ mod tests {
         ];
         let rels = rel(&workspaces);
 
-        // Glob matching via name
         let hits = find_matches(
             "@scope/*",
             &workspaces,
@@ -1612,7 +1517,6 @@ mod tests {
         .unwrap();
         assert_eq!(hits, vec![0]);
 
-        // Glob matching via relative path
         let hits = find_matches(
             "apps/*",
             &workspaces,
@@ -1627,7 +1531,6 @@ mod tests {
     fn find_matches_invalid_glob_after_no_literal_match_errors() {
         let workspaces = vec![ws("web", "apps/web")];
         let rels = rel(&workspaces);
-        // `[` without closing is invalid glob syntax AND not a literal name.
         assert!(
             find_matches(
                 "web-[bad",
@@ -1744,8 +1647,6 @@ mod tests {
         assert_eq!(results.unused_files.len(), 0);
     }
 
-    // ── workspaces_containing_any (pure mapping) ────────────────────
-
     #[test]
     fn workspaces_containing_any_returns_only_hits() {
         let workspaces = vec![
@@ -1763,8 +1664,6 @@ mod tests {
 
     #[test]
     fn workspaces_containing_any_ignores_root_only_changes() {
-        // Root-level changes (lockfiles, CI config, top package.json) must not
-        // implicitly scope to "every workspace": they map to zero workspaces.
         let workspaces = vec![ws("ui", "packages/ui"), ws("api", "packages/api")];
         let mut changed = FxHashSet::default();
         changed.insert(PathBuf::from("/project/package.json"));
@@ -1797,8 +1696,6 @@ mod tests {
         assert_eq!(hits, vec![1]);
     }
 
-    // ── resolve_workspace_scope ─────────────────────────────────────
-
     #[test]
     fn resolve_workspace_scope_neither_flag_returns_none() {
         let root = Path::new("/project");
@@ -1817,10 +1714,6 @@ mod tests {
         );
     }
 
-    // ChangedFilesError::describe is tested in fallow_core::changed_files
-
-    // ── filter_results_by_diff (issue #424) ────────────────────────
-
     fn build_diff(text: &str) -> crate::report::ci::diff_filter::DiffIndex {
         crate::report::ci::diff_filter::DiffIndex::from_unified_diff(text)
     }
@@ -1837,7 +1730,6 @@ mod tests {
         );
         let root = Path::new("/project");
         let mut results = AnalysisResults::default();
-        // Touched line 11 -> kept; untouched line 30 -> dropped.
         results
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {
@@ -1871,10 +1763,6 @@ mod tests {
 
     #[test]
     fn filter_by_diff_keeps_project_level_deps_even_when_diff_misses_package_json() {
-        // The bug Mira flagged: deleting `import 'lodash'` from a source
-        // file makes `lodash` an unused-dep, but the PR doesn't touch
-        // `package.json` so a naive line filter would silently drop the
-        // finding. Project-level findings MUST bypass the line filter.
         let diff = build_diff(
             "diff --git a/src/a.ts b/src/a.ts\n\
              --- a/src/a.ts\n\
@@ -1991,15 +1879,6 @@ mod tests {
 
     #[test]
     fn filter_by_diff_keeps_duplicate_export_when_pr_adds_one_against_off_diff_existing() {
-        // The bug an external reviewer caught: a PR adds a new duplicate
-        // export in `src/a.ts:1` against an existing off-diff location in
-        // `src/b.ts:5`. The PR semantically CAUSED the duplicate, but the
-        // prior implementation narrowed `locations` to only the in-diff
-        // entry, then dropped the finding for falling below the 2-location
-        // floor. Result: zero findings reported even though the diff
-        // introduced a real duplicate. The fix keeps the finding when ANY
-        // location overlaps the diff AND preserves both locations so the
-        // renderer can show the conflict pair.
         let diff = build_diff(
             "diff --git a/src/a.ts b/src/a.ts\n\
              --- a/src/a.ts\n\
@@ -2079,7 +1958,6 @@ mod tests {
             ));
         filter_results_by_diff(&mut results, &diff, root);
         assert_eq!(results.unlisted_dependencies.len(), 1);
-        // Only the in-diff import site survives the inner retain.
         assert_eq!(results.unlisted_dependencies[0].dep.imported_from.len(), 1);
         assert_eq!(
             results.unlisted_dependencies[0].dep.imported_from[0].path,

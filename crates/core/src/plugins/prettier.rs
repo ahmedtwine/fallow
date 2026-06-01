@@ -74,12 +74,6 @@ define_plugin! {
     resolve_config(config_path, source, _root) {
         let mut result = PluginResult::default();
 
-        // YAML / TOML configs (.prettierrc.{yml,yaml,toml}) are not JS, so the
-        // JS/TS parse path below cannot read their `plugins` array. Parse them
-        // with the matching data-format parser instead (issue #462: prettier
-        // plugins are no longer in the general tooling catalogue, so crediting
-        // them from the config file is the only path that keeps a genuinely-used
-        // plugin from surfacing as unused).
         if let Some(ext) = config_path.extension().and_then(|e| e.to_str()) {
             match ext {
                 "yml" | "yaml" => {
@@ -102,8 +96,6 @@ define_plugin! {
             }
         }
 
-        // Handle JSON configs (.prettierrc, .prettierrc.json). Prettier also
-        // accepts a package name string in package.json: { "prettier": "pkg" }.
         let is_json = config_path.extension().is_some_and(|ext| ext == "json")
             || config_path
                 .file_name()
@@ -124,15 +116,12 @@ define_plugin! {
         };
         let parse_path: &std::path::Path = &parse_path_buf;
 
-        // Extract imports from JS/TS configs
         let imports = config_parser::extract_imports(&parse_source, parse_path);
         for imp in &imports {
             let dep = crate::resolve::extract_package_name(imp);
             result.referenced_dependencies.push(dep);
         }
 
-        // plugins -> referenced dependencies
-        // e.g. { "plugins": ["prettier-plugin-svelte", "prettier-plugin-tailwindcss"] }
         let plugins =
             config_parser::extract_config_shallow_strings(&parse_source, parse_path, "plugins");
         for plugin in &plugins {
@@ -209,8 +198,6 @@ mod tests {
 
     #[test]
     fn resolve_config_yaml_plugins() {
-        // Issue #462: prettier-plugin-* is no longer in the tooling catalogue,
-        // so a YAML config's plugins array must be parsed to credit the plugin.
         let source = "plugins:\n  - prettier-plugin-svelte\n  - prettier-plugin-tailwindcss\n";
         let plugin = PrettierPlugin;
         let result =

@@ -1,5 +1,3 @@
-// ---- is_builtin_module tests (via predicates, used in find_unlisted_dependencies) ----
-
 #[test]
 fn builtin_module_subpaths() {
     assert!(super::super::super::predicates::is_builtin_module(
@@ -51,8 +49,6 @@ fn builtin_module_deno_std() {
     ));
 }
 
-// ---- is_implicit_dependency tests (used in find_unused_dependencies) ----
-
 #[test]
 fn implicit_dep_react_dom() {
     assert!(super::super::super::predicates::is_implicit_dependency(
@@ -89,11 +85,8 @@ fn implicit_dep_websocket_addons() {
     ));
 }
 
-// ---- is_path_alias tests (used in find_unlisted_dependencies) ----
-
 #[test]
 fn path_alias_not_reported_as_unlisted() {
-    // These should be detected as path aliases and skipped
     assert!(super::super::super::predicates::is_path_alias(
         "@/components/Foo"
     ));

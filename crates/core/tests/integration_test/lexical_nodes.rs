@@ -24,8 +24,6 @@ fn lexical_node_lifecycle_members_are_credited_but_real_dead_members_survive() {
         })
         .collect();
 
-    // Shared lifecycle / serialization / DOM-reconciliation hooks Lexical calls
-    // reflectively on every custom node (all three node bases).
     let shared = [
         "getType",
         "clone",
@@ -48,10 +46,6 @@ fn lexical_node_lifecycle_members_are_credited_but_real_dead_members_survive() {
         }
     }
 
-    // `isInline` is an ElementNode / DecoratorNode layout hook, credited on
-    // VideoNode (DecoratorNode) and CustomParagraphNode (ElementNode). It is
-    // NOT a TextNode hook, so ColoredTextNode.isInline (defined in the fixture)
-    // MUST still be reported. This pins the per-base scoping boundary.
     for class in ["VideoNode", "CustomParagraphNode"] {
         assert!(
             !unused_members.contains(&format!("{class}.isInline")),
@@ -65,9 +59,6 @@ fn lexical_node_lifecycle_members_are_credited_but_real_dead_members_survive() {
          be reported; unused_class_members = {unused_members:?}"
     );
 
-    // `decorate` is DecoratorNode-only, credited on VideoNode. It is NOT an
-    // ElementNode hook, so CustomParagraphNode.decorate (defined in the
-    // fixture) MUST still be reported.
     assert!(
         !unused_members.contains(&"VideoNode.decorate".to_string()),
         "VideoNode.decorate is a DecoratorNode render hook and must not surface \
@@ -79,9 +70,6 @@ fn lexical_node_lifecycle_members_are_credited_but_real_dead_members_survive() {
          still be reported; unused_class_members = {unused_members:?}"
     );
 
-    // Scoping proof: genuinely-unused non-lifecycle methods on the same Lexical
-    // node subclasses MUST still be reported. The plugin credits named hooks,
-    // not the whole class.
     for dead in [
         "VideoNode.helperNeverCalled",
         "CustomParagraphNode.paragraphHelper",

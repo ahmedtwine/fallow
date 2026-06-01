@@ -52,7 +52,6 @@ use crate::template_usage::TemplateUsage;
 /// `@ember/component` in strict mode). Plain `input` / `textarea` are HTML
 /// DOM elements, never Ember tokens, and aren't listed.
 const BUILTIN_KEYWORDS: &[&str] = &[
-    // Control-flow blocks and inline forms
     "if",
     "unless",
     "else",
@@ -62,10 +61,6 @@ const BUILTIN_KEYWORDS: &[&str] = &[
     "with",
     "in-element",
     "key",
-    // Component / yield machinery (`component`, `helper`, `modifier` are
-    // template-language keywords that introduce a `(component "name" ...)`
-    // / `(helper ...)` / `(modifier ...)` sub-expression. They are NOT the
-    // same as the same-named JS bindings a user might import).
     "yield",
     "outlet",
     "component",
@@ -73,13 +68,10 @@ const BUILTIN_KEYWORDS: &[&str] = &[
     "modifier",
     "mount",
     "unbound",
-    // Built-in components and helpers that are still ambient in strict mode
     "link-to",
     "LinkTo",
-    // Debugging
     "debugger",
     "log",
-    // Literal-name keywords
     "true",
     "false",
     "null",
@@ -103,11 +95,6 @@ pub fn collect_glimmer_template_usage(
     if template_ranges.is_empty() {
         return usage;
     }
-    // Note: an empty `imported_bindings` set used to short-circuit here, but
-    // the scanner ALSO emits `this.<member>` accesses for class-member
-    // tracking. Those don't depend on imports, so we always walk every
-    // template body. `credit_token` / `credit_tag_name` handle empty
-    // imports cheaply (one set lookup short-circuits before any allocation).
 
     for range in template_ranges {
         let Some(body) = template_body(source, range.clone()) else {
@@ -130,15 +117,11 @@ fn template_body(source: &str, range: Range<usize>) -> Option<&str> {
     let slice = source.get(range)?;
     let body_start = slice.find('>').map(|i| i + 1)?;
     let body_end = slice.rfind("</template>").unwrap_or(slice.len());
-    // `<=` because an empty body (`<template></template>`) has no tokens to
-    // credit, so skipping it here avoids two redundant scanner passes.
     if body_end <= body_start {
         return None;
     }
     slice.get(body_start..body_end)
 }
-
-// -- block params ---------------------------------------------------------
 
 /// Walk a template body and harvest every identifier introduced via
 /// `as |x y|` block-parameter syntax. The scan is purely textual and does
@@ -153,12 +136,10 @@ fn extract_block_params(body: &str) -> Vec<String> {
     while let Some(relative) = body[cursor..].find("as ") {
         let absolute = cursor + relative;
         let after_as = absolute + "as ".len();
-        // Find the next pipe; the matching close pipe defines the param list.
         let Some(open_pipe_rel) = body[after_as..].find('|') else {
             break;
         };
         let open_pipe = after_as + open_pipe_rel;
-        // Only whitespace may appear between `as ` and the opening pipe.
         if body[after_as..open_pipe]
             .bytes()
             .any(|b| !b.is_ascii_whitespace())
@@ -185,8 +166,6 @@ fn extract_block_params(body: &str) -> Vec<String> {
     locals
 }
 
-// -- tag scanning ---------------------------------------------------------
-
 /// Scan opening element tags for PascalCase component invocations.
 /// `<HelloWorld @x="y" />` credits binding `HelloWorld`.
 ///
@@ -211,10 +190,6 @@ fn scan_tags(
             index += 1;
             continue;
         }
-        // HTML comment: `<!-- ... -->`. Skip the entire comment body so a
-        // PascalCase tag-shape inside a comment (`<!-- <Foo /> -->`) does
-        // not credit `Foo`. Both Glimmer and HTML treat the comment body as
-        // opaque, so this is correct.
         if bytes[index..].starts_with(b"<!--") {
             let after_open = index + b"<!--".len();
             index = body[after_open..]
@@ -222,9 +197,6 @@ fn scan_tags(
                 .map_or(bytes.len(), |rel| after_open + rel + b"-->".len());
             continue;
         }
-        // Skip closing tags, other `<!` shapes (doctype, CDATA), and
-        // processing instructions. Advance by one byte and keep scanning;
-        // the loop will re-anchor on the next `<`.
         let next = bytes.get(index + 1).copied();
         if matches!(next, Some(b'/' | b'!' | b'?')) {
             index += 1;
@@ -236,7 +208,6 @@ fn scan_tags(
             continue;
         }
 
-        // Read a plain identifier tag name (A-Z, a-z, 0-9, underscore, $).
         let name_start = index + 1;
         let mut end = name_start;
         while end < bytes.len() {
@@ -249,14 +220,9 @@ fn scan_tags(
         if end > name_start {
             credit_binding(&body[name_start..end], imported_bindings, locals, usage);
         }
-        // `end >= name_start + 1 = index + 2` whenever we matched a tag, and
-        // when we didn't `end == name_start == index + 1`. Either way `end`
-        // already advances past the current `<`, no `.max()` needed.
         index = end;
     }
 }
-
-// -- mustache scanning ----------------------------------------------------
 
 /// Walk every `{{ ... }}` section in the template body and credit any
 /// imported bindings or member-accesses referenced inside. Triple-stash
@@ -305,9 +271,6 @@ fn scan_mustache_inner(
     if inner.is_empty() {
         return;
     }
-    // Block markers: `#each`, `/each`, `^else`. Skip the leading sigil but
-    // keep tokenizing the rest of the line. The helper name itself (e.g.
-    // `each`) is a built-in we filter below, but its arguments aren't.
     let inner = inner
         .strip_prefix('#')
         .or_else(|| inner.strip_prefix('/'))
@@ -330,23 +293,15 @@ fn credit_token(
         return;
     }
 
-    // Built-in keywords (`if`, `each`, `yield`, ...). Checked first so the
-    // hot path for control-flow blocks short-circuits before any of the
-    // shape-dispatch branches below run. Keywords are plain identifiers, so
-    // none of the later branches (sub-expressions in parens, `key=value`
-    // named args, `@arg`, `this.*`, dotted references) would consume them
-    // anyway. Moving the check up just avoids the wasted work.
     if BUILTIN_KEYWORDS.contains(&token) {
         return;
     }
 
-    // Sub-expression: recurse into the parens.
     if let Some(stripped) = token.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
         scan_mustache_inner(stripped, imported_bindings, locals, usage);
         return;
     }
 
-    // Named argument: `key=value`; credit the value, drop the key.
     if let Some((_key, value)) = token.split_once('=')
         && !value.is_empty()
     {
@@ -354,45 +309,19 @@ fn credit_token(
         return;
     }
 
-    // Literals: numbers, strings, hashbar negatives.
     if is_literal(token) {
         return;
     }
 
-    // `@arg` references are template arguments. Never resolve to an import
-    // binding and never emit passing the component.
     if token.starts_with('@') || token == "this" {
         return;
     }
 
-    // `this.<member>` references a class field / method on the component.
-    // It's NOT an import binding, but each hop along the chain IS a
-    // class-member access. Emit one `MemberAccess` per segment so that:
-    //
-    //   `{{this.foo}}`         -> `(this, foo)`
-    //   `{{this.foo.bar}}`     -> `(this, foo)`, `(this.foo, bar)`
-    //   `{{this.deps.svc.x}}`  -> `(this, deps)`, `(this.deps, svc)`,
-    //                             `(this.deps.svc, x)`
-    //
-    // Mirrors the JS visitor's per-hop `visit_static_member_expression`
-    // emission (`crates/extract/src/visitor/visit_impl.rs`), which is what
-    // typed-instance-binding resolution and inherited-member propagation
-    // depend on. Without the deeper hops, a class field on a service
-    // referenced only through the template via
-    // `<Child @x={{this.svc.method}} />` would be flagged unused.
     if token.strip_prefix("this.").is_some() {
         emit_chain_member_accesses(token, usage);
         return;
     }
 
-    // Dotted reference: credit the head and emit member accesses along the
-    // chain. `utils.formatters.date` credits `utils` and emits
-    // `(utils, formatters)` + `(utils.formatters, date)`, matching the JS
-    // visitor's per-hop emission so cross-namespace member chains are
-    // tracked the same way through the template scanner. The head is still
-    // checked against `BUILTIN_KEYWORDS` because a dotted form like
-    // `each.foo` would not have been caught by the bare-keyword
-    // short-circuit at the top of this function.
     if let Some((head, _rest)) = token.split_once('.')
         && is_plain_identifier(head)
     {
@@ -404,7 +333,6 @@ fn credit_token(
         return;
     }
 
-    // Bare identifier.
     if is_plain_identifier(token) {
         credit_binding(token, imported_bindings, locals, usage);
     }
@@ -473,8 +401,6 @@ impl<'a> Iterator for TokenSplitter<'a> {
     }
 }
 
-// -- helpers --------------------------------------------------------------
-
 fn is_plain_identifier(token: &str) -> bool {
     let mut chars = token.chars();
     let Some(first) = chars.next() else {
@@ -526,7 +452,6 @@ fn emit_chain_member_accesses(token: &str, usage: &mut TemplateUsage) {
             return;
         }
         push_member_access(usage, &token[..object_end], member);
-        // Advance the object slice by `.<member>`.
         object_end += 1 + member.len();
     }
 }
@@ -569,10 +494,6 @@ mod tests {
 
     #[test]
     fn namespaced_tag_credits_only_head_segment() {
-        // Strict-mode `.gts` / `.gjs` does not use classic-resolver namespaced
-        // tags; if a user wrote one anyway we should at minimum credit the
-        // leading identifier (so a half-migrated file doesn't surface false
-        // unused-imports) and skip the rest.
         let usage = usage_for("<template><Forms::Input /></template>", &["Forms"]);
         assert!(usage.used_bindings.contains("Forms"));
         assert!(
@@ -583,9 +504,6 @@ mod tests {
 
     #[test]
     fn member_style_tag_credits_only_head_segment() {
-        // Same shape, dot separator. The leaf component should be imported
-        // directly in strict mode; if someone writes `<Buttons.Primary />`
-        // anyway, credit `Buttons` and leave `Primary` alone.
         let usage = usage_for("<template><Buttons.Primary /></template>", &["Buttons"]);
         assert!(usage.used_bindings.contains("Buttons"));
         assert!(usage.member_accesses.is_empty());
@@ -626,10 +544,6 @@ mod tests {
 
     #[test]
     fn this_and_arg_references_are_not_credited_as_imports() {
-        // Neither `this.name` nor `@arg` should credit the imported binding
-        // (these aren't module-scope identifiers). `this.name` DOES emit a
-        // `MemberAccess { this, name }` so class-member tracking can pick it
-        // up; `@arg` emits nothing.
         let usage = usage_for(
             "<template>{{this.name}} {{@arg}}</template>",
             &["name", "arg"],
@@ -639,12 +553,6 @@ mod tests {
 
     #[test]
     fn this_dot_member_emits_member_access() {
-        // `{{this.handleClick}}` references a class field on the component.
-        // The JS visitor records `MemberAccess { object: "this", member: "x" }`
-        // for in-code `this.x` reads, and the Glimmer scanner mirrors that
-        // so the unused-class-members analyzer credits members referenced
-        // ONLY through the template (e.g. arrow-function class fields
-        // passed to a child component via `@onClick={{this.handleClick}}`).
         let usage = usage_for(
             "<template>{{this.handleClick}} {{this.tab}}</template>",
             &[],
@@ -661,12 +569,6 @@ mod tests {
 
     #[test]
     fn this_dot_chained_emits_one_member_access_per_hop() {
-        // For `{{this.foo.bar.baz}}` we emit one `MemberAccess` per hop along
-        // the chain: `(this, foo)`, `(this.foo, bar)`, `(this.foo.bar, baz)`.
-        // Mirrors the JS visitor's per-hop emission so typed-instance-binding
-        // resolution (`this.deps.svc.method()`) and inherited-member
-        // propagation work the same way for template references as they do
-        // for code references.
         let usage = usage_for("<template>{{this.foo.bar.baz}}</template>", &[]);
         let access_keys: Vec<(&str, &str)> = usage
             .member_accesses
@@ -702,11 +604,6 @@ mod tests {
 
     #[test]
     fn deep_dotted_namespace_emits_chain_member_accesses() {
-        // `{{utils.formatters.date value}}` credits `utils` as a binding AND
-        // emits per-hop member accesses so cross-namespace chains work the
-        // same way as the JS visitor: `(utils, formatters)` and
-        // `(utils.formatters, date)`. Without this, the deeper hop is
-        // invisible and `date` on a nested namespace export goes unflagged.
         let usage = usage_for(
             "<template>{{utils.formatters.date value}}</template>",
             &["utils"],
@@ -734,16 +631,11 @@ mod tests {
     #[test]
     fn malformed_template_produces_empty_usage() {
         let usage = usage_for("<template>{{ unclosed", &["unclosed"]);
-        // Unclosed mustache yields no credits; the scan must not panic.
         assert!(usage.used_bindings.is_empty());
     }
 
     #[test]
     fn html_comment_in_template_does_not_credit_inner_tag() {
-        // PascalCase tag-shapes inside an HTML comment must NOT credit the
-        // import. Without the `<!--` skip in `scan_tags` the scanner would
-        // walk through the comment body and credit `Foo` from
-        // `<!-- <Foo /> -->`.
         let usage = usage_for(
             "<template><!-- <Foo /> --><Bar /></template>",
             &["Foo", "Bar"],
@@ -763,19 +655,12 @@ mod tests {
 
     #[test]
     fn builtin_keywords_are_not_credited() {
-        // Even if an import shadow-names a built-in keyword, the template's
-        // bareword should not be credited; that would mask real unused
-        // imports for users who happen to name a helper `if`.
         let usage = usage_for("<template>{{if condition \"a\" \"b\"}}</template>", &["if"]);
         assert!(usage.used_bindings.is_empty());
     }
 
     #[test]
     fn strict_mode_helper_imports_are_credited() {
-        // `hash`, `array`, `concat`, `fn`, `mut`, `get` are ambient in classic
-        // `.hbs` but must be imported from `@ember/helper` in strict mode.
-        // The scanner must credit them when used in `<template>`, otherwise
-        // every strict-mode app surfaces these imports as `unused-import`.
         for name in ["hash", "array", "concat", "fn", "mut", "get"] {
             let template = format!("<template>{{{{{name} a=1}}}}</template>");
             let usage = usage_for(&template, &[name]);
@@ -788,9 +673,6 @@ mod tests {
 
     #[test]
     fn strict_mode_input_textarea_tag_imports_are_credited() {
-        // `<Input />` and `<Textarea />` are ambient in classic `.hbs` but
-        // imported from `@ember/component` in strict mode. Same goes for
-        // their use inside a containing element.
         let usage = usage_for(
             "<template><form><Input /><Textarea /></form></template>",
             &["Input", "Textarea"],
@@ -801,10 +683,6 @@ mod tests {
 
     #[test]
     fn lowercase_dom_tags_are_never_credited() {
-        // `input` and `textarea` are HTML DOM elements, never Ember imports.
-        // Even if someone has `import { input } from '...'`, the scanner
-        // can't see a tag-name match because tag-name scanning only fires on
-        // ASCII-uppercase first chars.
         let usage = usage_for(
             "<template><input /><textarea /></template>",
             &["input", "textarea"],
@@ -819,7 +697,6 @@ mod tests {
             &["my-helper", "binding", "key"],
         );
         assert!(usage.used_bindings.contains("binding"));
-        // The key `key` is the attr name, not a value reference.
         assert!(!usage.used_bindings.contains("key"));
     }
 
@@ -831,12 +708,6 @@ mod tests {
 
     #[test]
     fn render_template_expression_form_credits_bindings() {
-        // Modern Ember integration tests use the `<template>...</template>`
-        // expression form inside a JS expression (e.g. `await render(...)`)
-        // rather than as a top-level component body. The scanner walks the
-        // ranges captured by `find_template_ranges`, which match the same
-        // bytes regardless of surrounding context, so bindings referenced
-        // ONLY through such an inline render call must still be credited.
         let usage = usage_for(
             "import { module, test } from 'qunit';\n\
              import { render } from '@ember/test-helpers';\n\

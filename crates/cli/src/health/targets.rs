@@ -106,7 +106,6 @@ fn compute_target_priority(
     hotspot_score: Option<f64>,
     thresholds: &DistributionThresholds,
 ) -> f64 {
-    // Normalize all inputs to [0, 1] so each weight is a true percentage share.
     let density_norm = score.complexity_density.min(1.0);
     let fan_in_norm = (score.fan_in as f64 / thresholds.fan_in_p95).min(1.0);
     let fan_out_norm = (score.fan_out as f64 / thresholds.fan_out_p95).min(1.0);
@@ -145,10 +144,8 @@ pub(super) fn compute_refactoring_targets(
     aux: &TargetAuxData,
     hotspots: &[HotspotEntry],
 ) -> (Vec<RefactoringTarget>, TargetThresholds) {
-    // Compute adaptive thresholds from the project's distribution
     let thresholds = compute_thresholds(file_scores);
 
-    // Build hotspot lookup by path for O(1) access
     let hotspot_map: rustc_hash::FxHashMap<&std::path::Path, &HotspotEntry> =
         hotspots.iter().map(|h| (h.path.as_path(), h)).collect();
 
@@ -166,7 +163,6 @@ pub(super) fn compute_refactoring_targets(
             .copied()
             .unwrap_or(0);
 
-        // Collect all contributing factors (using adaptive thresholds)
         let mut factors = Vec::new();
 
         if score.complexity_density > 0.3 {
@@ -259,12 +255,10 @@ pub(super) fn compute_refactoring_targets(
             });
         }
 
-        // Skip if no factors triggered
         if factors.is_empty() {
             continue;
         }
 
-        // Evaluate rules in priority order — first match determines category + recommendation
         let matched = try_match_rules(
             score,
             hotspot.copied(),
@@ -304,7 +298,6 @@ pub(super) fn compute_refactoring_targets(
         });
     }
 
-    // Sort by efficiency descending (quick wins first), break ties by priority desc, then path
     targets.sort_by(|a, b| {
         b.efficiency
             .partial_cmp(&a.efficiency)
@@ -343,7 +336,6 @@ fn try_match_rules(
     value_exports: usize,
     thresholds: &DistributionThresholds,
 ) -> Option<(RecommendationCategory, String)> {
-    // Rule 1: Urgent churn + complexity
     if let Some(h) = hotspot
         && h.score >= 50.0
         && matches!(h.trend, fallow_core::churn::ChurnTrend::Accelerating)
@@ -355,7 +347,6 @@ fn try_match_rules(
         ));
     }
 
-    // Rule 2: Circular dependency with high fan-in
     if is_circular && score.fan_in >= 5 {
         return Some((
             RecommendationCategory::BreakCircularDependency,
@@ -366,7 +357,6 @@ fn try_match_rules(
         ));
     }
 
-    // Rule 3: Split high-impact file (adaptive fan-in thresholds)
     let fan_in_high = thresholds.fan_in_p95 as usize;
     let fan_in_moderate = thresholds.fan_in_p75 as usize;
     if score.complexity_density > 0.3
@@ -382,7 +372,6 @@ fn try_match_rules(
         ));
     }
 
-    // Rule 4: Remove dead code (gate: >=3 value exports)
     if score.dead_code_ratio >= 0.5 && value_exports >= 3 {
         let unused_count = (score.dead_code_ratio * value_exports as f64).round() as usize;
         return Some((
@@ -395,7 +384,6 @@ fn try_match_rules(
         ));
     }
 
-    // Rule 5: Extract complex functions above cognitive extraction threshold
     if let Some(fns) = top_fns {
         let high: Vec<&(String, u32, u16)> = fns
             .iter()
@@ -416,7 +404,6 @@ fn try_match_rules(
         }
     }
 
-    // Rule 6: Extract dependencies (not for entry points, adaptive fan-out threshold)
     if !is_entry && score.fan_out >= thresholds.fan_out_p90 && score.maintainability_index < 60.0 {
         return Some((
             RecommendationCategory::ExtractDependencies,
@@ -427,7 +414,6 @@ fn try_match_rules(
         ));
     }
 
-    // Rule 7: High untested complexity risk (multiple high-CRAP functions)
     if score.crap_above_threshold >= 2 && score.complexity_density > 0.3 {
         return Some((
             RecommendationCategory::AddTestCoverage,
@@ -438,7 +424,6 @@ fn try_match_rules(
         ));
     }
 
-    // Rule 8: Circular dependency (low fan-in fallback)
     if is_circular {
         return Some((
             RecommendationCategory::BreakCircularDependency,
@@ -452,16 +437,13 @@ fn try_match_rules(
 /// Map recommendation category to confidence level based on data source reliability.
 const fn confidence_for_category(category: &RecommendationCategory) -> Confidence {
     match category {
-        // Deterministic: graph analysis (dead code, cycles) + AST analysis (complexity)
         RecommendationCategory::RemoveDeadCode
         | RecommendationCategory::BreakCircularDependency
         | RecommendationCategory::ExtractComplexFunctions
         | RecommendationCategory::AddTestCoverage => Confidence::High,
-        // Heuristic thresholds (fan-in/fan-out coupling)
         RecommendationCategory::SplitHighImpact | RecommendationCategory::ExtractDependencies => {
             Confidence::Medium
         }
-        // Depends on git history quality
         RecommendationCategory::UrgentChurnComplexity => Confidence::Low,
     }
 }
@@ -556,8 +538,6 @@ fn build_evidence(
             }
         }
         RecommendationCategory::AddTestCoverage => {
-            // Reuse top complex functions as evidence: these are the functions
-            // that need test coverage most urgently (highest cognitive complexity).
             let functions = top_fns
                 .map(|fns| {
                     fns.iter()
@@ -586,8 +566,6 @@ fn build_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- helpers ---
 
     fn make_score(overrides: impl FnOnce(&mut FileHealthScore)) -> FileHealthScore {
         let mut s = FileHealthScore {
@@ -619,8 +597,6 @@ mod tests {
         }
     }
 
-    // --- compute_thresholds ---
-
     #[test]
     fn thresholds_empty_scores_use_floors() {
         let t = compute_thresholds(&[]);
@@ -633,7 +609,6 @@ mod tests {
 
     #[test]
     fn thresholds_floors_prevent_degenerate_values() {
-        // All files have fan_in=1, fan_out=1 — floors should kick in
         let scores: Vec<FileHealthScore> = (0..10)
             .map(|i| {
                 make_score(|s| {
@@ -656,7 +631,6 @@ mod tests {
 
     #[test]
     fn thresholds_adapt_to_large_project() {
-        // Simulate a project with varied fan_in distribution including high values
         let mut scores: Vec<FileHealthScore> = (0..80)
             .map(|i| {
                 make_score(|s| {
@@ -666,7 +640,6 @@ mod tests {
                 })
             })
             .collect();
-        // Top 20% have higher fan_in — enough to push p95 above floors
         for i in 80..100 {
             scores.push(make_score(|s| {
                 s.path = std::path::PathBuf::from(format!("/src/{i}.ts"));
@@ -675,7 +648,6 @@ mod tests {
             }));
         }
         let t = compute_thresholds(&scores);
-        // p95 should reflect the distribution, not just the floor
         assert!(
             t.fan_in_p95 > 5.0,
             "p95 should exceed floor: {}",
@@ -687,8 +659,6 @@ mod tests {
             t.fan_out_p95
         );
     }
-
-    // --- compute_target_priority ---
 
     #[test]
     fn target_priority_all_zero() {
@@ -713,7 +683,6 @@ mod tests {
 
     #[test]
     fn target_priority_complexity_density_weight() {
-        // density=1.0, all else zero -> 30 points
         let score = make_score(|s| s.complexity_density = 1.0);
         let t = default_thresholds();
         let priority = compute_target_priority(&score, None, &t);
@@ -722,7 +691,6 @@ mod tests {
 
     #[test]
     fn target_priority_hotspot_weight() {
-        // hotspot_score=100 -> boost=1.0 -> 25 points
         let score = make_score(|_| {});
         let t = default_thresholds();
         let priority = compute_target_priority(&score, Some(100.0), &t);
@@ -731,7 +699,6 @@ mod tests {
 
     #[test]
     fn target_priority_dead_code_weight() {
-        // dead_code_ratio=1.0 -> 20 points
         let score = make_score(|s| s.dead_code_ratio = 1.0);
         let t = default_thresholds();
         let priority = compute_target_priority(&score, None, &t);
@@ -740,7 +707,6 @@ mod tests {
 
     #[test]
     fn target_priority_fan_in_weight() {
-        // fan_in=20 (== p95) -> norm=1.0 -> 15 points
         let score = make_score(|s| s.fan_in = 20);
         let t = default_thresholds();
         let priority = compute_target_priority(&score, None, &t);
@@ -749,7 +715,6 @@ mod tests {
 
     #[test]
     fn target_priority_fan_out_weight() {
-        // fan_out=30 (== p95) -> norm=1.0 -> 10 points
         let score = make_score(|s| s.fan_out = 30);
         let t = default_thresholds();
         let priority = compute_target_priority(&score, None, &t);
@@ -759,10 +724,8 @@ mod tests {
     #[test]
     fn target_priority_adapts_to_thresholds() {
         let score = make_score(|s| s.fan_in = 10);
-        // With threshold=20: norm=0.5 -> 7.5 points
         let t_default = default_thresholds();
         let p1 = compute_target_priority(&score, None, &t_default);
-        // With threshold=10: norm=1.0 -> 15 points
         let t_small = DistributionThresholds {
             fan_in_p95: 10.0,
             ..default_thresholds()
@@ -773,8 +736,6 @@ mod tests {
             "smaller project threshold should yield higher priority"
         );
     }
-
-    // --- confidence ---
 
     #[test]
     fn confidence_mapping() {
@@ -808,11 +769,8 @@ mod tests {
         ));
     }
 
-    // --- efficiency ---
-
     #[test]
     fn efficiency_surfaces_quick_wins() {
-        // Low effort, high priority should have higher efficiency than high effort, high priority
         let low_effort_priority = 60.0_f64;
         let high_effort_priority = 90.0_f64;
         let low_eff = low_effort_priority / EffortEstimate::Low.numeric();
@@ -825,8 +783,6 @@ mod tests {
 
     #[test]
     fn targets_sorted_by_efficiency_descending() {
-        // High-priority + high-effort (eff ~30) vs low-priority + low-effort (eff ~20)
-        // The low-effort file should appear first because efficiency = priority/effort
         let scores = vec![
             make_score(|s| {
                 s.path = std::path::PathBuf::from("/src/big.ts");
@@ -859,7 +815,6 @@ mod tests {
         };
         let (targets, _thresholds) = compute_refactoring_targets(&scores, &aux, &[]);
         assert!(targets.len() >= 2, "expected at least 2 targets");
-        // First target should have higher efficiency (quick win)
         assert!(
             targets[0].efficiency >= targets[1].efficiency,
             "targets should be sorted by efficiency desc: {} >= {}",
@@ -867,8 +822,6 @@ mod tests {
             targets[1].efficiency
         );
     }
-
-    // --- try_match_rules ---
 
     #[test]
     fn rule_no_match_clean_file() {
@@ -921,7 +874,6 @@ mod tests {
 
     #[test]
     fn rule_add_test_coverage_below_density_threshold() {
-        // crap_above >= 2 but density <= 0.3 -> rule does not fire
         let score = make_score(|s| {
             s.crap_above_threshold = 3;
             s.crap_max = 72.0;
@@ -961,11 +913,9 @@ mod tests {
 
     #[test]
     fn rule_dead_code_gate_too_few_exports() {
-        // dead_code_ratio high but only 2 value exports — below gate of 3
         let score = make_score(|s| s.dead_code_ratio = 0.8);
         let t = default_thresholds();
         let result = try_match_rules(&score, None, false, false, None, 2, &t);
-        // Should NOT match dead code rule
         assert!(result.is_none());
     }
 
@@ -1012,7 +962,6 @@ mod tests {
             s.maintainability_index = 50.0;
         });
         let t = default_thresholds();
-        // is_entry=true -> rule 6 should not match
         let result = try_match_rules(&score, None, false, true, None, 0, &t);
         assert!(result.is_none());
     }
@@ -1039,8 +988,6 @@ mod tests {
         let (cat, _) = result.unwrap();
         assert!(matches!(cat, RecommendationCategory::UrgentChurnComplexity));
     }
-
-    // --- compute_effort_estimate ---
 
     #[test]
     fn effort_high_for_large_file() {
@@ -1103,8 +1050,6 @@ mod tests {
         ));
     }
 
-    // --- build_evidence ---
-
     #[test]
     fn evidence_dead_code_includes_unused_exports() {
         let mut unused = rustc_hash::FxHashMap::default();
@@ -1160,7 +1105,6 @@ mod tests {
         assert!(ev.is_some());
         let ev = ev.unwrap();
         assert!(ev.unused_exports.is_empty());
-        // Only functions above COGNITIVE_EXTRACTION_THRESHOLD (25) included
         assert_eq!(ev.complex_functions.len(), 2);
         assert_eq!(ev.complex_functions[0].name, "processData");
         assert_eq!(ev.complex_functions[1].name, "handleEvent");
@@ -1222,8 +1166,6 @@ mod tests {
         assert!(ev.is_none());
     }
 
-    // --- percentile_usize ---
-
     #[test]
     fn percentile_empty_returns_zero() {
         assert!((percentile_usize(&[], 0.5)).abs() < f64::EPSILON);
@@ -1241,12 +1183,8 @@ mod tests {
         assert!((p50 - 5.0).abs() < f64::EPSILON);
     }
 
-    // --- rule priority ordering ---
-
     #[test]
     fn rule_urgent_churn_overrides_circular_dep() {
-        // Both Rule 1 (urgent churn) and Rule 2 (circular dep) could match
-        // Rule 1 has higher priority
         let score = make_score(|s| {
             s.complexity_density = 0.8;
             s.fan_in = 10;
@@ -1296,8 +1234,6 @@ mod tests {
             "two-function recommendation should include LOC: {rec}"
         );
     }
-
-    // --- contributing factors ---
 
     #[test]
     fn contributing_factor_hotspot() {
@@ -1478,7 +1414,6 @@ mod tests {
 
     #[test]
     fn rule_split_high_impact_moderate_fan_in_many_functions() {
-        // Rule 3 alternate path: fan_in >= p75 AND function_count >= 5
         let score = make_score(|s| {
             s.complexity_density = 0.5;
             s.fan_in = 10; // equals p75 in default thresholds

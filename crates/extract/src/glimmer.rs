@@ -28,15 +28,10 @@ pub fn find_template_ranges(source: &str) -> Vec<Range<usize>> {
 
     while let Some(relative_start) = source[cursor..].find("<template") {
         let start = cursor + relative_start;
-        // End of opening tag: the first `>` after `<template`. Scanning past
-        // the literal `<template` token avoids treating a `>` inside the
-        // word as a tag close.
         let after_template_word = start + "<template".len();
         let opening_end = source[after_template_word..]
             .find('>')
             .map_or(n, |r| after_template_word + r + 1);
-        // Find the matching closing tag; an unclosed `<template>` consumes
-        // to end-of-source.
         let close_end = source[opening_end..]
             .find("</template>")
             .map_or(n, |r| opening_end + r + "</template>".len());
@@ -84,15 +79,10 @@ pub fn strip_glimmer_templates(source: &str) -> Option<String> {
 
     while let Some(relative_start) = source[cursor..].find("<template") {
         let start = cursor + relative_start;
-        // End of opening tag: position just after the first `>` that follows
-        // `<template`. Scanning past the `<template` word avoids treating a
-        // `>` inside the literal substring as a tag close, and absorbs any
-        // attributes the opening tag may carry.
         let after_template_word = start + "<template".len();
         let opening_end = source[after_template_word..]
             .find('>')
             .map_or(n, |r| after_template_word + r + 1);
-        // Find the matching closing tag.
         let close_relative = source[opening_end..].find("</template>");
         let (close_start_abs, close_end) = match close_relative {
             Some(r) => (opening_end + r, opening_end + r + "</template>".len()),
@@ -106,8 +96,6 @@ pub fn strip_glimmer_templates(source: &str) -> Option<String> {
             in_expr_position && close_relative.is_some() && opening_len >= 2 && closing_len >= 2;
 
         if can_use_expr_form {
-            // Opening tag: `(` `` ` `` followed by spaces, preserving any
-            // newlines that may live inside a multi-line opening tag.
             bytes[start] = b'(';
             bytes[start + 1] = b'`';
             for byte in &mut bytes[start + 2..opening_end] {
@@ -115,14 +103,11 @@ pub fn strip_glimmer_templates(source: &str) -> Option<String> {
                     *byte = b' ';
                 }
             }
-            // Content: escape characters that would otherwise interpolate or
-            // terminate the template literal.
             for byte in &mut bytes[opening_end..close_start_abs] {
                 if matches!(*byte, b'`' | b'$' | b'\\') {
                     *byte = b' ';
                 }
             }
-            // Closing tag: spaces, then `` ` `` `)`. Newlines preserved.
             for byte in &mut bytes[close_start_abs..close_end - 2] {
                 if !matches!(*byte, b'\n' | b'\r') {
                     *byte = b' ';
@@ -131,8 +116,6 @@ pub fn strip_glimmer_templates(source: &str) -> Option<String> {
             bytes[close_end - 2] = b'`';
             bytes[close_end - 1] = b')';
         } else {
-            // Fallback: blank everything to spaces (preserves newlines).
-            // Valid for class-body templates and for unclosed templates.
             for byte in &mut bytes[start..close_end] {
                 if !matches!(*byte, b'\n' | b'\r') {
                     *byte = b' ';
@@ -259,7 +242,6 @@ mod tests {
         let source = "import Component from '@glimmer/component';\nexport default class X extends Component {\n  <template>billing</template>\n}\n";
         let stripped = strip_glimmer_templates(source).expect("template should be stripped");
 
-        // Class-body context: blanked out (empty class body is valid).
         assert!(stripped.contains("class X extends Component {"));
         assert!(!stripped.contains("<template>"));
         assert!(!stripped.contains('('));
@@ -282,10 +264,8 @@ mod tests {
         let source = "import C from '@glimmer/component';\nconst W = <template>\n  one\n</template>;\nexport default class X extends C {\n  <template>\n    two\n  </template>\n}\n";
         let stripped = strip_glimmer_templates(source).expect("templates should be stripped");
 
-        // Module-level template expression becomes a parenthesised literal.
         assert!(stripped.contains("const W = (`"));
         assert!(stripped.contains("`);"));
-        // Class-body template is blanked.
         assert!(stripped.contains("class X extends C {"));
         assert!(!stripped.contains("<template>"));
         assert!(!stripped.contains("</template>"));
@@ -295,10 +275,6 @@ mod tests {
 
     #[test]
     fn escapes_backtick_dollar_backslash_inside_expression_template() {
-        // Template content contains characters that would otherwise terminate
-        // the template literal or trigger interpolation. We escape `` ` ``,
-        // `$`, and `\` to spaces; the braces stay because once `$` is gone
-        // the parser will not read `{c}` as an interpolation.
         let source = "const x = <template>a`b${c}d\\e</template>;\n";
         let stripped = strip_glimmer_templates(source).expect("template should be stripped");
 
@@ -315,16 +291,12 @@ mod tests {
         let source = "const x = <template>oops\nexport const y = 1;\n";
         let stripped = strip_glimmer_templates(source).expect("template should be stripped");
 
-        // No `</template>`, so we cannot use the parenthesised literal form
-        // (we have no place to close it). Fall back to blanking. The file is
-        // malformed either way; the only requirement is that we do not panic.
         assert!(!stripped.contains("<template>"));
         assert_eq!(stripped.len(), source.len());
     }
 
     #[test]
     fn handles_template_after_typed_initializer() {
-        // `=` is the previous non-whitespace byte even across the type annotation.
         let source = "const x: TOC<{}> = <template>hi</template>;\n";
         let stripped = strip_glimmer_templates(source).expect("template should be stripped");
 
@@ -338,7 +310,6 @@ mod tests {
         let source = "@Some(<template>x</template>)\nclass Foo {}\n";
         let stripped = strip_glimmer_templates(source).expect("template should be stripped");
 
-        // Previous non-whitespace byte is `(`: expression form.
         assert!(stripped.contains("@Some((`"));
         assert!(stripped.contains("`))"));
         assert_eq!(stripped.len(), source.len());
@@ -388,9 +359,6 @@ mod tests {
     /// the stripper falls through to blank-out.
     #[test]
     fn identifier_ending_in_keyword_suffix_falls_through_to_blank() {
-        // Not valid JS as written, but exercises the walk-back logic:
-        // previous identifier is `mydefault`, not `default`, so we must
-        // NOT enter expression form.
         let source = "mydefault <template>x</template>\n";
         let stripped = strip_glimmer_templates(source).expect("template should be stripped");
 

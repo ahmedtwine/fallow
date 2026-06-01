@@ -75,10 +75,6 @@ pub fn resolve_all_imports(
     root: &Path,
     extra_conditions: &[String],
 ) -> Vec<ResolvedModule> {
-    // Build workspace name → root index for pnpm store fallback.
-    // Canonicalize roots to match path_to_id (which uses canonical paths).
-    // Without this, macOS /var → /private/var and similar platform symlinks
-    // cause workspace roots to mismatch canonical file paths.
     let canonical_ws_roots: Vec<PathBuf> = workspaces
         .par_iter()
         .map(|ws| dunce::canonicalize(&ws.root).unwrap_or_else(|_| ws.root.clone()))
@@ -109,14 +105,8 @@ pub fn resolve_all_imports(
         }
     }
 
-    // Check if project root is already canonical (no symlinks in path).
-    // When true, raw paths == canonical paths for files under root, so we can skip
-    // the upfront bulk canonicalize() of all source files (21k+ syscalls on large projects).
-    // A lazy CanonicalFallback handles the rare intra-project symlink case.
     let root_is_canonical = dunce::canonicalize(root).is_ok_and(|c| c == root);
 
-    // Pre-compute canonical paths ONCE for all files in parallel (avoiding repeated syscalls).
-    // Skipped when root is canonical — the lazy fallback below handles edge cases.
     let canonical_paths: Vec<PathBuf> = if root_is_canonical {
         Vec::new()
     } else {
@@ -126,8 +116,6 @@ pub fn resolve_all_imports(
             .collect()
     };
 
-    // Primary path → FileId index. When root is canonical, uses raw paths (fast).
-    // Otherwise uses pre-computed canonical paths (correct for all symlink configurations).
     let path_to_id: FxHashMap<&Path, FileId> = if root_is_canonical {
         files.iter().map(|f| (f.path.as_path(), f.id)).collect()
     } else {
@@ -138,14 +126,11 @@ pub fn resolve_all_imports(
             .collect()
     };
 
-    // Also index by non-canonical path for fallback lookups
     let raw_path_to_id: FxHashMap<&Path, FileId> =
         files.iter().map(|f| (f.path.as_path(), f.id)).collect();
 
-    // FileIds are sequential 0..n, so direct array indexing is faster than FxHashMap.
     let file_paths: Vec<&Path> = files.iter().map(|f| f.path.as_path()).collect();
 
-    // Create resolvers ONCE and share across threads (oxc_resolver::Resolver is Send + Sync).
     let extensions = build_extensions(active_plugins);
     let condition_names = build_condition_names(active_plugins, extra_conditions);
     let resolver = create_resolver(active_plugins, extra_conditions);
@@ -153,18 +138,14 @@ pub fn resolve_all_imports(
     style_conditions.push("style".to_string());
     let style_resolver = create_resolver(active_plugins, &style_conditions);
 
-    // Lazy canonical fallback — only needed when root is canonical (path_to_id uses raw paths).
-    // When root is NOT canonical, path_to_id already uses canonical paths, no fallback needed.
     let canonical_fallback = if root_is_canonical {
         Some(types::CanonicalFallback::new(files))
     } else {
         None
     };
 
-    // Dedup set for broken-tsconfig warnings. See `ResolveContext::tsconfig_warned`.
     let tsconfig_warned: Mutex<FxHashSet<String>> = Mutex::new(FxHashSet::default());
 
-    // Shared resolution context — avoids passing 6 arguments to every resolve_specifier call
     let ctx = ResolveContext {
         resolver: &resolver,
         style_resolver: &style_resolver,
@@ -182,10 +163,6 @@ pub fn resolve_all_imports(
         tsconfig_warned: &tsconfig_warned,
     };
 
-    // Resolve in parallel — shared resolver instance.
-    // Each file resolves its own imports independently (no shared bare specifier cache).
-    // oxc_resolver's internal caches (package.json, tsconfig, directory entries) are
-    // shared across threads for performance.
     let mut resolved: Vec<ResolvedModule> = modules
         .par_iter()
         .filter_map(|module| {
@@ -205,7 +182,6 @@ pub fn resolve_all_imports(
             ));
 
             let from_dir = if canonical_paths.is_empty() {
-                // Root is canonical — raw paths are canonical
                 file_path.parent().unwrap_or(file_path)
             } else {
                 canonical_paths
@@ -260,12 +236,9 @@ pub fn resolve_all_imports(
 ///
 /// For each module, every captured `auto_import_candidates` name is matched
 /// against the active plugins' auto-import table; on a hit a synthetic
-/// [`ResolvedImport`] to the providing file is appended so the existing graph
-/// builder credits the edge. Name collisions across files (e.g. `Comments`
-/// declared in both `Comments.client.vue` and `Comments.server.vue`) over-credit
-/// every match, keeping each provider reachable. Resolution is recomputed every
-/// run from the live file index, so it is never folded into per-file caching.
-/// See issue #704.
+/// [`ResolvedImport`] is added so the existing graph builder credits the edge.
+/// Name collisions across files over-credit every match, keeping each provider
+/// reachable. Resolution is recomputed from the live file index each run.
 fn synthesize_auto_import_edges(
     resolved: &mut [ResolvedModule],
     modules: &[ModuleInfo],
@@ -277,8 +250,6 @@ fn synthesize_auto_import_edges(
         return;
     }
 
-    // Name -> providing files. Built from the live file index, so a rule whose
-    // source file was not discovered is skipped rather than synthesizing a dangling edge.
     let mut table: FxHashMap<&str, Vec<(FileId, AutoImportKind)>> = FxHashMap::default();
     for rule in auto_imports {
         let source = rule.source.as_path();
@@ -298,7 +269,6 @@ fn synthesize_auto_import_edges(
         return;
     }
 
-    // Captured candidate names keyed by the file that referenced them.
     let candidates: FxHashMap<FileId, &[String]> = modules
         .iter()
         .filter(|module| !module.auto_import_candidates.is_empty())

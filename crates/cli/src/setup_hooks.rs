@@ -131,8 +131,6 @@ pub fn run_setup_hooks_with_label(opts: &SetupHooksOptions<'_>, command_label: &
     ExitCode::SUCCESS
 }
 
-// ── Plan (resolve target paths from options + filesystem) ──────────
-
 #[derive(Debug, Default)]
 struct Plan {
     claude: Option<ClaudeTargets>,
@@ -203,8 +201,6 @@ fn auto_detect(root: &Path, mode: Mode) -> (bool, bool) {
         _ => (has_claude, has_codex),
     }
 }
-
-// ── Target resolvers ────────────────────────────────────────────────
 
 impl ClaudeTargets {
     fn resolve(opts: &SetupHooksOptions<'_>) -> Result<Self, String> {
@@ -289,8 +285,6 @@ impl CodexTargets {
     }
 }
 
-// ── Report types (printed as the run's summary) ─────────────────────
-
 #[derive(Debug, Default)]
 struct Report {
     claude: Option<ClaudeReport>,
@@ -343,8 +337,6 @@ enum AgentsOutcome {
     Removed,
     NotPresent,
 }
-
-// ── Claude settings merge / uninstall ───────────────────────────────
 
 /// Merge the default Claude settings into an existing `settings.json` (or
 /// write the file fresh if none exists). Preserves unrelated top-level keys
@@ -528,8 +520,6 @@ fn merge_settings_value(
         .ok_or_else(|| "settings.json must be a JSON object".to_string())?
         .clone();
 
-    // Rebuild the top-level object with `$schema` at position 0 so JSON
-    // reviewers see the schema pointer where conventions expect it.
     let mut rebuilt = serde_json::Map::with_capacity(current_obj.len() + 1);
     if let Some(schema) = current_obj
         .get("$schema")
@@ -667,7 +657,6 @@ fn strip_fallow_handlers(
         preserved += group_hooks.len();
     }
 
-    // Collapse empty scaffolding.
     pretool_arr.retain(|group| {
         let Some(group_obj) = group.as_object() else {
             return true;
@@ -750,8 +739,6 @@ fn trim_outer_quotes(command: &str) -> &str {
         .unwrap_or(command)
 }
 
-// ── Hook script write / remove ──────────────────────────────────────
-
 /// Write an executable shell script. On Unix sets mode `0o755`.
 ///
 /// If the existing file carries the generator marker, it is overwritten so
@@ -832,11 +819,7 @@ fn set_executable_bit(path: &Path) {
 }
 
 #[cfg(not(unix))]
-fn set_executable_bit(_path: &Path) {
-    // Windows: no executable bit; `bash` runs the script via its own shebang.
-}
-
-// ── AGENTS.md managed block ─────────────────────────────────────────
+fn set_executable_bit(_path: &Path) {}
 
 /// Append or replace the managed Codex block in `AGENTS.md`. Idempotent.
 ///
@@ -914,7 +897,6 @@ fn remove_managed_block(path: &Path, dry_run: bool) -> std::io::Result<AgentsOut
         .find('\n')
         .map_or(existing.len(), |offset| end + offset + 1);
 
-    // Also strip a leading `\n---\n\n` fallback separator if we added one.
     let mut prefix_end = start;
     let prefix = &existing[..start];
     if prefix.ends_with("\n---\n\n") {
@@ -926,7 +908,6 @@ fn remove_managed_block(path: &Path, dry_run: bool) -> std::io::Result<AgentsOut
     let mut buf = String::with_capacity(existing.len());
     buf.push_str(&existing[..prefix_end]);
     let tail = &existing[end_line_end..];
-    // Collapse back-to-back blank lines at the splice point.
     let tail = tail.strip_prefix('\n').unwrap_or(tail);
     buf.push_str(tail);
 
@@ -956,8 +937,6 @@ fn find_tooling_insertion_point(text: &str) -> Option<usize> {
     }
     None
 }
-
-// ── Gitignore helper (install-only) ─────────────────────────────────
 
 fn ensure_gitignore_entry(root: &Path, entry: &str) -> std::io::Result<()> {
     let gitignore_path = root.join(".gitignore");
@@ -994,8 +973,6 @@ fn read_optional_text(path: &Path) -> std::io::Result<Option<String>> {
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
-
-// ── Summary printing ────────────────────────────────────────────────
 
 fn print_summary(report: &Report, opts: &SetupHooksOptions<'_>, mode: Mode, command_label: &str) {
     let verb = match mode {
@@ -1143,8 +1120,6 @@ mod tests {
 
     #[test]
     fn auto_uninstall_does_not_fabricate_missing_surfaces() {
-        // With nothing present, uninstall must NOT default to Claude and
-        // pretend to remove scaffolding that never existed.
         let tmp = tempdir().unwrap();
         let (claude, codex) = auto_detect(tmp.path(), Mode::Uninstall);
         assert!(!claude);
@@ -1353,16 +1328,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn gate_script_sort_v_orders_plain_semver_correctly() {
-        // The gate's floor check is `sort -V | head -n1`. Lock down only the
-        // orderings the gate actually depends on in practice: plain-vs-plain
-        // semver, which is stable across GNU and BSD sort. Prerelease ordering
-        // (`2.48.0-alpha.1` vs `2.48.0`) diverges between platforms: GNU places
-        // the prerelease BELOW the release (semver-correct), BSD places it
-        // ABOVE. Fallow's shipped floor is always a plain version and
-        // `CARGO_PKG_VERSION` stamped at install is plain on published
-        // releases, so this divergence does not affect the common flow. The
-        // gate script's header notes the quirk for anyone setting
-        // `FALLOW_GATE_MIN_VERSION` to a prerelease explicitly.
         let output = std::process::Command::new("bash")
             .arg("-c")
             .arg("printf '%s\\n' 2.46.0 2.30.0 2.48.0 2.46.0 2.46.1 | sort -V")
@@ -1385,19 +1350,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn gate_blocks_stale_fallow_on_path() {
-        // End-to-end regression: the fix is a floor check that blocks a
-        // fallow on PATH older than the uncommitted-changes inclusion fix
-        // (aabb8e1b, v2.46.0). The sibling `rendered_script_*` tests cover
-        // substitution mechanics but would all still pass if the floor
-        // block were ripped out. This test exercises the actual bug: write
-        // the rendered script, prepend a fake fallow reporting v2.30.0 to
-        // PATH, pipe a `git commit` hook input, assert the gate exits 2
-        // with an upgrade hint instead of passing through.
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
 
-        // The gate depends on jq for hook-input parsing. Skip cleanly on
-        // runners that lack it so CI stays green on stripped environments.
         if std::process::Command::new("jq")
             .arg("--version")
             .output()
@@ -1411,8 +1366,6 @@ mod tests {
         let fake_bin = tmp.path().join("bin");
         std::fs::create_dir_all(&fake_bin).unwrap();
         let fallow_path = fake_bin.join("fallow");
-        // Fake reports v2.30.0 (below the 2.46.0 floor). No audit stub is
-        // needed because the floor check exits before audit is reached.
         std::fs::write(
             &fallow_path,
             "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'fallow 2.30.0'; exit 0; fi\nexit 0\n",
@@ -1428,8 +1381,6 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&script_path, perms).unwrap();
 
-        // Prepend fake dir to PATH so `command -v fallow` finds the stale
-        // version first while jq / sort / head / grep still resolve normally.
         let existing_path = std::env::var("PATH").unwrap_or_default();
         let new_path = format!("{}:{existing_path}", fake_bin.display());
         let hook_input = br#"{"tool_input":{"command":"git commit -m test"}}"#;
@@ -1824,20 +1775,16 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 
-    // ── Uninstall tests ──────────────────────────────────────────────
-
     #[test]
     fn uninstall_round_trips_a_fresh_install() {
         let tmp = tempdir().unwrap();
 
-        // Install.
         let mut install = opts(tmp.path());
         install.agent = Some(HookAgentArg::Claude);
         assert_eq!(run_setup_hooks(&install), ExitCode::SUCCESS);
         assert!(tmp.path().join(".claude/settings.json").is_file());
         assert!(tmp.path().join(".claude/hooks/fallow-gate.sh").is_file());
 
-        // Uninstall.
         let mut uninstall = opts(tmp.path());
         uninstall.agent = Some(HookAgentArg::Claude);
         uninstall.uninstall = true;
@@ -1845,8 +1792,6 @@ mod tests {
         assert!(!tmp.path().join(".claude/hooks/fallow-gate.sh").exists());
         let raw = std::fs::read_to_string(tmp.path().join(".claude/settings.json")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        // `hooks` should have been collapsed because the Bash group only
-        // contained our handler.
         assert!(
             parsed.get("hooks").is_none(),
             "expected empty hooks block to collapse"
@@ -1891,12 +1836,8 @@ mod tests {
     #[test]
     fn uninstall_is_idempotent_when_nothing_to_remove() {
         let tmp = tempdir().unwrap();
-        // Simulate a repo with neither .claude nor AGENTS.md.
         let mut o = opts(tmp.path());
         o.uninstall = true;
-        // Auto-detect on uninstall returns (false, false); dispatch then
-        // reports "no surfaces found" with exit code 2. Assert that
-        // behavior so misconfigurations surface instead of silently succeeding.
         assert_eq!(run_setup_hooks(&o), ExitCode::from(2));
     }
 
@@ -1932,7 +1873,6 @@ mod tests {
         o.agent = Some(HookAgentArg::Claude);
         o.uninstall = true;
         assert_eq!(run_setup_hooks(&o), ExitCode::SUCCESS);
-        // Script must survive because it lacks the generator marker.
         assert!(script_path.is_file());
         let kept = std::fs::read_to_string(&script_path).unwrap();
         assert_eq!(kept, "#!/bin/sh\necho user-owned\n");
@@ -1976,19 +1916,16 @@ mod tests {
     #[test]
     fn uninstall_dry_run_does_not_touch_files() {
         let tmp = tempdir().unwrap();
-        // Install for real first.
         let mut install = opts(tmp.path());
         install.agent = Some(HookAgentArg::Claude);
         assert_eq!(run_setup_hooks(&install), ExitCode::SUCCESS);
 
-        // Dry-run uninstall.
         let mut dry = opts(tmp.path());
         dry.agent = Some(HookAgentArg::Claude);
         dry.uninstall = true;
         dry.dry_run = true;
         assert_eq!(run_setup_hooks(&dry), ExitCode::SUCCESS);
 
-        // Files still there.
         assert!(tmp.path().join(".claude/settings.json").is_file());
         assert!(tmp.path().join(".claude/hooks/fallow-gate.sh").is_file());
     }

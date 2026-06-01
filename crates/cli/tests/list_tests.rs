@@ -10,8 +10,6 @@ fn run_list(fixture: &str, args: &[&str]) -> CommandOutput {
     run_fallow("list", fixture, args)
 }
 
-// ── show_all behavior ────────────────────────────────────────────
-
 #[test]
 fn list_show_all_json_includes_plugins_files_and_entry_points() {
     let output = run_list("basic-project", &["--format", "json"]);
@@ -22,7 +20,6 @@ fn list_show_all_json_includes_plugins_files_and_entry_points() {
 
     let json = parse_json(&output);
 
-    // When no specific flags are set, all three sections should be present
     assert!(json.get("plugins").is_some(), "missing 'plugins' key");
     assert!(json.get("files").is_some(), "missing 'files' key");
     assert!(json.get("file_count").is_some(), "missing 'file_count' key");
@@ -65,8 +62,6 @@ fn list_show_all_entry_point_count_matches_array_length() {
         "entry_point_count ({ep_count}) should match entry_points array length ({ep_len})"
     );
 }
-
-// ── Individual flag filtering ────────────────────────────────────
 
 #[test]
 fn list_plugins_only_json_omits_files_and_entry_points() {
@@ -157,8 +152,6 @@ fn list_boundaries_only_json_omits_plugins_files_and_entry_points() {
     );
 }
 
-// ── File path output ─────────────────────────────────────────────
-
 #[test]
 fn list_json_files_are_relative_paths() {
     let output = run_list("basic-project", &["--files", "--format", "json"]);
@@ -200,8 +193,6 @@ fn list_json_entry_point_paths_are_relative() {
         );
     }
 }
-
-// ── Plugin detection ─────────────────────────────────────────────
 
 #[test]
 fn list_basic_project_detects_typescript_plugin() {
@@ -251,8 +242,6 @@ fn list_external_plugin_detected() {
     );
 }
 
-// ── Entry point sources ──────────────────────────────────────────
-
 #[test]
 fn list_entry_point_has_source_field() {
     let output = run_list("basic-project", &["--entry-points", "--format", "json"]);
@@ -267,7 +256,6 @@ fn list_entry_point_has_source_field() {
             ep.get("source").is_some(),
             "entry point missing 'source' field"
         );
-        // source should be a non-empty string
         let source = ep["source"].as_str().unwrap();
         assert!(!source.is_empty(), "entry point source should not be empty");
     }
@@ -279,7 +267,6 @@ fn list_basic_project_main_entry_point_source() {
     let json = parse_json(&output);
 
     let eps = json["entry_points"].as_array().unwrap();
-    // basic-project has "main": "src/index.ts" in package.json
     let main_ep = eps
         .iter()
         .find(|ep| {
@@ -297,7 +284,6 @@ fn list_basic_project_main_entry_point_source() {
 
 #[test]
 fn list_plugin_discovered_entry_points_in_show_all_mode() {
-    // When no specific flags are set (show_all), plugin entry points are included
     let output = run_list("external-plugins", &["--format", "json"]);
     let json = parse_json(&output);
 
@@ -323,12 +309,10 @@ fn list_plugin_discovered_entry_points_in_show_all_mode() {
 
 #[test]
 fn list_entry_points_only_includes_plugin_entries() {
-    // show_all mode includes plugin-detected entry points
     let all_output = run_list("external-plugins", &["--format", "json"]);
     let all_json = parse_json(&all_output);
     let all_eps = all_json["entry_points"].as_array().unwrap();
 
-    // --entry-points only mode should include the same plugin-discovered entries
     let ep_output = run_list("external-plugins", &["--entry-points", "--format", "json"]);
     let ep_json = parse_json(&ep_output);
     let ep_only = ep_json["entry_points"].as_array().unwrap();
@@ -348,8 +332,6 @@ fn list_entry_points_only_includes_plugin_entries() {
     );
 }
 
-// ── Workspace support ────────────────────────────────────────────
-
 #[test]
 fn list_workspace_project_discovers_files_across_packages() {
     let output = run_list("workspace-project", &["--files", "--format", "json"]);
@@ -358,7 +340,6 @@ fn list_workspace_project_discovers_files_across_packages() {
     let json = parse_json(&output);
     let files = json["files"].as_array().unwrap();
 
-    // Should discover files from multiple workspace packages
     let has_app = files.iter().any(|f| {
         let p = f.as_str().unwrap();
         p.starts_with("packages/app/") || p.starts_with("packages\\app\\")
@@ -385,7 +366,6 @@ fn list_workspace_project_discovers_entry_points_from_multiple_packages() {
     let json = parse_json(&output);
     let eps = json["entry_points"].as_array().unwrap();
 
-    // Each workspace package has its own entry points
     let app_entries = eps
         .iter()
         .filter(|ep| {
@@ -472,14 +452,11 @@ fn list_boundaries_json_reports_not_configured_when_absent() {
     );
 }
 
-// ── Human output format ──────────────────────────────────────────
-
 #[test]
 fn list_human_output_plugins_section() {
     let output = run_list("basic-project", &["--plugins"]);
     assert_eq!(output.code, 0);
 
-    // Human output prints plugins to stderr
     assert!(
         output.stderr.contains("Active plugins:"),
         "human output should contain 'Active plugins:' header in stderr. Got stderr: {}",
@@ -490,7 +467,6 @@ fn list_human_output_plugins_section() {
         "human output should list typescript plugin in stderr. Got stderr: {}",
         output.stderr
     );
-    // stdout should be empty when only showing plugins
     assert!(
         output.stdout.trim().is_empty(),
         "stdout should be empty for --plugins in human format. Got: {}",
@@ -503,7 +479,6 @@ fn list_human_output_files_section() {
     let output = run_list("basic-project", &["--files"]);
     assert_eq!(output.code, 0);
 
-    // File count is on stderr
     assert!(
         output.stderr.contains("Discovered"),
         "human output should say 'Discovered' in stderr. Got stderr: {}",
@@ -515,7 +490,6 @@ fn list_human_output_files_section() {
         output.stderr
     );
 
-    // File paths are on stdout
     assert!(
         output.stdout.contains("index.ts"),
         "human output stdout should list index.ts. Got: {}",
@@ -528,7 +502,6 @@ fn list_human_output_entry_points_section() {
     let output = run_list("basic-project", &["--entry-points"]);
     assert_eq!(output.code, 0);
 
-    // Entry point count is on stderr
     assert!(
         output.stderr.contains("Found"),
         "human output should say 'Found' in stderr. Got stderr: {}",
@@ -540,7 +513,6 @@ fn list_human_output_entry_points_section() {
         output.stderr
     );
 
-    // Entry point paths and sources are on stdout
     assert!(
         output.stdout.contains("index.ts"),
         "human output stdout should list entry point path. Got: {}",
@@ -601,7 +573,6 @@ fn list_human_output_boundaries_section() {
 fn list_human_output_files_are_relative_paths() {
     let output = run_list("basic-project", &["--files"]);
 
-    // In human format, file paths should be relative (no absolute prefix)
     for line in output.stdout.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -615,8 +586,6 @@ fn list_human_output_files_are_relative_paths() {
         );
     }
 }
-
-// ── JSON structure validation ────────────────────────────────────
 
 #[test]
 fn list_json_plugins_array_items_have_name_field() {
@@ -653,8 +622,6 @@ fn list_json_entry_points_array_items_have_path_and_source() {
     }
 }
 
-// ── Files are sorted ─────────────────────────────────────────────
-
 #[test]
 fn list_json_files_are_sorted_alphabetically() {
     let output = run_list("basic-project", &["--files", "--format", "json"]);
@@ -672,8 +639,6 @@ fn list_json_files_are_sorted_alphabetically() {
     assert_eq!(files, sorted, "files should be in sorted order");
 }
 
-// ── Combining flags ──────────────────────────────────────────────
-
 #[test]
 fn list_plugins_and_files_together_json() {
     let output = run_list(
@@ -685,7 +650,6 @@ fn list_plugins_and_files_together_json() {
     let json = parse_json(&output);
     assert!(json.get("plugins").is_some(), "should include 'plugins'");
     assert!(json.get("files").is_some(), "should include 'files'");
-    // entry_points should not appear since that flag was not set
     assert!(
         json.get("entry_points").is_none(),
         "should omit 'entry_points' when only --plugins --files"
@@ -709,8 +673,6 @@ fn list_files_and_entry_points_together_json() {
     );
 }
 
-// ── Exit code ────────────────────────────────────────────────────
-
 #[test]
 fn list_returns_exit_code_0_on_success() {
     let output = run_list("basic-project", &["--format", "json"]);
@@ -719,8 +681,6 @@ fn list_returns_exit_code_0_on_success() {
         "list command should always return exit code 0 on success"
     );
 }
-
-// ── CJS project ──────────────────────────────────────────────────
 
 #[test]
 fn list_cjs_project_discovers_js_files() {
@@ -745,8 +705,6 @@ fn list_cjs_project_discovers_js_files() {
     );
 }
 
-// ── Vue project ──────────────────────────────────────────────────
-
 #[test]
 fn list_vue_project_discovers_vue_files() {
     let output = run_list("vue-project", &["--files", "--format", "json"]);
@@ -770,8 +728,6 @@ fn list_vue_project_discovers_vue_files() {
     );
 }
 
-// ── Svelte project ───────────────────────────────────────────────
-
 #[test]
 fn list_svelte_project_discovers_svelte_files() {
     let output = run_list("svelte-project", &["--files", "--format", "json"]);
@@ -790,8 +746,6 @@ fn list_svelte_project_discovers_svelte_files() {
         "svelte-project should discover .svelte files. Got: {files:?}"
     );
 }
-
-// ── CSS modules project ──────────────────────────────────────────
 
 #[test]
 fn list_css_modules_project_discovers_css_module_files() {
@@ -812,11 +766,8 @@ fn list_css_modules_project_discovers_css_module_files() {
     );
 }
 
-// ── Production mode ──────────────────────────────────────────────
-
 #[test]
 fn list_production_mode_flag_accepted() {
-    // Verify that --production flag doesn't cause errors
     let output = run_list(
         "basic-project",
         &["--production", "--files", "--format", "json"],
@@ -829,8 +780,6 @@ fn list_production_mode_flag_accepted() {
         "should still list files in production mode"
     );
 }
-
-// ── Invalid root ─────────────────────────────────────────────────
 
 #[test]
 fn list_invalid_root_returns_error() {
@@ -850,8 +799,6 @@ fn list_invalid_root_returns_error() {
     );
 }
 
-// ── JSON is valid ────────────────────────────────────────────────
-
 #[test]
 fn list_json_output_is_valid_json_object() {
     let output = run_list("basic-project", &["--format", "json"]);
@@ -861,24 +808,18 @@ fn list_json_output_is_valid_json_object() {
     assert!(json.is_object(), "JSON output should be an object");
 }
 
-// ── Empty plugins list ───────────────────────────────────────────
-
 #[test]
 fn list_project_without_known_plugins_has_empty_or_minimal_plugins() {
-    // detect-config has react but not any major framework
     let output = run_list("detect-config", &["--plugins", "--format", "json"]);
     assert_eq!(output.code, 0);
 
     let json = parse_json(&output);
-    // The project doesn't have any framework deps, but plugins is still an array
     let plugins = json["plugins"].as_array();
     assert!(
         plugins.is_some(),
         "plugins should always be an array, even if empty-ish"
     );
 }
-
-// ── Multiple entry point sources in one project ──────────────────
 
 #[test]
 fn list_workspace_project_entry_points_have_varied_sources() {
@@ -892,18 +833,14 @@ fn list_workspace_project_entry_points_have_varied_sources() {
         .map(|ep| ep["source"].as_str().unwrap())
         .collect();
 
-    // workspace-project has multiple entry point sources
     assert!(
         sources.len() > 1,
         "workspace-project should have multiple entry points. Got: {sources:?}"
     );
 }
 
-// ── Nextjs plugin-discovered entry points ────────────────────────
-
 #[test]
 fn list_nextjs_project_app_page_is_plugin_entry_point() {
-    // Must use show_all mode (no flags) to get plugin-discovered entry points
     let output = run_list("nextjs-project", &["--format", "json"]);
     let json = parse_json(&output);
 
@@ -924,13 +861,8 @@ fn list_nextjs_project_app_page_is_plugin_entry_point() {
     );
 }
 
-// ── Plugin-scoped hidden directory traversal ────────────────────
-
 #[test]
 fn list_files_includes_plugin_scoped_hidden_dirs_for_react_router() {
-    // React Router's `.client` and `.server` convention folders must surface in
-    // `fallow list --files`; otherwise commands that consume the file walk lose
-    // visibility into a real chunk of the project.
     let output = run_list("react-router-conventions", &["--files", "--format", "json"]);
     assert_eq!(output.code, 0, "stderr was: {}", output.stderr);
 

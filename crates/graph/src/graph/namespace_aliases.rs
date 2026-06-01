@@ -74,13 +74,6 @@ fn collect_pending_credits(
             let Some(target_module_idx) = module_index_for_file(graph, namespace_target_id) else {
                 continue;
             };
-            // Enumerate every (barrel_file, exported_name) pair through which a
-            // consumer might import this alias. Without this, consumers whose
-            // import lands at an intermediate named-re-export barrel (or a
-            // star-barrel) instead of directly at the alias-defining file would
-            // be missed and the namespace member would surface as unused-export.
-            // See issue #310 (real-world multi-hop case missed by issue #303
-            // which only tested direct + star-barrel-on-target shapes).
             let reachable =
                 enumerate_alias_reachable_barrels(graph, alias_file_id, &alias.via_export_name);
             collect_credits_for_alias(
@@ -127,11 +120,6 @@ fn enumerate_alias_reachable_barrels(
                 let exported_name = if edge.imported_name == source_name {
                     edge.exported_name.clone()
                 } else if edge.imported_name == "*" && edge.exported_name == "*" {
-                    // Plain `export * from './src'` propagates `source_name`
-                    // through unchanged. `export * as ns from './src'` (where
-                    // `exported_name == "ns"`) wraps the whole namespace under
-                    // a new name, so individual source names are NOT exposed
-                    // at this barrel under their original identifiers.
                     source_name.clone()
                 } else {
                     continue;
@@ -219,12 +207,6 @@ fn collect_credits_for_alias(
                     consumer_file_id: consumer.file_id,
                     import_span: import.info.span,
                 });
-                // If the credited member lands on a namespace re-export
-                // (`export * as <member> from './source'`) at the alias
-                // target, the consumer's deeper accesses (`<expected_object>.<member>.<X>`)
-                // are accesses on the re-exported namespace, so credit
-                // them on the underlying source recursively. Bounded by a
-                // visited set to handle cyclic chains. See issue #328.
                 let mut visited: FxHashSet<usize> = FxHashSet::default();
                 visited.insert(target_module_idx);
                 let ctx = ChainWalkCtx {
@@ -273,9 +255,6 @@ fn collect_chained_re_export_credits(
     let Some(barrel) = ctx.graph.modules.get(barrel_module_idx) else {
         return;
     };
-    // Collect chained namespace re-export targets up-front so the iteration
-    // below does not hold an immutable borrow on `ctx.graph.modules` while
-    // recursing (the recursive call also indexes into `ctx.graph.modules`).
     let chained_targets: Vec<FileId> = barrel
         .re_exports
         .iter()

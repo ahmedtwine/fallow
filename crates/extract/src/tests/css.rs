@@ -117,10 +117,6 @@ fn scss_import_without_dot_slash_normalized() {
 
 #[test]
 fn scss_import_bare_extensionless_normalized_to_relative() {
-    // In SCSS, extensionless imports are partial references (local files),
-    // not npm packages. They get ./ prepended so the resolver can try
-    // the SCSS partial (_filename) convention. Actual npm packages will
-    // fall through the partial fallback to npm classification in the resolver.
     let info = parse_css(r#"@import "some-package";"#, "styles.scss");
     assert_eq!(info.imports.len(), 1);
     assert_eq!(info.imports[0].source, "./some-package");
@@ -128,7 +124,6 @@ fn scss_import_bare_extensionless_normalized_to_relative() {
 
 #[test]
 fn scss_builtin_module_stays_bare() {
-    // SCSS built-in modules (sass:math, sass:color) should stay bare
     let info = parse_css(r#"@use "sass:math";"#, "styles.scss");
     assert_eq!(info.imports.len(), 1);
     assert_eq!(info.imports[0].source, "sass:math");
@@ -417,8 +412,6 @@ fn css_mixed_comments_and_real_directives() {
     assert!(info.imports.iter().any(|i| i.source == "tailwindcss"));
 }
 
-// -- CSS Module extraction --
-
 #[test]
 fn css_module_extracts_class_names_as_exports() {
     let info = parse_css_module(".header { color: red; } .footer { color: blue; }");
@@ -559,11 +552,6 @@ fn css_module_ignores_classes_in_strings_and_urls() {
 
 #[test]
 fn issue_540_nested_cascade_layers_do_not_export_sub_names() {
-    // Verbatim reproduction from issue #540. The CSS Modules parser previously
-    // tokenised the dot in `@layer foo.bar` as the start of a class selector
-    // and emitted phantom `bar` / `baz` exports. After the fix, only the
-    // actual `.root` and `.pressed` selectors inside the block bodies are
-    // extracted.
     let info = parse_css_module(
         "@layer foo;
 @layer foo.bar, foo.baz;

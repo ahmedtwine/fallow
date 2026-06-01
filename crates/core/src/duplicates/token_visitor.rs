@@ -102,8 +102,6 @@ fn expression_is_function_like(expr: &Expression<'_>) -> bool {
 }
 
 impl<'a> Visit<'a> for TokenExtractor {
-    // ── Statements ──────────────────────────────────────────
-
     fn visit_variable_declaration(&mut self, decl: &VariableDeclaration<'a>) {
         let kw = match decl.kind {
             VariableDeclarationKind::Var => KeywordType::Var,
@@ -224,8 +222,6 @@ impl<'a> Visit<'a> for TokenExtractor {
         self.push_punc(PunctuationType::CloseBrace, block.span);
     }
 
-    // ── Expressions ─────────────────────────────────────────
-
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
         self.push(TokenKind::Identifier(ident.name.to_string()), ident.span);
     }
@@ -288,9 +284,6 @@ impl<'a> Visit<'a> for TokenExtractor {
             self.push_atomic_invocation_span(expr.span);
         }
         self.visit_expression(&expr.callee);
-        // Use point spans for synthetic punctuation to avoid inflating clone
-        // ranges when call expressions are chained (expr.span covers the
-        // entire chain, not just this call's parentheses).
         let open = point_span(expr.callee.span().end);
         self.push_punc(PunctuationType::OpenParen, open);
         for arg in &expr.arguments {
@@ -321,7 +314,6 @@ impl<'a> Visit<'a> for TokenExtractor {
 
     fn visit_static_member_expression(&mut self, expr: &StaticMemberExpression<'a>) {
         self.visit_expression(&expr.object);
-        // Use point span at the dot position (right after the object).
         let dot = point_span(expr.object.span().end);
         self.push_punc(PunctuationType::Dot, dot);
         self.push(
@@ -494,8 +486,6 @@ impl<'a> Visit<'a> for TokenExtractor {
         }
     }
 
-    // ── Functions ──────────────────────────────────────────
-
     fn visit_function(&mut self, func: &Function<'a>, flags: ScopeFlags) {
         if func.r#async {
             self.push_keyword(KeywordType::Async, func.span);
@@ -517,8 +507,6 @@ impl<'a> Visit<'a> for TokenExtractor {
         walk::walk_function(self, func, flags);
     }
 
-    // ── Classes ─────────────────────────────────────────────
-
     fn visit_class(&mut self, class: &Class<'a>) {
         self.push_keyword(KeywordType::Class, class.span);
         if let Some(id) = &class.id {
@@ -530,14 +518,10 @@ impl<'a> Visit<'a> for TokenExtractor {
         walk::walk_class(self, class);
     }
 
-    // ── Import/Export ───────────────────────────────────────
-
     fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
-        // Skip all import declarations when ignoring imports for duplication detection
         if self.skip_imports {
             return;
         }
-        // Skip `import type { ... } from '...'` when stripping types
         if self.strip_types && decl.import_kind.is_type() {
             return;
         }
@@ -551,7 +535,6 @@ impl<'a> Visit<'a> for TokenExtractor {
     }
 
     fn visit_export_named_declaration(&mut self, decl: &ExportNamedDeclaration<'a>) {
-        // Skip `export type { ... }` when stripping types
         if self.strip_types && decl.export_kind.is_type() {
             return;
         }
@@ -574,11 +557,9 @@ impl<'a> Visit<'a> for TokenExtractor {
         );
     }
 
-    // ── TypeScript declarations ────────────────────────────
-
     fn visit_ts_interface_declaration(&mut self, decl: &TSInterfaceDeclaration<'a>) {
         if self.strip_types {
-            return; // Skip entire interface when stripping types
+            return;
         }
         self.push_keyword(KeywordType::Interface, decl.span);
         walk::walk_ts_interface_declaration(self, decl);
@@ -592,7 +573,7 @@ impl<'a> Visit<'a> for TokenExtractor {
 
     fn visit_ts_type_alias_declaration(&mut self, decl: &TSTypeAliasDeclaration<'a>) {
         if self.strip_types {
-            return; // Skip entire type alias when stripping types
+            return;
         }
         self.push_keyword(KeywordType::Type, decl.span);
         walk::walk_ts_type_alias_declaration(self, decl);
@@ -600,7 +581,7 @@ impl<'a> Visit<'a> for TokenExtractor {
 
     fn visit_ts_module_declaration(&mut self, decl: &TSModuleDeclaration<'a>) {
         if self.strip_types && decl.declare {
-            return; // Skip `declare module` / `declare namespace` when stripping types
+            return;
         }
         walk::walk_ts_module_declaration(self, decl);
     }
@@ -623,7 +604,7 @@ impl<'a> Visit<'a> for TokenExtractor {
 
     fn visit_ts_type_annotation(&mut self, ann: &TSTypeAnnotation<'a>) {
         if self.strip_types {
-            return; // Skip parameter/return type annotations when stripping types
+            return;
         }
         self.push_punc(PunctuationType::Colon, ann.span);
         walk::walk_ts_type_annotation(self, ann);
@@ -631,14 +612,14 @@ impl<'a> Visit<'a> for TokenExtractor {
 
     fn visit_ts_type_parameter_declaration(&mut self, decl: &TSTypeParameterDeclaration<'a>) {
         if self.strip_types {
-            return; // Skip generic type parameters when stripping types
+            return;
         }
         walk::walk_ts_type_parameter_declaration(self, decl);
     }
 
     fn visit_ts_type_parameter_instantiation(&mut self, inst: &TSTypeParameterInstantiation<'a>) {
         if self.strip_types {
-            return; // Skip generic type arguments when stripping types
+            return;
         }
         walk::walk_ts_type_parameter_instantiation(self, inst);
     }
@@ -661,7 +642,6 @@ impl<'a> Visit<'a> for TokenExtractor {
 
     fn visit_ts_non_null_expression(&mut self, expr: &TSNonNullExpression<'a>) {
         self.visit_expression(&expr.expression);
-        // The `!` postfix is stripped when stripping types (it's a type assertion)
     }
 
     fn visit_identifier_name(&mut self, ident: &IdentifierName<'a>) {
@@ -704,8 +684,6 @@ impl<'a> Visit<'a> for TokenExtractor {
         self.push(TokenKind::Identifier("unknown".to_string()), it.span);
     }
 
-    // ── JSX ─────────────────────────────────────────────────
-
     fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
         self.push_punc(PunctuationType::OpenBracket, elem.span);
         walk::walk_jsx_opening_element(self, elem);
@@ -726,8 +704,6 @@ impl<'a> Visit<'a> for TokenExtractor {
         self.push_op(OperatorType::Spread, attr.span);
         walk::walk_jsx_spread_attribute(self, attr);
     }
-
-    // ── Misc ────────────────────────────────────────────────
 
     fn visit_variable_declarator(&mut self, decl: &VariableDeclarator<'a>) {
         self.visit_binding_pattern(&decl.id);

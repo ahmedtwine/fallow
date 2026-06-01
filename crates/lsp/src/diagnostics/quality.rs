@@ -20,7 +20,6 @@ pub fn push_duplicate_export_diagnostics(
 ) {
     for dup in &results.duplicate_exports {
         let dup = &dup.export;
-        // Build related information linking all duplicate locations together
         for loc in &dup.locations {
             if let Ok(uri) = Url::from_file_path(&loc.path) {
                 let related_info: Vec<DiagnosticRelatedInformation> = dup
@@ -93,7 +92,6 @@ pub fn push_duplication_diagnostics(
             let start_line = (instance.start_line as u32).saturating_sub(1);
             let end_line = (instance.end_line as u32).saturating_sub(1);
 
-            // Build related information pointing to other instances in the group
             let related_info: Vec<DiagnosticRelatedInformation> = group
                 .instances
                 .iter()
@@ -129,7 +127,6 @@ pub fn push_duplication_diagnostics(
                     },
                     end: Position {
                         line: end_line,
-                        // Extend to end of last line to ensure full block is underlined
                         character: u32::MAX,
                     },
                 },
@@ -265,7 +262,6 @@ mod tests {
         let duplication = empty_duplication();
         let diags = build_diagnostics(&results, &duplication, &root);
 
-        // Both files should have a diagnostic
         let uri_utils = Url::from_file_path(&utils_path).unwrap();
         let uri_helpers = Url::from_file_path(&helpers_path).unwrap();
 
@@ -274,12 +270,9 @@ mod tests {
         let d = &utils_diags[0];
         assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
         assert!(d.message.contains("formatDate"));
-        // line 15 (1-based) → 14 (0-based)
         assert_eq!(d.range.start.line, 14);
         assert_eq!(d.range.start.character, 0);
-        // Range spans the export name
         assert_eq!(d.range.end.character, "formatDate".len() as u32);
-        // Related info points to the other file
         let related = d.related_information.as_ref().unwrap();
         assert_eq!(related.len(), 1);
         assert_eq!(related[0].location.uri, uri_helpers);
@@ -337,7 +330,6 @@ mod tests {
 
         let diags = build_diagnostics(&results, &duplication, &root);
 
-        // File a.ts should have a diagnostic with related info pointing to b.ts
         let uri_a = Url::from_file_path(root.join("src/a.ts")).unwrap();
         let diags_a = &diags[&uri_a];
         assert_eq!(diags_a.len(), 1);
@@ -351,17 +343,14 @@ mod tests {
         assert!(d.message.contains("6 lines"));
         assert!(d.message.contains("2 instances"));
 
-        // Check related info
         let related = d.related_information.as_ref().unwrap();
         assert_eq!(related.len(), 1);
         assert_eq!(related[0].message, "Also duplicated here");
         let related_uri = Url::from_file_path(root.join("src/b.ts")).unwrap();
         assert_eq!(related[0].location.uri, related_uri);
-        // b.ts start_line = 20 (1-based) → 19 (0-based)
         assert_eq!(related[0].location.range.start.line, 19);
         assert_eq!(related[0].location.range.start.character, 4);
 
-        // File b.ts should have related info pointing to a.ts
         let uri_b = Url::from_file_path(root.join("src/b.ts")).unwrap();
         let diags_b = &diags[&uri_b];
         assert_eq!(diags_b.len(), 1);
@@ -407,7 +396,6 @@ mod tests {
         let uri = Url::from_file_path(root.join("src/only.ts")).unwrap();
         let d = &diags[&uri][0];
 
-        // Single instance => no "other" instances => no related info
         assert!(d.related_information.is_none());
     }
 
@@ -433,7 +421,6 @@ mod tests {
 
         let uri = Url::from_file_path(&path).unwrap();
         let d = &diags[&uri][0];
-        // No other locations to relate to
         assert!(d.related_information.is_none());
     }
 
@@ -443,7 +430,6 @@ mod tests {
         let path = root.join("src/file.ts");
         let mut results = AnalysisResults::default();
 
-        // Add one of each issue type to verify all produce code_description
         results
             .unused_exports
             .push(UnusedExportFinding::with_actions(UnusedExport {

@@ -50,10 +50,6 @@ impl Plugin for MintlifyPlugin {
     fn resolve_config(&self, config_path: &Path, _source: &str, root: &Path) -> PluginResult {
         let mut result = PluginResult::default();
 
-        // The docs content root is the directory that holds docs.json /
-        // mint.json. Scope the entry pattern to that directory so non-Mintlify
-        // MDX elsewhere stays governed by other plugins. Workspace runs prefix
-        // the (workspace-relative) pattern back to the project root for us.
         let Some(docs_dir) = config_path.parent() else {
             return result;
         };
@@ -180,8 +176,6 @@ mod tests {
         let root = Path::new("/repo");
         let result = plugin.resolve_config(&root.join("docs.json"), "{ not valid json", root);
 
-        // The plugin keys off the config file location, not its contents, so a
-        // malformed body still yields the docs-root content pattern.
         assert_eq!(entry_patterns(&result), vec!["**/*.{md,mdx}".to_string()]);
     }
 }

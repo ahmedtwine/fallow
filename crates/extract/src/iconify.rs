@@ -106,14 +106,12 @@ mod tests {
 
     #[test]
     fn ignores_attribute_names_that_merely_end_in_name() {
-        // `data-name` / `filename` must not be read as icon props.
         assert!(prefixes(r#"<div data-name="jam:github" />"#).is_empty());
         assert!(prefixes(r#"<a filename="ic:home" />"#).is_empty());
     }
 
     #[test]
     fn ignores_values_without_a_colon_prefix() {
-        // Ordinary form fields carry no `prefix:name` colon shape.
         assert!(prefixes(r#"<input name="email" />"#).is_empty());
         assert!(prefixes(r#"<Icon name="github" />"#).is_empty());
     }
@@ -125,24 +123,19 @@ mod tests {
 
     #[test]
     fn ignores_dynamic_bindings() {
-        // Vue/Svelte/JSX dynamic bindings carry an expression, not a static
-        // string, so the icon set cannot be inferred and is out of scope.
         assert!(prefixes(r#"<Icon :name="iconExpr" />"#).is_empty());
         assert!(prefixes(r"<Icon name={iconExpr} />").is_empty());
     }
 
     #[test]
     fn ignores_icons_inside_html_comments() {
-        // A commented-out icon must not credit its package.
         assert!(prefixes(r#"<!-- <Icon name="jam:github" /> -->"#).is_empty());
-        // Multi-line comment block.
         let source = "<!--\n  <List icon=\"ic:round-home\" />\n-->\n<Icon name=\"mdi:home\" />";
         assert_eq!(prefixes(source), vec!["mdi"]);
     }
 
     #[test]
     fn returns_empty_for_non_markup_extensions() {
-        // A `.ts` file is never scanned even if it contains a matching string.
         let prefixes = extract_iconify_prefixes(
             Path::new("src/util.ts"),
             r#"const x = { name: "jam:github" };"#,

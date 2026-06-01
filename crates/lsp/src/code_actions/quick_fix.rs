@@ -49,18 +49,12 @@ fn leading_identifier(s: &str) -> &str {
 /// (or its parse-truncated leading bytes).
 fn strip_declaration_keywords(s: &str) -> &str {
     const KEYWORDS: &[&str] = &[
-        // Modifiers (can layer in any order, e.g. `async function`,
-        // `abstract class`, `declare const`).
         "async ",
         "abstract ",
         "declare ",
-        // Declaration keywords.
         "const ",
         "let ",
         "var ",
-        // Generator functions need the explicit `function* ` variant
-        // BEFORE the plain `function ` strip so we don't leave the `*`
-        // behind.
         "function* ",
         "function ",
         "class ",
@@ -111,13 +105,10 @@ fn declares_export_name(line_content: &str, prefix: &str, expected_name: &str) -
     };
     let after_prefix = after_prefix.trim_start();
 
-    // Re-export form: `{ ... }`. Conservative: suppress the action.
     if after_prefix.starts_with('{') {
         return false;
     }
 
-    // Declaration form: strip the leading declaration/modifier keywords,
-    // then the next identifier must match the cached export name.
     let after_keywords = strip_declaration_keywords(after_prefix);
     leading_identifier(after_keywords) == expected_name
 }
@@ -157,15 +148,12 @@ pub fn build_remove_export_actions(
                 continue;
             }
 
-            // export.line is a 1-based line number; convert to 0-based for LSP
             let export_line = export.line.saturating_sub(1);
 
-            // Check if this diagnostic is in the requested range
             if export_line < cursor_range.start.line || export_line > cursor_range.end.line {
                 continue;
             }
 
-            // Determine the export prefix to remove by inspecting the line content
             let line_content = file_lines.get(export_line as usize).copied().unwrap_or("");
             let trimmed = line_content.trim_start();
             let indent_len = line_content.len() - trimmed.len();
@@ -173,9 +161,6 @@ pub fn build_remove_export_actions(
             let prefix_to_remove = if trimmed.starts_with("export default ") {
                 Some("export default ")
             } else if trimmed.starts_with("export ") {
-                // Handles: export const, export function, export class, export type,
-                // export interface, export enum, export abstract, export async,
-                // export let, export var, etc.
                 Some("export ")
             } else {
                 None
@@ -185,44 +170,15 @@ pub fn build_remove_export_actions(
                 continue;
             };
 
-            // Re-validate the live document line against the cached finding
-            // before producing a destructive edit. AnalysisResults are
-            // computed at did_save time; the user may edit in memory before
-            // requesting a code action, so the line at export_line in
-            // file_lines may no longer hold the declaration the cache
-            // points at.
-            //
-            // The check verifies the line declares the cached identifier
-            // as a named top-level export (e.g. `export const foo = 1;`,
-            // `export function foo() {}`, `export class foo {}`) by
-            // stripping the export prefix + any declaration / modifier
-            // keywords and comparing the next leading identifier against
-            // the cached name. This rejects the corruption case where a
-            // stale finding for `foo` would otherwise produce an edit on
-            // `export const bar = foo;` (stripping `export ` from `bar`).
-            //
-            // `export default ...` declarations use the synthetic export
-            // name `"default"`, which is part of the prefix and never
-            // appears as an identifier in the post-prefix source. The
-            // prefix-presence check above is the re-validation for that
-            // shape; skip the declaration check (the action's edit
-            // removes only the prefix, which is the entire user-visible
-            // export marker, so semantic mismatches between the cached
-            // default and a reshaped default line are still bounded).
             if prefix != "export default "
                 && !declares_export_name(line_content, prefix, &export.export_name)
             {
                 continue;
             }
 
-            // CodeAction.title is rendered as plain text in VS Code, Helix,
-            // and Neovim; markdown metacharacters render literally. Do NOT
-            // escape here; the user would see backslashes in the command
-            // palette.
             let title = format!("Remove unused export `{}`", export.export_name);
             let mut changes = HashMap::new();
 
-            // Create a text edit that removes the export keyword prefix
             let edit = TextEdit {
                 range: Range {
                     start: Position {
@@ -259,12 +215,6 @@ pub fn build_remove_export_actions(
                     },
                     severity: Some(DiagnosticSeverity::HINT),
                     source: Some("fallow".to_string()),
-                    // `Diagnostic.message` is plain text per the LSP spec.
-                    // Do NOT markdown-escape here: VS Code renders it
-                    // verbatim in the Problems panel, and the published
-                    // diagnostic in `diagnostics/unused.rs` is plain too.
-                    // Mismatching the message strings breaks VS Code's
-                    // "Fix all in file" correlation.
                     message: format!("{msg_prefix} '{}' is unused", export.export_name),
                     tags: Some(vec![DiagnosticTag::UNNECESSARY]),
                     ..Default::default()
@@ -320,8 +270,6 @@ pub fn build_remove_catalog_entry_actions(
 
     for entry in &results.unused_catalog_entries {
         let entry = &entry.entry;
-        // Skip entries with hardcoded consumers: the consumer-side
-        // migration must happen first.
         if !entry.hardcoded_consumers.is_empty() {
             continue;
         }
@@ -343,16 +291,6 @@ pub fn build_remove_catalog_entry_actions(
             continue;
         }
         let end_idx = compute_catalog_deletion_end(file_lines, start_idx);
-        // Sanity-check the line really matches the reported entry name
-        // BEFORE producing a destructive edit. The file may have been
-        // edited since `fallow check` ran, and pnpm catalogs commonly
-        // contain sibling entries whose names overlap by substring
-        // (`react` and `react-native`, `lodash` and `lodash-es`,
-        // `core-js` and `core-js-bundle`). A loose `contains` check
-        // would happily delete the wrong line in those cases. Anchor
-        // the match to the start of the trimmed line in either the
-        // unquoted (`react:`), double-quoted (`"@scope/foo":`), or
-        // single-quoted (`'react':`) key form.
         if !line_matches_catalog_key(file_lines[start_idx], &entry.entry_name) {
             continue;
         }
@@ -367,10 +305,6 @@ pub fn build_remove_catalog_entry_actions(
         };
 
         let mut changes = HashMap::new();
-        // Single TextEdit removing the line range [start_idx, end_idx).
-        // The replacement text is empty. Using start of start_idx to
-        // start of end_idx absorbs the newline at the boundary so we
-        // don't leave a blank line behind.
         let mut edits = vec![TextEdit {
             range: Range {
                 start: Position {
@@ -389,12 +323,6 @@ pub fn build_remove_catalog_entry_actions(
             new_text: String::new(),
         }];
 
-        // If removing this entry empties its parent catalog
-        // (`catalog:` or `catalogs.<name>:`), append a second TextEdit
-        // that rewrites the parent header to `key: {}`. Bare `key:` in
-        // YAML parses as null which pnpm rejects with
-        // "Cannot convert undefined or null to object" at install time.
-        // Verified against pnpm 10.33.4.
         if let Some(parent_edit) =
             build_parent_rewrite_edit(file_lines, start_idx, end_idx, &entry.catalog_name)
         {
@@ -402,11 +330,6 @@ pub fn build_remove_catalog_entry_actions(
         }
         changes.insert(uri.clone(), edits);
 
-        // Reconstruct the published diagnostic so VS Code's
-        // "Fix all in file" source action can tie this edit back to the
-        // existing diagnostic. The message wording matches
-        // `crates/lsp/src/diagnostics/unused.rs:261-271` (default vs
-        // named-catalog variants).
         let diagnostic_message = if entry.catalog_name == "default" {
             format!(
                 "Unused catalog entry: '{}' is not referenced by any workspace package",
@@ -504,9 +427,6 @@ pub fn build_remove_empty_catalog_group_actions(
         if start_idx >= file_lines.len() {
             continue;
         }
-        // Anchored key match against the catalog name. Without this a
-        // sibling header with a shared prefix (`react17` vs `react18`)
-        // could be deleted by a stale finding.
         if !line_matches_catalog_key(file_lines[start_idx], &group.catalog_name) {
             continue;
         }
@@ -514,9 +434,6 @@ pub fn build_remove_empty_catalog_group_actions(
         let title = format!("Remove empty catalog group `{}`", group.catalog_name);
 
         let mut changes = HashMap::new();
-        // Single-line deletion: empty groups have no children to span.
-        // start of start_idx to start of start_idx+1 absorbs the newline
-        // at the boundary so no blank line is left behind.
         let edits = vec![TextEdit {
             range: Range {
                 start: Position {
@@ -540,10 +457,6 @@ pub fn build_remove_empty_catalog_group_actions(
         }];
         changes.insert(uri.clone(), edits);
 
-        // Reconstruct the published diagnostic so VS Code's "Fix all in
-        // file" source action can tie this edit back to the existing
-        // diagnostic. Message wording matches
-        // `crates/lsp/src/diagnostics/unused.rs::push_empty_catalog_group_diagnostics`.
         let diagnostic_message = format!(
             "Empty catalog group: '{}' has no entries",
             group.catalog_name
@@ -587,13 +500,11 @@ pub fn build_remove_empty_catalog_group_actions(
 /// sibling entries whose names share a prefix (`react` vs `react-native`).
 fn line_matches_catalog_key(line: &str, entry_name: &str) -> bool {
     let trimmed = line.trim_start();
-    // Unquoted: `react:` or `react: ^18.2.0` or `react :` (rare).
     if let Some(rest) = trimmed.strip_prefix(entry_name)
         && rest.trim_start().starts_with(':')
     {
         return true;
     }
-    // Double-quoted: `"@scope/foo": ...`
     if let Some(rest) = trimmed
         .strip_prefix('"')
         .and_then(|s| s.strip_prefix(entry_name))
@@ -601,7 +512,6 @@ fn line_matches_catalog_key(line: &str, entry_name: &str) -> bool {
     {
         return true;
     }
-    // Single-quoted: `'react': ...`
     if let Some(rest) = trimmed
         .strip_prefix('\'')
         .and_then(|s| s.strip_prefix(entry_name))
@@ -731,7 +641,6 @@ fn parent_has_other_children(
         if indent <= parent_indent {
             return false;
         }
-        // This is a child of the parent. Is it inside the deletion range?
         if idx < del_start || idx >= del_end {
             return true;
         }
@@ -753,7 +662,6 @@ pub fn build_delete_file_actions(
             continue;
         }
 
-        // The diagnostic is at line 0, col 0 — check if the request range overlaps
         if cursor_range.start.line > 0 {
             continue;
         }
@@ -844,10 +752,6 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // build_remove_export_actions
-    // -----------------------------------------------------------------------
-
     #[test]
     fn no_export_actions_when_results_empty() {
         let root = test_root();
@@ -885,13 +789,11 @@ mod tests {
         let uri = Url::from_file_path(&file).unwrap();
 
         let mut results = AnalysisResults::default();
-        // Export on 1-based line 5 => 0-based line 4
         results
             .unused_exports
             .push(make_unused_export(&file, "bar", 5, 7));
 
         let lines = vec!["line0", "line1", "line2", "line3", "export const bar = 2;"];
-        // Cursor on lines 0-2, export is on line 4
         let actions = build_remove_export_actions(&results, &file, &uri, &make_range(0, 2), &lines);
         assert!(actions.is_empty());
     }
@@ -916,12 +818,11 @@ mod tests {
         assert_eq!(ca.title, "Remove unused export `foo`");
         assert_eq!(ca.kind, Some(CodeActionKind::QUICKFIX));
 
-        // The edit should remove "export " (7 chars starting at column 0)
         let changes = ca.edit.as_ref().unwrap().changes.as_ref().unwrap();
         let edits = changes.get(&uri).unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].range.start.character, 0);
-        assert_eq!(edits[0].range.end.character, 7); // "export " = 7 chars
+        assert_eq!(edits[0].range.end.character, 7);
         assert_eq!(edits[0].new_text, "");
     }
 
@@ -945,7 +846,6 @@ mod tests {
         let changes = ca.edit.as_ref().unwrap().changes.as_ref().unwrap();
         let edits = changes.get(&uri).unwrap();
         assert_eq!(edits.len(), 1);
-        // "export default " = 15 chars
         assert_eq!(edits[0].range.start.character, 0);
         assert_eq!(edits[0].range.end.character, 15);
         assert_eq!(edits[0].new_text, "");
@@ -958,7 +858,6 @@ mod tests {
         let uri = Url::from_file_path(&file).unwrap();
 
         let mut results = AnalysisResults::default();
-        // Export on 1-based line 2 => 0-based line 1
         results
             .unused_exports
             .push(make_unused_export(&file, "helper", 2, 11));
@@ -976,10 +875,9 @@ mod tests {
         let changes = ca.edit.as_ref().unwrap().changes.as_ref().unwrap();
         let edits = changes.get(&uri).unwrap();
         assert_eq!(edits.len(), 1);
-        // Edit should start at column 4 (after indent) and remove "export " (7 chars)
         assert_eq!(edits[0].range.start.line, 1);
         assert_eq!(edits[0].range.start.character, 4);
-        assert_eq!(edits[0].range.end.character, 11); // 4 + 7
+        assert_eq!(edits[0].range.end.character, 11);
     }
 
     #[test]
@@ -1007,7 +905,6 @@ mod tests {
         assert_eq!(actions.len(), 1);
         let ca = unwrap_code_action(&actions[0]);
 
-        // Check the diagnostic message uses "Type export" prefix
         let diags = ca.diagnostics.as_ref().unwrap();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "Type export 'MyType' is unused");
@@ -1049,7 +946,6 @@ mod tests {
         assert_eq!(ca0.title, "Remove unused export `foo`");
         assert_eq!(ca1.title, "Remove unused export `Bar`");
 
-        // Verify message prefixes differ
         let diag0 = &ca0.diagnostics.as_ref().unwrap()[0];
         let diag1 = &ca1.diagnostics.as_ref().unwrap()[0];
         assert!(diag0.message.starts_with("Export "));
@@ -1063,8 +959,6 @@ mod tests {
         let uri = Url::from_file_path(&file).unwrap();
 
         let mut results = AnalysisResults::default();
-        // The result says line 1 has an unused export, but the actual line content
-        // doesn't start with "export" (e.g., re-export or corrupted data)
         results
             .unused_exports
             .push(make_unused_export(&file, "foo", 1, 0));
@@ -1084,8 +978,6 @@ mod tests {
         let uri = Url::from_file_path(&file).unwrap();
 
         let mut results = AnalysisResults::default();
-        // line=0 is unusual (lines are 1-based), but saturating_sub(1) handles it
-        // gracefully by producing 0-based line 0 (same as line=1 would)
         results
             .unused_exports
             .push(make_unused_export(&file, "x", 0, 7));
@@ -1093,7 +985,6 @@ mod tests {
         let lines = vec!["export const x = 1;"];
         let actions = build_remove_export_actions(&results, &file, &uri, &make_range(0, 0), &lines);
 
-        // saturating_sub(0, 1) = 0, so it maps to line 0 which is in range
         assert_eq!(actions.len(), 1);
     }
 
@@ -1152,7 +1043,6 @@ mod tests {
             "const also_used = false;",
             "export const c = 3;",
         ];
-        // Cursor covers only line 2 (0-based), which is 1-based line 3 => export "b"
         let actions = build_remove_export_actions(&results, &file, &uri, &make_range(2, 2), &lines);
 
         assert_eq!(actions.len(), 1);
@@ -1167,7 +1057,6 @@ mod tests {
         let uri = Url::from_file_path(&file).unwrap();
 
         let mut results = AnalysisResults::default();
-        // col=13 means "export const " (13 chars), name "myLongExport" is 12 chars
         results
             .unused_exports
             .push(make_unused_export(&file, "myLongExport", 1, 13));
@@ -1196,10 +1085,8 @@ mod tests {
             .unused_exports
             .push(make_unused_export(&file, "x", 1, 0));
 
-        // No lines at all — the get() call returns None, unwrap_or("")
         let lines: Vec<&str> = vec![];
         let actions = build_remove_export_actions(&results, &file, &uri, &make_range(0, 0), &lines);
-        // Empty string doesn't start with "export", so no action
         assert!(actions.is_empty());
     }
 
@@ -1214,21 +1101,16 @@ mod tests {
             .unused_exports
             .push(make_unused_export(&file, "val", 1, 0));
 
-        let lines = vec!["\t\texport const val = 1;"]; // 2 tabs of indent
+        let lines = vec!["\t\texport const val = 1;"];
         let actions = build_remove_export_actions(&results, &file, &uri, &make_range(0, 0), &lines);
 
         assert_eq!(actions.len(), 1);
         let ca = unwrap_code_action(&actions[0]);
         let changes = ca.edit.as_ref().unwrap().changes.as_ref().unwrap();
         let edits = changes.get(&uri).unwrap();
-        // 2 bytes of tab indent + "export " (7 chars) = columns 2..9
         assert_eq!(edits[0].range.start.character, 2);
         assert_eq!(edits[0].range.end.character, 9);
     }
-
-    // -----------------------------------------------------------------------
-    // build_delete_file_actions
-    // -----------------------------------------------------------------------
 
     #[test]
     fn no_delete_actions_when_no_unused_files() {
@@ -1270,7 +1152,6 @@ mod tests {
                 path: file.clone(),
             }));
 
-        // Cursor starts at line 1, but diagnostic is at line 0
         let actions = build_delete_file_actions(&results, &file, &uri, &make_range(1, 5));
         assert!(actions.is_empty());
     }
@@ -1376,7 +1257,6 @@ mod tests {
                 path: file.clone(),
             }));
 
-        // Cursor from line 0 to line 50 — should still trigger because start.line == 0
         let actions = build_delete_file_actions(&results, &file, &uri, &make_range(0, 50));
         assert_eq!(actions.len(), 1);
     }
@@ -1388,7 +1268,6 @@ mod tests {
         let uri = Url::from_file_path(&file).unwrap();
 
         let mut results = AnalysisResults::default();
-        // Unlikely in practice, but tests that the loop iterates all entries
         results
             .unused_files
             .push(UnusedFileFinding::with_actions(UnusedFile {
@@ -1403,10 +1282,6 @@ mod tests {
         let actions = build_delete_file_actions(&results, &file, &uri, &make_range(0, 0));
         assert_eq!(actions.len(), 2);
     }
-
-    // -----------------------------------------------------------------------
-    // Integration: both functions together on same file
-    // -----------------------------------------------------------------------
 
     #[test]
     fn unused_file_and_unused_export_in_same_file() {
@@ -1430,20 +1305,14 @@ mod tests {
         let export_actions = build_remove_export_actions(&results, &file, &uri, &cursor, &lines);
         let delete_actions = build_delete_file_actions(&results, &file, &uri, &cursor);
 
-        // Both produce independent actions
         assert_eq!(export_actions.len(), 1);
         assert_eq!(delete_actions.len(), 1);
 
-        // They are different action types
         let export_ca = unwrap_code_action(&export_actions[0]);
         let delete_ca = unwrap_code_action(&delete_actions[0]);
         assert!(export_ca.title.contains("Remove unused export"));
         assert!(delete_ca.title.contains("Delete"));
     }
-
-    // -----------------------------------------------------------------------
-    // build_remove_catalog_entry_actions
-    // -----------------------------------------------------------------------
 
     use fallow_core::results::{UnusedCatalogEntry, UnusedCatalogEntryFinding};
 
@@ -1463,9 +1332,6 @@ mod tests {
     }
 
     fn workspace_yaml_uri(dir: &tempfile::TempDir) -> Url {
-        // We need a URI that matches `Url::from_file_path(root.join("pnpm-workspace.yaml"))`
-        // exactly. The file does NOT need to exist on disk because the LSP
-        // handler now reads from `file_lines` passed in by the caller.
         Url::from_file_path(dir.path().join("pnpm-workspace.yaml")).unwrap()
     }
 
@@ -1488,9 +1354,6 @@ mod tests {
 
     #[test]
     fn catalog_action_uses_root_join_for_relative_path() {
-        // Regression test for issue #329: when the LSP emitter forgets
-        // to `root.join(&entry.path)`, `Url::from_file_path` rejects the
-        // relative path and the action silently never appears.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -1535,8 +1398,6 @@ mod tests {
             &make_range(1, 1),
             &lines,
         );
-        // The action must NOT appear: removing the catalog entry while a
-        // consumer still pins a hardcoded version would break install.
         assert!(actions.is_empty());
     }
 
@@ -1570,8 +1431,6 @@ mod tests {
         let changes = ca.edit.as_ref().unwrap().changes.as_ref().unwrap();
         let edits = changes.get(&uri).unwrap();
         assert_eq!(edits.len(), 1);
-        // start line 1 (`react:`), end line 4 (`is-even:` line). Range
-        // covers the 3-line object block: react: + 2 nested.
         assert_eq!(edits[0].range.start.line, 1);
         assert_eq!(edits[0].range.end.line, 4);
         assert_eq!(edits[0].new_text, "");
@@ -1579,9 +1438,6 @@ mod tests {
 
     #[test]
     fn catalog_action_bails_when_line_does_not_match_entry_name() {
-        // File has been edited since `fallow check` ran; the reported
-        // line no longer holds the catalog entry. Don't blindly delete
-        // unrelated content.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -1603,23 +1459,14 @@ mod tests {
 
     #[test]
     fn catalog_action_bails_when_entry_name_is_substring_of_sibling() {
-        // Regression test for the rust-reviewer's BLOCK on the initial
-        // implementation: pnpm catalogs commonly hold sibling entries
-        // whose names share a prefix (`react` and `react-native`,
-        // `lodash` and `lodash-es`, `core-js` and `core-js-bundle`). If
-        // the file has been edited since `fallow check` ran and the
-        // reported line now holds a DIFFERENT entry whose name starts
-        // with the same prefix, the action must NOT fire.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
         let mut results = AnalysisResults::default();
-        // Reported finding: `react` on line 2.
         results
             .unused_catalog_entries
             .push(make_catalog_entry("react", "default", 2, vec![]));
 
-        // But the actual file now has `react-native` on line 2.
         let lines = vec!["catalog:", "  react-native: ^0.73.0"];
         let actions = build_remove_catalog_entry_actions(
             &results,
@@ -1636,9 +1483,6 @@ mod tests {
 
     #[test]
     fn catalog_action_bails_when_entry_name_appears_only_in_value() {
-        // Defensive: an entry whose value happens to contain the entry
-        // name as a substring shouldn't accidentally match. Vanishingly
-        // rare in real YAML but cheap to defend against.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -1647,7 +1491,6 @@ mod tests {
             .unused_catalog_entries
             .push(make_catalog_entry("react", "default", 2, vec![]));
 
-        // The actual line is a different key whose VALUE mentions react.
         let lines = vec!["catalog:", "  description: react fork"];
         let actions = build_remove_catalog_entry_actions(
             &results,
@@ -1661,8 +1504,6 @@ mod tests {
 
     #[test]
     fn catalog_action_handles_quoted_key_forms() {
-        // Scoped packages and other quoted keys are valid YAML. The
-        // sanity check accepts both quote styles.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -1688,13 +1529,11 @@ mod tests {
         let uri = workspace_yaml_uri(&dir);
 
         let mut results = AnalysisResults::default();
-        // is-even sits on 1-based line 3 (0-based line 2)
         results
             .unused_catalog_entries
             .push(make_catalog_entry("is-even", "default", 3, vec![]));
 
         let lines = vec!["catalog:", "  is-odd: ^1.0.0", "  is-even: ^1.0.0"];
-        // Cursor on lines 0-1; action's diagnostic is on line 2.
         let actions = build_remove_catalog_entry_actions(
             &results,
             dir.path(),
@@ -1707,10 +1546,6 @@ mod tests {
 
     #[test]
     fn catalog_action_named_catalog_uses_matching_diagnostic_message() {
-        // Regression test for the LSP-reviewer C3 concern: the action's
-        // reconstructed diagnostic message must mirror the published
-        // diagnostic's named-catalog phrasing so "Fix all in file"
-        // grouping does not get confused.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -1738,10 +1573,6 @@ mod tests {
 
     #[test]
     fn catalog_action_emits_parent_rewrite_when_emptying_named_catalog() {
-        // Regression: pnpm rejects bare `react17:` (null value). When the
-        // last entry of a named catalog is removed, the action must emit
-        // a second TextEdit rewriting the parent to `react17: {}`.
-        // Reproduces the issue-329 fixture scenario Codex caught.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -1769,18 +1600,14 @@ mod tests {
             "must emit deletion + parent rewrite, got {} edits",
             edits.len()
         );
-        // First edit removes the entry line.
         assert_eq!(edits[0].range.start.line, 2);
         assert_eq!(edits[0].new_text, "");
-        // Second edit rewrites the parent header.
         assert_eq!(edits[1].range.start.line, 1);
         assert_eq!(edits[1].new_text, "  react17: {}");
     }
 
     #[test]
     fn catalog_action_no_parent_rewrite_when_siblings_remain() {
-        // When other entries stay in the catalog, the parent rewrite
-        // must NOT fire.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -1853,7 +1680,6 @@ mod tests {
         let lines: Vec<&str> = "catalog:\n  is-even: ^1.0.0\n  is-odd: ^1.0.0\n"
             .split('\n')
             .collect();
-        // start at index 1 (`  is-even: ^1.0.0`)
         assert_eq!(compute_catalog_deletion_end(&lines, 1), 2);
     }
 
@@ -1861,13 +1687,8 @@ mod tests {
     fn compute_catalog_deletion_end_object_form() {
         let content = "catalog:\n  react:\n    specifier: ^18.2.0\n    publishConfig: {}\n  is-even: ^1.0.0\n";
         let lines: Vec<&str> = content.split('\n').collect();
-        // start at index 1 (`  react:`); should consume 3 more lines.
         assert_eq!(compute_catalog_deletion_end(&lines, 1), 4);
     }
-
-    // -----------------------------------------------------------------------
-    // build_remove_empty_catalog_group_actions
-    // -----------------------------------------------------------------------
 
     use fallow_core::results::{EmptyCatalogGroup, EmptyCatalogGroupFinding};
 
@@ -1889,7 +1710,6 @@ mod tests {
             .empty_catalog_groups
             .push(make_empty_group("legacy", 3));
 
-        // Three lines: `catalogs:`, `  react17:` (sibling, populated), `  legacy:` (empty).
         let lines = vec!["catalogs:", "  react17: {}", "  legacy:"];
         let actions = build_remove_empty_catalog_group_actions(
             &results,
@@ -1904,7 +1724,6 @@ mod tests {
         assert_eq!(ca.title, "Remove empty catalog group `legacy`");
         assert_eq!(ca.kind, Some(CodeActionKind::QUICKFIX));
 
-        // WorkspaceEdit has exactly one TextEdit covering [line 2, line 3).
         let edit = ca.edit.as_ref().unwrap();
         let changes = edit.changes.as_ref().unwrap();
         let edits = changes.get(&uri).unwrap();
@@ -1915,8 +1734,6 @@ mod tests {
         assert_eq!(edits[0].range.end.character, 0);
         assert_eq!(edits[0].new_text, "");
 
-        // The action's reconstructed diagnostic must match the published
-        // shape so VS Code's "Fix all in file" can correlate them.
         let diag = &ca.diagnostics.as_ref().unwrap()[0];
         assert_eq!(diag.severity, Some(DiagnosticSeverity::WARNING));
         assert_eq!(diag.source, Some("fallow".to_string()));
@@ -1960,7 +1777,6 @@ mod tests {
             .push(make_empty_group("legacy", 3));
 
         let lines = vec!["catalogs:", "  react17: {}", "  legacy:"];
-        // Cursor on line 0 (`catalogs:`), finding is on line 2.
         let actions = build_remove_empty_catalog_group_actions(
             &results,
             dir.path(),
@@ -1976,9 +1792,6 @@ mod tests {
 
     #[test]
     fn empty_catalog_group_action_skips_when_prefix_collision() {
-        // Stale finding for `react17` but the line now reads `react18:`.
-        // The anchored key match must reject the prefix-collision so the
-        // wrong header is never deleted.
         let dir = tempfile::tempdir().unwrap();
         let uri = workspace_yaml_uri(&dir);
 
@@ -2074,17 +1887,8 @@ mod tests {
         assert!(actions.is_empty());
     }
 
-    // -----------------------------------------------------------------------
-    // Stale-line re-validation
-    // -----------------------------------------------------------------------
-
     #[test]
     fn build_remove_export_actions_skips_stale_line() {
-        // Cached finding says line 0 is `export foo`; live document has been
-        // edited to `const foo = 1;`. The action would otherwise delete the
-        // leading `const ` characters as if they were `export `. The prefix
-        // check already covers this case (no `export ` prefix found), but
-        // we assert it here to lock the behavior.
         let root = test_root();
         let file = root.join("src/utils.ts");
         let uri = Url::from_file_path(&file).unwrap();
@@ -2093,7 +1897,6 @@ mod tests {
             &file, "foo", 1, // 1-based
             7,
         ));
-        // Live line at index 0 has no `export ` prefix.
         let lines = vec!["const foo = 1;"];
         let actions = build_remove_export_actions(&results, &file, &uri, &make_range(0, 0), &lines);
         assert!(
@@ -2104,12 +1907,6 @@ mod tests {
 
     #[test]
     fn build_remove_export_actions_skips_substring_collision() {
-        // Cached finding says line 0 has unused `export foo`. Live document
-        // now shows `export const foobar = 1;`. A bare `contains` would
-        // match `foo` inside `foobar` and produce a code action that
-        // strips the `export ` prefix from an unrelated declaration,
-        // silently making `foobar` non-exported. Declaration-shape
-        // matching must reject this.
         let root = test_root();
         let file = root.join("src/utils.ts");
         let uri = Url::from_file_path(&file).unwrap();
@@ -2128,14 +1925,6 @@ mod tests {
 
     #[test]
     fn build_remove_export_actions_skips_value_reference_collision() {
-        // The Codex-caught corruption case from #480 re-review: cached
-        // finding says line 0 has unused `export foo`. Live document now
-        // shows `export const bar = foo;` (the user reshaped the line so
-        // `foo` is referenced as a VALUE, not the declared name). A
-        // loose identifier-bounded `contains` would still match `foo`
-        // with non-identifier characters on both sides and silently
-        // strip `export ` from `bar`. The declaration-shape check
-        // rejects this because the declared name is `bar`, not `foo`.
         let root = test_root();
         let file = root.join("src/utils.ts");
         let uri = Url::from_file_path(&file).unwrap();
@@ -2154,10 +1943,6 @@ mod tests {
 
     #[test]
     fn build_remove_export_actions_skips_reexport_block() {
-        // Re-export forms produce an invalid edit when `export ` is
-        // stripped (`{ foo } from './bar';` is a syntax error). The
-        // declaration-shape check conservatively suppresses the action
-        // for these shapes.
         let root = test_root();
         let file = root.join("src/utils.ts");
         let uri = Url::from_file_path(&file).unwrap();
@@ -2176,7 +1961,6 @@ mod tests {
 
     #[test]
     fn build_remove_export_actions_accepts_matching_live_line() {
-        // Positive case: live line still matches the cached finding.
         let root = test_root();
         let file = root.join("src/utils.ts");
         let uri = Url::from_file_path(&file).unwrap();
@@ -2257,7 +2041,6 @@ mod tests {
             "export ",
             "foo",
         ));
-        // Leading indentation is fine.
         assert!(declares_export_name(
             "    export const foo = 1;",
             "export ",
@@ -2267,10 +2050,6 @@ mod tests {
 
     #[test]
     fn declares_export_name_rejects_value_reference_collision() {
-        // The Codex BLOCK case: stale finding for `foo`, live line has
-        // `foo` as a VALUE on the right-hand side of a different
-        // declaration. The action would otherwise strip `export ` from
-        // `bar` and silently un-export it.
         assert!(!declares_export_name(
             "export const bar = foo;",
             "export ",
@@ -2281,21 +2060,17 @@ mod tests {
             "export ",
             "foo",
         ));
-        // Substring collision: cached `foo`, live `foobar` declaration.
         assert!(!declares_export_name(
             "export const foobar = 1;",
             "export ",
             "foo",
         ));
-        // Same-prefix sibling: cached `foo`, live `Foo` (case-sensitive).
         assert!(!declares_export_name(
             "export class Foo {}",
             "export ",
             "foo"
         ));
-        // Missing prefix entirely.
         assert!(!declares_export_name("const foo = 1;", "export ", "foo"));
-        // Empty needle.
         assert!(!declares_export_name(
             "export const foo = 1;",
             "export ",
@@ -2305,10 +2080,6 @@ mod tests {
 
     #[test]
     fn declares_export_name_rejects_reexport_blocks() {
-        // Re-export forms produce an invalid edit when `export ` is
-        // stripped (`{ foo }` is a useless block-expression statement,
-        // and `{ foo } from './x';` is a syntax error). Conservative:
-        // suppress the action.
         assert!(!declares_export_name("export { foo };", "export ", "foo",));
         assert!(!declares_export_name(
             "export { foo } from './bar';",
@@ -2329,15 +2100,11 @@ mod tests {
 
     #[test]
     fn declares_export_name_handles_multibyte_identifiers() {
-        // CJK / Cyrillic identifiers are legal JS identifiers and pass
-        // through unchanged in `leading_identifier` (which walks by char
-        // and stops at the first non-ASCII-ident char).
         assert!(declares_export_name(
             "export const 日本 = 1;",
             "export ",
             "日本",
         ));
-        // Substring of a multibyte identifier still fails the equality.
         assert!(!declares_export_name(
             "export const 日本語 = 1;",
             "export ",
@@ -2355,15 +2122,12 @@ mod tests {
         assert_eq!(leading_identifier("123foo"), "123foo");
         assert_eq!(leading_identifier("_foo"), "_foo");
         assert_eq!(leading_identifier("$foo"), "$foo");
-        // Non-identifier leader returns empty.
         assert_eq!(leading_identifier(" foo"), "");
         assert_eq!(leading_identifier("{foo}"), "");
     }
 
     #[test]
     fn strip_declaration_keywords_handles_modifier_stacks() {
-        // Each call returns the byte slice AFTER the modifier + keyword
-        // stack with leading whitespace already trimmed.
         assert_eq!(strip_declaration_keywords("const foo = 1"), "foo = 1");
         assert_eq!(strip_declaration_keywords("function foo()"), "foo()");
         assert_eq!(strip_declaration_keywords("function* foo()"), "foo()");
@@ -2373,7 +2137,6 @@ mod tests {
             strip_declaration_keywords("declare const foo: number"),
             "foo: number",
         );
-        // No keyword present: returns the trimmed input unchanged.
         assert_eq!(strip_declaration_keywords("foo bar"), "foo bar");
         assert_eq!(strip_declaration_keywords("    foo"), "foo");
     }

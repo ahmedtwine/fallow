@@ -294,10 +294,6 @@ fn emit_blocked_monorepo(
     fixes: &mut Vec<serde_json::Value>,
 ) {
     let target_display = display_path(root, &root.join(".fallowrc.json"));
-    // The JSON field is the analysis-root-relative path (so CI logs and
-    // shipped JSON snippets don't leak absolute system paths from CI
-    // runners). The human stderr message keeps the absolute path so the
-    // user can paste it into `cd` directly without resolving `..` chains.
     let workspace_relative = display_workspace_path(root, workspace_root);
     if !matches!(output, OutputFormat::Json) {
         let absolute = workspace_root.display();
@@ -409,9 +405,6 @@ fn render_unified_diff(path_display: &str, current: &str, proposed: &str) -> Str
     let mut out = String::new();
     let _ = writeln!(out, "--- {path_display} (current)");
     let _ = writeln!(out, "+++ {path_display} (proposed)");
-    // `similar`'s `unified_diff()` without `.header()` emits only the
-    // `@@` hunk markers and `+/-/space` content lines; we already wrote
-    // path-bearing headers above, so no library header is needed.
     let unified = diff.unified_diff().context_radius(3).to_string();
     out.push_str(&unified);
     out
@@ -608,7 +601,6 @@ mod tests {
         assert!(out.contains("+{"));
         assert!(out.contains("+  \"a\": 1"));
         assert!(out.contains("+}"));
-        // Every content line is prefixed; no spurious `-` lines.
         assert!(!out.contains("\n-"));
     }
 
@@ -619,7 +611,6 @@ mod tests {
         let diff = render_unified_diff(".fallowrc.json", current, proposed);
         assert!(diff.contains("--- .fallowrc.json (current)"));
         assert!(diff.contains("+++ .fallowrc.json (proposed)"));
-        // Additions only; no `-` lines for the unchanged rules block.
         assert!(
             diff.lines()
                 .any(|l| l.starts_with("+    { \"file\": \"src/a.ts\""))
@@ -733,8 +724,6 @@ mod tests {
 
         #[test]
         fn workspace_check_does_not_block_when_root_has_marker() {
-            // When the user invokes fallow at the workspace root itself,
-            // the create-fallback should fire there (not be blocked).
             let dir = tempfile::tempdir().unwrap();
             let workspace = dir.path();
             std::fs::write(workspace.join("pnpm-workspace.yaml"), "packages:\n").unwrap();
@@ -780,8 +769,6 @@ mod tests {
         fn apply_missing_config_creates_init_shape_file() {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path();
-            // Detect a TypeScript + Storybook + Vitest project so the seed
-            // includes framework-aware scaffolding instead of a thin shell.
             std::fs::write(root.join("tsconfig.json"), "{}").unwrap();
             std::fs::create_dir_all(root.join(".storybook")).unwrap();
             std::fs::write(
@@ -883,8 +870,6 @@ mod tests {
             assert_eq!(fixes.len(), 1);
             assert_eq!(fixes[0]["skipped"], serde_json::json!(true));
             assert_eq!(fixes[0]["skip_reason"], "monorepo_subpackage");
-            // Relative `../..` from `packages/ui` up to `workspace`
-            // (two parent hops: `packages/ui` -> `packages` -> workspace).
             assert_eq!(fixes[0]["workspace_root"], "../..");
         }
 
@@ -914,8 +899,6 @@ mod tests {
             assert_eq!(fixes.len(), 1);
             let diff = fixes[0]["proposed_diff"].as_str().unwrap();
             assert!(diff.contains("(current)") && diff.contains("(proposed)"));
-            // Comment must be preserved in the rendered proposal.
-            // (The diff context window shows surrounding lines.)
             assert!(diff.contains("ignoreExports"));
         }
 

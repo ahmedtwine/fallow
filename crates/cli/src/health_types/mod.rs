@@ -186,7 +186,6 @@ mod tests {
     fn health_report_skips_empty_collections() {
         let report = HealthReport::default();
         let json = serde_json::to_string(&report).unwrap();
-        // Empty vecs should be omitted due to skip_serializing_if
         assert!(!json.contains("file_scores"));
         assert!(!json.contains("hotspots"));
         assert!(!json.contains("hotspot_summary"));

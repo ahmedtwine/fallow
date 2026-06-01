@@ -1,6 +1,3 @@
-// 16 MiB stack: graph traversal and the AST visitor recurse deeply enough on
-// large real-world projects to exceed Rust's default 8 MiB worker stack. The
-// `configured_pool_survives_deep_worker_stack_probe` test asserts this floor.
 const WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 #[allow(
@@ -8,10 +5,6 @@ const WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
     reason = "used by the CLI binary; the library build uses per-call pools"
 )]
 pub fn configure_global_pool(threads: usize) {
-    // `build_global` is process-wide and one-shot: subsequent calls (e.g. from
-    // a NAPI host that constructs `AnalysisOptions` per request) return Err and
-    // leave the first-set thread count and stack size in place. Errors are
-    // intentionally discarded so re-entry is a no-op rather than a hard failure.
     let _ = build_pool(threads).build_global();
 }
 

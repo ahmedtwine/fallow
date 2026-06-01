@@ -40,8 +40,6 @@ fn make_file_tokens(source: &str, count: usize) -> FileTokens {
     }
 }
 
-// ── Existing tests (adapted for CloneDetector) ─────────
-
 #[test]
 fn empty_input_produces_empty_report() {
     let detector = CloneDetector::new(5, 1, false);
@@ -63,7 +61,6 @@ fn single_file_no_clones() {
 fn detects_exact_duplicate_across_files() {
     let detector = CloneDetector::new(3, 1, false);
 
-    // Same token sequence in two files.
     let hashes = vec![10, 20, 30, 40, 50];
     let source_a = "a\nb\nc\nd\ne";
     let source_b = "a\nb\nc\nd\ne";
@@ -114,7 +111,6 @@ fn byte_offset_to_line_col_basic() {
 #[test]
 fn byte_offset_beyond_source() {
     let source = "abc";
-    // Should clamp to end of source.
     let (line, col) = utils::byte_offset_to_line_col(source, 100);
     assert_eq!(line, 1);
     assert_eq!(col, 3);
@@ -132,7 +128,6 @@ fn skip_local_filters_same_directory() {
     let ft_a = make_file_tokens(source, 5);
     let ft_b = make_file_tokens(source, 5);
 
-    // Same directory -> should be filtered with skip_local.
     let report = detector.detect(vec![
         (PathBuf::from("src/a.ts"), hashed_a, ft_a),
         (PathBuf::from("src/b.ts"), hashed_b, ft_b),
@@ -156,7 +151,6 @@ fn skip_local_keeps_cross_directory() {
     let ft_a = make_file_tokens(source, 5);
     let ft_b = make_file_tokens(source, 5);
 
-    // Different directories -> should be kept.
     let report = detector.detect(vec![
         (PathBuf::from("src/components/a.ts"), hashed_a, ft_a),
         (PathBuf::from("src/utils/b.ts"), hashed_b, ft_b),
@@ -204,21 +198,11 @@ fn stats_computation() {
     assert!(stats.duplication_percentage > 0.0);
 }
 
-// ── New suffix array / LCP tests ───────────────────────
-
 #[test]
 fn sa_construction_basic() {
-    // "banana" encoded as integers: b=1, a=0, n=2
     let text: Vec<i64> = vec![1, 0, 2, 0, 2, 0];
     let sa = suffix_array::build_suffix_array(&text);
 
-    // Suffixes sorted lexicographically:
-    // SA[0] = 5: "a"           (0)
-    // SA[1] = 3: "ana"         (0,2,0)
-    // SA[2] = 1: "anana"       (0,2,0,2,0)
-    // SA[3] = 0: "banana"      (1,0,2,0,2,0)
-    // SA[4] = 4: "na"          (2,0)
-    // SA[5] = 2: "nana"        (2,0,2,0)
     assert_eq!(sa, vec![5, 3, 1, 0, 4, 2]);
 }
 
@@ -228,25 +212,15 @@ fn lcp_construction_basic() {
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
 
-    // LCP values for "banana":
-    // lcp[0] = 0 (by definition)
-    // lcp[1] = 1 (LCP of "a" and "ana" = "a" = 1)
-    // lcp[2] = 3 (LCP of "ana" and "anana" = "ana" = 3)
-    // lcp[3] = 0 (LCP of "anana" and "banana" = "" = 0)
-    // lcp[4] = 0 (LCP of "banana" and "na" = "" = 0)
-    // lcp[5] = 2 (LCP of "na" and "nana" = "na" = 2)
     assert_eq!(lcp_arr, vec![0, 1, 3, 0, 0, 2]);
 }
 
 #[test]
 fn lcp_stops_at_sentinels() {
-    // Two "files": [0, 1, 2] sentinel [-1] [0, 1, 2]
     let text: Vec<i64> = vec![0, 1, 2, -1, 0, 1, 2];
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
 
-    // Find the SA positions corresponding to text positions 0 and 4
-    // (both start "0 1 2 ..."). LCP should be exactly 3.
     let rank_0 = sa.iter().position(|&s| s == 0).expect("pos 0 in SA");
     let rank_4 = sa.iter().position(|&s| s == 4).expect("pos 4 in SA");
     let (lo, hi) = if rank_0 < rank_4 {
@@ -255,7 +229,6 @@ fn lcp_stops_at_sentinels() {
         (rank_4, rank_0)
     };
 
-    // The minimum LCP in the range (lo, hi] gives the LCP between them.
     let min_lcp = lcp_arr[(lo + 1)..=hi].iter().copied().min().unwrap_or(0);
     assert_eq!(
         min_lcp, 3,
@@ -282,7 +255,6 @@ fn rank_reduction_maps_correctly() {
 
     let ranked = ranking::rank_reduce(&files);
 
-    // Unique hashes: 100, 200, 300, 400 -> ranks 0, 1, 2, 3
     assert_eq!(ranked[0], vec![0, 1, 2]);
     assert_eq!(ranked[1], vec![1, 2, 3]);
 }
@@ -311,7 +283,6 @@ fn three_file_grouping() {
         "Should detect clones across 3 identical files"
     );
 
-    // The largest group should contain 3 instances.
     let max_instances = report
         .clone_groups
         .iter()
@@ -328,7 +299,6 @@ fn three_file_grouping() {
 fn overlapping_clones_largest_wins() {
     let detector = CloneDetector::new(3, 1, false);
 
-    // File A and B: identical 10-token sequences.
     let hashes: Vec<u64> = (1..=10).collect();
     let source = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj";
 
@@ -343,7 +313,6 @@ fn overlapping_clones_largest_wins() {
     ]);
 
     assert!(!report.clone_groups.is_empty());
-    // The first group (sorted by token_count desc) should cover all 10.
     assert_eq!(
         report.clone_groups[0].token_count, 10,
         "Maximal clone should cover all 10 tokens"
@@ -354,12 +323,7 @@ fn overlapping_clones_largest_wins() {
 fn no_self_overlap() {
     let detector = CloneDetector::new(3, 1, false);
 
-    // File with repeated pattern: [1,2,3,1,2,3]
-    // The pattern [1,2,3] appears at offset 0 and offset 3.
     let hashes = vec![1, 2, 3, 1, 2, 3];
-    // Source must be long enough for synthetic spans: token i has span (i*3, i*3+2).
-    // Last token (5) has span (15, 17), so source must be >= 17 bytes.
-    // Use a source with enough content spread across distinct lines.
     let source = "aa\nbb\ncc\ndd\nee\nff\ngg";
 
     let hashed = make_hashed_tokens(&hashes);
@@ -367,7 +331,6 @@ fn no_self_overlap() {
 
     let report = detector.detect(vec![(PathBuf::from("a.ts"), hashed, ft)]);
 
-    // Verify that no clone instance overlaps with another in the same file.
     for group in &report.clone_groups {
         let mut file_instances: FxHashMap<&PathBuf, Vec<(usize, usize)>> = FxHashMap::default();
         for inst in &group.instances {
@@ -402,8 +365,6 @@ fn empty_input_edge_case() {
 fn single_file_internal_duplication() {
     let detector = CloneDetector::new(3, 1, false);
 
-    // File with a repeated block separated by a different token.
-    // [10, 20, 30, 99, 10, 20, 30]
     let hashes = vec![10, 20, 30, 99, 10, 20, 30];
     let source = "a\nb\nc\nx\na\nb\nc";
 
@@ -412,14 +373,11 @@ fn single_file_internal_duplication() {
 
     let report = detector.detect(vec![(PathBuf::from("a.ts"), hashed, ft)]);
 
-    // Should detect the [10, 20, 30] clone at offsets 0 and 4.
     assert!(
         !report.clone_groups.is_empty(),
         "Should detect internal duplication within a single file"
     );
 }
-
-// ── suffix_array module tests ───────────────────────────
 
 #[test]
 fn sa_empty_input() {
@@ -435,66 +393,51 @@ fn sa_single_element() {
 
 #[test]
 fn sa_two_elements_sorted() {
-    // [0, 1] -> suffixes: "0 1" at 0, "1" at 1
-    // Lex order: "0 1" < "1" -> SA = [0, 1]
     let sa = suffix_array::build_suffix_array(&[0, 1]);
     assert_eq!(sa, vec![0, 1]);
 }
 
 #[test]
 fn sa_two_elements_reversed() {
-    // [1, 0] -> suffixes: "1 0" at 0, "0" at 1
-    // Lex order: "0" < "1 0" -> SA = [1, 0]
     let sa = suffix_array::build_suffix_array(&[1, 0]);
     assert_eq!(sa, vec![1, 0]);
 }
 
 #[test]
 fn sa_all_identical() {
-    // [3, 3, 3, 3] -> all suffixes start with 3, shorter suffixes sort first
-    // SA should be [3, 2, 1, 0] (shortest suffix first)
     let sa = suffix_array::build_suffix_array(&[3, 3, 3, 3]);
     assert_eq!(sa, vec![3, 2, 1, 0]);
 }
 
 #[test]
 fn sa_already_sorted() {
-    // [0, 1, 2, 3] -> suffixes in ascending order
     let sa = suffix_array::build_suffix_array(&[0, 1, 2, 3]);
-    // "0 1 2 3" < "1 2 3" < "2 3" < "3"
     assert_eq!(sa, vec![0, 1, 2, 3]);
 }
 
 #[test]
 fn sa_reverse_sorted() {
-    // [3, 2, 1, 0]
     let sa = suffix_array::build_suffix_array(&[3, 2, 1, 0]);
-    // "0" at 3, "1 0" at 2, "2 1 0" at 1, "3 2 1 0" at 0
     assert_eq!(sa, vec![3, 2, 1, 0]);
 }
 
 #[test]
 fn sa_with_negative_sentinels() {
-    // Sentinels are negative. They should sort before positive values.
     let text: Vec<i64> = vec![5, 10, -1, 5, 10];
     let sa = suffix_array::build_suffix_array(&text);
 
-    // Verify the SA is a valid permutation.
     let mut sorted_sa = sa.clone();
     sorted_sa.sort_unstable();
     assert_eq!(sorted_sa, vec![0, 1, 2, 3, 4]);
 
-    // The sentinel at position 2 should sort earliest (most negative).
     assert_eq!(sa[0], 2, "Sentinel position should be first in SA");
 }
 
 #[test]
 fn sa_ordering_invariant() {
-    // Verify that suffixes are lexicographically ordered for a longer input.
     let text: Vec<i64> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
     let sa = suffix_array::build_suffix_array(&text);
 
-    // Check that sa[i] < sa[i+1] in lexicographic suffix order.
     for i in 0..sa.len() - 1 {
         let s1 = &text[sa[i]..];
         let s2 = &text[sa[i + 1]..];
@@ -519,17 +462,12 @@ fn sa_is_valid_permutation() {
 
 #[test]
 fn sa_multiple_sentinels() {
-    // Three files separated by unique sentinels: [1, 2, -1, 3, 4, -2, 5, 6]
     let text: Vec<i64> = vec![1, 2, -1, 3, 4, -2, 5, 6];
     let sa = suffix_array::build_suffix_array(&text);
 
-    // Sentinel -2 (position 5) should sort before -1 (position 2) which sorts
-    // before all positive values.
     assert_eq!(sa[0], 5, "Most negative sentinel should be first");
     assert_eq!(sa[1], 2, "Second sentinel should be second");
 }
-
-// ── lcp module tests ────────────────────────────────────
 
 #[test]
 fn lcp_empty_input() {
@@ -547,19 +485,12 @@ fn lcp_single_element() {
 
 #[test]
 fn lcp_no_common_prefixes() {
-    // All distinct values -> no shared prefixes between adjacent suffixes.
     let text: Vec<i64> = vec![0, 1, 2, 3];
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
 
-    // LCP[0] is always 0. Adjacent suffixes in SA share a prefix only when
-    // values coincide at corresponding positions.
     assert_eq!(lcp_arr[0], 0);
 
-    // For strictly increasing [0,1,2,3], sorted SA = [0,1,2,3].
-    // LCP between "0 1 2 3" and "1 2 3" = 0
-    // LCP between "1 2 3" and "2 3" = 0
-    // LCP between "2 3" and "3" = 0
     for v in &lcp_arr {
         assert_eq!(*v, 0);
     }
@@ -567,9 +498,6 @@ fn lcp_no_common_prefixes() {
 
 #[test]
 fn lcp_all_identical() {
-    // [5, 5, 5, 5] -> SA = [3, 2, 1, 0]
-    // Suffixes: [5], [5,5], [5,5,5], [5,5,5,5]
-    // LCP[0]=0, LCP[1]=1 (5 vs 5,5), LCP[2]=2, LCP[3]=3
     let text: Vec<i64> = vec![5, 5, 5, 5];
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
@@ -578,9 +506,6 @@ fn lcp_all_identical() {
 
 #[test]
 fn lcp_sentinel_prevents_cross_file_extension() {
-    // File 1: [1, 2, 3], sentinel [-1], File 2: [1, 2, 3, 4]
-    // The LCP between suffixes starting at pos 0 and pos 4 should be exactly 3
-    // (stops before sentinel in file 1), not 4.
     let text: Vec<i64> = vec![1, 2, 3, -1, 1, 2, 3, 4];
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
@@ -598,13 +523,10 @@ fn lcp_sentinel_prevents_cross_file_extension() {
 
 #[test]
 fn lcp_multiple_sentinels_between_files() {
-    // Three files with sentinels: [10, 20, -1, 10, 20, -2, 10, 20]
     let text: Vec<i64> = vec![10, 20, -1, 10, 20, -2, 10, 20];
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
 
-    // All three instances of [10, 20] should have LCP=2 pairwise.
-    // Find SA positions for text positions 0, 3, and 6 (all start with "10 20").
     let positions = [0usize, 3, 6];
     let mut ranks: Vec<usize> = positions
         .iter()
@@ -612,7 +534,6 @@ fn lcp_multiple_sentinels_between_files() {
         .collect();
     ranks.sort_unstable();
 
-    // Between consecutive ranks, min LCP should be 2.
     for w in ranks.windows(2) {
         let min_lcp = lcp_arr[(w[0] + 1)..=w[1]].iter().copied().min().unwrap();
         assert_eq!(
@@ -624,16 +545,12 @@ fn lcp_multiple_sentinels_between_files() {
 
 #[test]
 fn lcp_sentinel_at_start() {
-    // Sentinel followed by tokens: [-1, 5, 10]
     let text: Vec<i64> = vec![-1, 5, 10];
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
 
-    // LCP should be 0 for the sentinel entry since sentinel breaks matching.
     assert_eq!(lcp_arr[0], 0);
 }
-
-// ── concatenation module tests ──────────────────────────
 
 #[test]
 fn concat_empty_files_list() {
@@ -648,7 +565,6 @@ fn concat_single_file_no_sentinel() {
     let files = vec![vec![1u32, 2, 3]];
     let (text, file_of, file_offsets) = concatenation::concatenate_with_sentinels(&files);
 
-    // Single file: no sentinel appended.
     assert_eq!(text, vec![1i64, 2, 3]);
     assert_eq!(file_of, vec![0, 0, 0]);
     assert_eq!(file_offsets, vec![0]);
@@ -669,7 +585,6 @@ fn concat_three_files_unique_sentinels() {
     let files = vec![vec![10u32], vec![20u32], vec![30u32]];
     let (text, file_of, file_offsets) = concatenation::concatenate_with_sentinels(&files);
 
-    // sentinels: -1 between file 0 and 1, -2 between file 1 and 2
     assert_eq!(text, vec![10i64, -1, 20, -2, 30]);
     assert_eq!(file_of, vec![0, usize::MAX, 1, usize::MAX, 2]);
     assert_eq!(file_offsets, vec![0, 2, 4]);
@@ -680,11 +595,9 @@ fn concat_sentinels_are_unique() {
     let files = vec![vec![0u32; 3]; 5]; // 5 files of 3 tokens each
     let (text, _file_of, _file_offsets) = concatenation::concatenate_with_sentinels(&files);
 
-    // Extract sentinel values (negative entries).
     let sentinels: Vec<i64> = text.iter().copied().filter(|&v| v < 0).collect();
     assert_eq!(sentinels.len(), 4, "4 sentinels between 5 files");
 
-    // All sentinels must be unique.
     let unique: rustc_hash::FxHashSet<i64> = sentinels.iter().copied().collect();
     assert_eq!(
         unique.len(),
@@ -731,24 +644,18 @@ fn concat_empty_file_in_middle() {
     let files = vec![vec![1u32, 2], vec![], vec![3u32, 4]];
     let (text, file_of, file_offsets) = concatenation::concatenate_with_sentinels(&files);
 
-    // Empty file contributes 0 tokens but still gets a file offset.
     assert_eq!(file_offsets.len(), 3);
-    // text: [1, 2, -1, -2, 3, 4]
     assert_eq!(text.len(), 6);
-    // The empty file's offset points to the position right after its sentinel.
     assert_eq!(
         file_offsets[1], 3,
         "Empty file offset is after first sentinel"
     );
 
-    // Verify sentinels.
     assert_eq!(text[2], -1);
     assert_eq!(text[3], -2);
     assert_eq!(file_of[2], usize::MAX);
     assert_eq!(file_of[3], usize::MAX);
 }
-
-// ── extraction module tests ─────────────────────────────
 
 fn make_file_data(path: &str, source: &str, num_tokens: usize) -> FileData {
     FileData {
@@ -767,14 +674,12 @@ fn extraction_empty_sa() {
 
 #[test]
 fn extraction_single_suffix_no_groups() {
-    // Only one suffix -> cannot form a clone group.
     let groups = extraction::extract_clone_groups(&[0], &[0], &[0], &[0], 1, &[], None);
     assert!(groups.is_empty());
 }
 
 #[test]
 fn extraction_below_min_tokens_no_groups() {
-    // Two identical files but min_tokens is higher than file length.
     let files = vec![
         make_file_data("a.ts", "ab", 2),
         make_file_data("b.ts", "ab", 2),
@@ -798,8 +703,6 @@ fn extraction_below_min_tokens_no_groups() {
 
 #[test]
 fn extraction_skips_sentinel_positions() {
-    // Verify that sentinel positions (file_of = usize::MAX) are never included
-    // in clone group instances.
     let files = vec![
         make_file_data("a.ts", "aa\nbb\ncc", 3),
         make_file_data("b.ts", "aa\nbb\ncc", 3),
@@ -825,7 +728,6 @@ fn extraction_skips_sentinel_positions() {
 
 #[test]
 fn extraction_produces_valid_offsets() {
-    // All instance offsets must be within the file's token bounds.
     let files = vec![
         make_file_data("a.ts", "aa\nbb\ncc\ndd\nee", 5),
         make_file_data("b.ts", "aa\nbb\ncc\ndd\nee", 5),
@@ -852,9 +754,6 @@ fn extraction_produces_valid_offsets() {
 
 #[test]
 fn extraction_removes_overlapping_same_file() {
-    // File with overlapping repeat: [1,2,1,2,1] has [1,2] at offsets 0, 2 and
-    // also at offset 2 again via a different LCP interval. The extraction should
-    // deduplicate overlapping instances in the same file.
     let hashed = make_hashed_tokens(&[1, 2, 1, 2, 1]);
     let file = FileData {
         path: PathBuf::from("a.ts"),
@@ -871,7 +770,6 @@ fn extraction_removes_overlapping_same_file() {
     let groups =
         extraction::extract_clone_groups(&sa, &lcp_arr, &file_of, &file_offsets, 2, &files, None);
 
-    // Verify no two instances in the same file overlap.
     for group in &groups {
         let mut same_file: Vec<(usize, usize)> = group
             .instances
@@ -895,7 +793,6 @@ fn extraction_removes_overlapping_same_file() {
 
 #[test]
 fn extraction_at_least_two_instances() {
-    // Every returned group must have at least 2 instances.
     let files = vec![
         make_file_data("a.ts", "aa\nbb\ncc\ndd\nee", 5),
         make_file_data("b.ts", "aa\nbb\ncc\ndd\nee", 5),
@@ -917,8 +814,6 @@ fn extraction_at_least_two_instances() {
         );
     }
 }
-
-// ── ranking module tests ────────────────────────────────
 
 #[test]
 fn rank_reduce_empty_files() {
@@ -948,14 +843,12 @@ fn rank_reduce_all_same_hash() {
         atomic_invocation_spans: Vec::new(),
     }];
     let ranked = ranking::rank_reduce(&files);
-    // All same hash -> all same rank.
     assert_eq!(ranked[0][0], ranked[0][1]);
     assert_eq!(ranked[0][1], ranked[0][2]);
 }
 
 #[test]
 fn rank_reduce_preserves_equality() {
-    // Equal hashes in different files must produce equal ranks.
     let files = vec![
         FileData {
             path: PathBuf::from("a.ts"),
@@ -972,11 +865,8 @@ fn rank_reduce_preserves_equality() {
     ];
     let ranked = ranking::rank_reduce(&files);
 
-    // Hash 10 in file A position 0 should equal hash 10 in file B position 2.
     assert_eq!(ranked[0][0], ranked[1][2], "Hash 10 must map to same rank");
-    // Hash 20 equality.
     assert_eq!(ranked[0][1], ranked[1][1], "Hash 20 must map to same rank");
-    // Hash 30 equality.
     assert_eq!(ranked[0][2], ranked[1][0], "Hash 30 must map to same rank");
 }
 
@@ -999,8 +889,6 @@ fn rank_reduce_distinct_hashes_get_distinct_ranks() {
         "4 distinct hashes should produce 4 distinct ranks"
     );
 }
-
-// ── statistics module tests ─────────────────────────────
 
 #[test]
 fn stats_empty_groups() {
@@ -1041,7 +929,6 @@ fn stats_zero_total_lines() {
         line_count: 1,
     }];
 
-    // total_lines = 0 -> duplication_percentage should be 0.0 (no div by zero).
     let stats = statistics::compute_stats(&groups, 2, 0, 100);
     assert!((stats.duplication_percentage - 0.0).abs() < f64::EPSILON);
 }
@@ -1050,7 +937,6 @@ fn stats_zero_total_lines() {
 fn stats_duplicated_tokens_capped() {
     use crate::duplicates::types::{CloneGroup, CloneInstance};
 
-    // Create a group where duplicated_tokens would exceed total_tokens.
     let groups = vec![CloneGroup {
         instances: vec![
             CloneInstance {
@@ -1082,8 +968,6 @@ fn stats_duplicated_tokens_capped() {
         line_count: 10,
     }];
 
-    // 3 instances, token_count=100 -> duplicated = 100 * (3-1) = 200.
-    // But total_tokens = 50 -> capped to 50.
     let stats = statistics::compute_stats(&groups, 3, 30, 50);
     assert_eq!(
         stats.duplicated_tokens, 50,
@@ -1095,7 +979,6 @@ fn stats_duplicated_tokens_capped() {
 fn stats_multiple_groups_same_file() {
     use crate::duplicates::types::{CloneGroup, CloneInstance};
 
-    // Two clone groups in the same files with overlapping lines.
     let groups = vec![
         CloneGroup {
             instances: vec![
@@ -1147,8 +1030,6 @@ fn stats_multiple_groups_same_file() {
     assert_eq!(stats.files_with_clones, 2);
     assert_eq!(stats.clone_groups, 2);
     assert_eq!(stats.clone_instances, 4);
-    // Lines 1-5 and 3-8 in each file -> unique lines per file: {1,2,3,4,5,6,7,8} = 8.
-    // Two files -> 8 + 8 = 16 duplicated lines.
     assert_eq!(stats.duplicated_lines, 16);
 }
 
@@ -1156,8 +1037,6 @@ fn stats_multiple_groups_same_file() {
 fn stats_single_instance_no_duplicated_tokens() {
     use crate::duplicates::types::{CloneGroup, CloneInstance};
 
-    // A group with only one instance (shouldn't normally happen after filtering,
-    // but test the edge case). Only instances beyond the first count.
     let groups = vec![CloneGroup {
         instances: vec![CloneInstance {
             file: PathBuf::from("a.ts"),
@@ -1172,11 +1051,8 @@ fn stats_single_instance_no_duplicated_tokens() {
     }];
 
     let stats = statistics::compute_stats(&groups, 1, 100, 500);
-    // Only 1 instance -> 0 duplicated tokens (instances.len() - 1 = 0).
     assert_eq!(stats.duplicated_tokens, 0);
 }
-
-// ── utils module tests ──────────────────────────────────
 
 #[test]
 fn byte_offset_to_line_col_fast_matches_simple() {
@@ -1187,7 +1063,6 @@ fn byte_offset_to_line_col_fast_matches_simple() {
         .filter_map(|(i, b)| if b == b'\n' { Some(i) } else { None })
         .collect();
 
-    // Compare fast version against the simple version.
     for offset in 0..source.len() {
         let fast = utils::byte_offset_to_line_col_fast(source, offset, &line_table);
         let simple = utils::byte_offset_to_line_col(source, offset);
@@ -1223,12 +1098,10 @@ fn byte_offset_to_line_col_fast_at_newlines() {
     let source = "a\nb\nc";
     let line_table: Vec<usize> = vec![1, 3]; // newlines at byte 1 and 3
 
-    // At the newline itself.
     let (line, col) = utils::byte_offset_to_line_col_fast(source, 1, &line_table);
     assert_eq!(line, 1, "Newline byte belongs to line 1");
     assert_eq!(col, 1, "Column should be 1 (after 'a')");
 
-    // Right after the newline.
     let (line, col) = utils::byte_offset_to_line_col_fast(source, 2, &line_table);
     assert_eq!(line, 2, "Byte after first newline is line 2");
     assert_eq!(col, 0, "Column should be 0 at start of line");
@@ -1236,7 +1109,6 @@ fn byte_offset_to_line_col_fast_at_newlines() {
 
 #[test]
 fn byte_offset_to_line_col_multibyte_chars() {
-    // UTF-8 multibyte: each emoji is 4 bytes.
     let source = "\u{1F600}\n\u{1F601}"; // 4 bytes + \n + 4 bytes
     let (line, col) = utils::byte_offset_to_line_col(source, 0);
     assert_eq!(line, 1);
@@ -1253,19 +1125,14 @@ fn byte_offset_to_line_col_multibyte_chars() {
 
 #[test]
 fn byte_offset_to_line_col_inside_multibyte() {
-    // Offset landing inside a multibyte char should snap backward.
     let source = "\u{1F600}abc"; // 4-byte emoji + 3 ASCII
-    // Offset 2 is inside the emoji -> should snap to byte 0 (start of emoji).
     let (line, col) = utils::byte_offset_to_line_col(source, 2);
     assert_eq!(line, 1);
     assert_eq!(col, 0, "Should snap to character boundary");
 }
 
-// ── End-to-end pipeline tests ───────────────────────────
-
 #[test]
 fn pipeline_rank_concat_sa_lcp_roundtrip() {
-    // Two files with partially shared content.
     let files = vec![
         FileData {
             path: PathBuf::from("a.ts"),
@@ -1286,16 +1153,13 @@ fn pipeline_rank_concat_sa_lcp_roundtrip() {
     let sa = suffix_array::build_suffix_array(&text);
     let lcp_arr = lcp::build_lcp(&text, &sa);
 
-    // SA must be a valid permutation.
     let mut sorted_sa = sa.clone();
     sorted_sa.sort_unstable();
     let expected: Vec<usize> = (0..text.len()).collect();
     assert_eq!(sorted_sa, expected);
 
-    // LCP[0] must be 0.
     assert_eq!(lcp_arr[0], 0);
 
-    // Extract groups with min_tokens=3. The shared [10,20,30] should appear.
     let groups =
         extraction::extract_clone_groups(&sa, &lcp_arr, &file_of, &file_offsets, 3, &files, None);
     assert!(
@@ -1303,14 +1167,12 @@ fn pipeline_rank_concat_sa_lcp_roundtrip() {
         "Should find clone group for shared [10,20,30]"
     );
 
-    // At least one group should have length 3.
     let has_len_3 = groups.iter().any(|g| g.length == 3);
     assert!(has_len_3, "Should have a group of length 3");
 }
 
 #[test]
 fn pipeline_no_false_positives_with_different_files() {
-    // Two files with completely different token hashes.
     let files = vec![
         FileData {
             path: PathBuf::from("a.ts"),
@@ -1341,7 +1203,6 @@ fn pipeline_no_false_positives_with_different_files() {
 
 #[test]
 fn min_tokens_zero_returns_empty() {
-    // min_tokens=0 is an early-exit edge case in CloneDetector::detect.
     let detector = CloneDetector::new(0, 1, false);
     let hashes = vec![10, 20, 30];
     let report = detector.detect(vec![(
@@ -1387,9 +1248,6 @@ fn detector_stats_are_consistent() {
 fn detector_groups_sorted_by_token_count_desc() {
     let detector = CloneDetector::new(3, 1, false);
 
-    // File A and B have two distinct shared blocks of different lengths.
-    // Block 1: [10,20,30] (3 tokens) at start.
-    // Block 2: [40,50,60,70] (4 tokens) at end, separated by a unique token.
     let hashes_a: Vec<u64> = vec![10, 20, 30, 99, 40, 50, 60, 70];
     let hashes_b: Vec<u64> = vec![10, 20, 30, 88, 40, 50, 60, 70];
     let source = "a\nb\nc\nd\ne\nf\ng\nh";
@@ -1407,7 +1265,6 @@ fn detector_groups_sorted_by_token_count_desc() {
         ),
     ]);
 
-    // Verify groups are sorted by token_count descending.
     for w in report.clone_groups.windows(2) {
         assert!(
             w[0].token_count >= w[1].token_count,
@@ -1449,7 +1306,6 @@ mod proptests {
             let sa = suffix_array::build_suffix_array(&values);
             let lcp_arr = lcp::build_lcp(&values, &sa);
             prop_assert_eq!(lcp_arr.len(), sa.len(), "LCP array should have same length as SA");
-            // LCP[0] is always 0
             if !lcp_arr.is_empty() {
                 prop_assert_eq!(lcp_arr[0], 0, "LCP[0] should always be 0");
             }
@@ -1541,14 +1397,8 @@ mod proptests {
     }
 }
 
-// ── Coverage improvement tests ────────────────────────────
-
 #[test]
 fn all_files_empty_tokens_returns_empty_report() {
-    // Files with zero tokens: passes the `file_data.is_empty()` check.
-    // With 2 files, concatenation inserts a sentinel between them so
-    // `text` is not empty. The pipeline runs but finds no clones.
-    // Exercises `map_or(0, ...)` None branch (no ranks to max over).
     let detector = CloneDetector::new(3, 1, false);
     let ft_a = make_file_tokens("", 0);
     let ft_b = make_file_tokens("", 0);
@@ -1559,14 +1409,11 @@ fn all_files_empty_tokens_returns_empty_report() {
     assert!(report.clone_groups.is_empty());
     assert_eq!(report.stats.total_files, 2);
     assert_eq!(report.stats.total_tokens, 0);
-    // make_file_tokens("", 0) has line_count=1, so total_lines = 2.
     assert_eq!(report.stats.total_lines, 2);
 }
 
 #[test]
 fn single_empty_token_file_returns_empty_report() {
-    // One file with no tokens: still passes `file_data.is_empty()` (len=1)
-    // but concatenation produces empty text.
     let detector = CloneDetector::new(3, 1, false);
     let ft = make_file_tokens("", 0);
     let report = detector.detect(vec![(PathBuf::from("a.ts"), vec![], ft)]);
@@ -1576,8 +1423,6 @@ fn single_empty_token_file_returns_empty_report() {
 
 #[test]
 fn mixed_empty_and_nonempty_files() {
-    // One file with tokens, one without. Exercises accumulation where some
-    // files contribute 0 to total_lines/total_tokens.
     let detector = CloneDetector::new(3, 1, false);
     let hashes = vec![10, 20, 30, 40, 50];
     let source = "a\nb\nc\nd\ne";
@@ -1589,22 +1434,16 @@ fn mixed_empty_and_nonempty_files() {
         ),
         (PathBuf::from("b.ts"), vec![], make_file_tokens("", 0)),
     ]);
-    // No clones because only one file has tokens.
     assert!(report.clone_groups.is_empty());
     assert_eq!(report.stats.total_files, 2);
     assert_eq!(report.stats.total_tokens, 5);
-    // make_file_tokens("", 0) has line_count=1 (min 1), so 5 + 1 = 6.
     assert_eq!(report.stats.total_lines, 6);
 }
 
 #[test]
 fn min_lines_filters_short_clones() {
-    // Two identical files but with min_lines set high enough to filter out
-    // the detected clones. This exercises the `build_groups` min_lines filter
-    // path through the full detector pipeline.
     let detector = CloneDetector::new(3, 10, false);
     let hashes = vec![10, 20, 30];
-    // Source is only 3 lines, so clone spans < 10 lines.
     let source = "aa\nbb\ncc";
     let report = detector.detect(vec![
         (
@@ -1626,10 +1465,8 @@ fn min_lines_filters_short_clones() {
 
 #[test]
 fn min_lines_allows_long_enough_clones() {
-    // Verify that clones meeting the min_lines threshold are retained.
     let detector = CloneDetector::new(3, 3, false);
     let hashes = vec![10, 20, 30, 40, 50];
-    // 5 lines, so clone should span >= 3 lines.
     let source = "a\nb\nc\nd\ne";
     let report = detector.detect(vec![
         (
@@ -1651,9 +1488,6 @@ fn min_lines_allows_long_enough_clones() {
 
 #[test]
 fn many_files_with_shared_prefix() {
-    // 5 files that share the first 4 tokens but differ in the last.
-    // Exercises the pipeline with multiple files, cross-file grouping, and
-    // stats accumulation.
     let detector = CloneDetector::new(3, 1, false);
     let data: Vec<(PathBuf, Vec<HashedToken>, FileTokens)> = (0..5)
         .map(|i| {
@@ -1673,7 +1507,6 @@ fn many_files_with_shared_prefix() {
     assert_eq!(report.stats.total_files, 5);
     assert_eq!(report.stats.total_tokens, 25);
     assert_eq!(report.stats.total_lines, 25);
-    // The largest group should have at least 4 tokens (the shared prefix).
     let max_tokens = report
         .clone_groups
         .iter()
@@ -1685,8 +1518,6 @@ fn many_files_with_shared_prefix() {
 
 #[test]
 fn three_empty_files_early_return() {
-    // Multiple empty-token files: concatenation inserts sentinels between them
-    // so text is non-empty. The pipeline runs but finds no clones.
     let detector = CloneDetector::new(5, 1, false);
     let data: Vec<(PathBuf, Vec<HashedToken>, FileTokens)> = (0..3)
         .map(|i| {
@@ -1701,16 +1532,12 @@ fn three_empty_files_early_return() {
     assert!(report.clone_groups.is_empty());
     assert_eq!(report.stats.total_files, 3);
     assert_eq!(report.stats.total_tokens, 0);
-    // Each file has line_count=1 (min 1), so 3 total.
     assert_eq!(report.stats.total_lines, 3);
     assert!((report.stats.duplication_percentage - 0.0).abs() < f64::EPSILON);
 }
 
 #[test]
 fn skip_local_with_root_level_files() {
-    // Files with no parent directory (root-level). When skip_local is true,
-    // files at root level have empty-string parent, exercising the `filter_map`
-    // branch in the skip_local logic.
     let detector = CloneDetector::new(3, 1, true);
     let hashes = vec![10, 20, 30, 40, 50];
     let source = "a\nb\nc\nd\ne";
@@ -1726,7 +1553,6 @@ fn skip_local_with_root_level_files() {
             make_file_tokens(source, 5),
         ),
     ]);
-    // Root-level files have empty parent (""), so all in same "directory" -> filtered.
     assert!(
         report.clone_groups.is_empty(),
         "Root-level files with skip_local should be filtered (same implicit directory)"
@@ -1735,7 +1561,6 @@ fn skip_local_with_root_level_files() {
 
 #[test]
 fn partial_overlap_between_two_files() {
-    // Two files that share a middle portion but differ at start and end.
     let detector = CloneDetector::new(3, 1, false);
     let hashes_a: Vec<u64> = vec![1, 2, 10, 20, 30, 40, 7, 8];
     let hashes_b: Vec<u64> = vec![3, 4, 10, 20, 30, 40, 9, 11];
@@ -1753,15 +1578,12 @@ fn partial_overlap_between_two_files() {
         ),
     ]);
     assert!(!report.clone_groups.is_empty());
-    // The shared block [10,20,30,40] should be detected.
     let has_shared = report.clone_groups.iter().any(|g| g.token_count >= 4);
     assert!(has_shared, "Should detect the shared [10,20,30,40] block");
 }
 
 #[test]
 fn report_clone_families_and_mirrored_directories_empty() {
-    // Verify that the report always has empty clone_families and
-    // mirrored_directories (they are populated by the caller).
     let detector = CloneDetector::new(3, 1, false);
     let hashes = vec![10, 20, 30, 40, 50];
     let source = "a\nb\nc\nd\ne";
@@ -1783,8 +1605,6 @@ fn report_clone_families_and_mirrored_directories_empty() {
 
 #[test]
 fn large_min_tokens_no_clones() {
-    // min_tokens larger than any file's token count. Files are non-empty
-    // so we pass the empty checks, but extraction produces no groups.
     let detector = CloneDetector::new(100, 1, false);
     let hashes = vec![10, 20, 30];
     let source = "a\nb\nc";
@@ -1807,7 +1627,6 @@ fn large_min_tokens_no_clones() {
 
 #[test]
 fn unique_ranks_computation_single_file() {
-    // One file with tokens exercises `unique_ranks` map_or with Some.
     let detector = CloneDetector::new(3, 1, false);
     let hashes = vec![10, 20, 30];
     let source = "a\nb\nc";
@@ -1816,15 +1635,12 @@ fn unique_ranks_computation_single_file() {
         make_hashed_tokens(&hashes),
         make_file_tokens(source, 3),
     )]);
-    // Single file, no clones possible.
     assert!(report.clone_groups.is_empty());
     assert_eq!(report.stats.total_files, 1);
 }
 
 #[test]
 fn skip_local_false_keeps_same_directory() {
-    // Opposite of skip_local_filters_same_directory: when skip_local is false,
-    // same-directory clones should be kept.
     let detector = CloneDetector::new(3, 1, false);
     let hashes = vec![10, 20, 30, 40, 50];
     let source = "a\nb\nc\nd\ne";
@@ -1848,7 +1664,6 @@ fn skip_local_false_keeps_same_directory() {
 
 #[test]
 fn stats_duplication_percentage_within_bounds() {
-    // Verify duplication_percentage is always in [0.0, 100.0] for various configs.
     for min_tokens in [1, 3, 5] {
         let detector = CloneDetector::new(min_tokens, 1, false);
         let hashes: Vec<u64> = (1..=10).collect();

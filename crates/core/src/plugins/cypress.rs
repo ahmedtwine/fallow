@@ -43,11 +43,6 @@ define_plugin!(
             result.referenced_dependencies.push(dep);
         }
 
-        // Cypress 10+ split config: `e2e.*` and `component.*` sections each
-        // accept `specPattern` (string or array of glob patterns) and
-        // `supportFile` (string path or `false`). Seed both as entry patterns
-        // so spec files outside the default `cypress/**` location and custom
-        // support files are reachable.
         for section in ["e2e", "component"] {
             let spec_patterns = config_parser::extract_config_string_or_array(
                 source,

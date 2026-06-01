@@ -82,7 +82,6 @@ pub fn mint_expired_runtime_coverage_jwt() -> String {
         .duration_since(UNIX_EPOCH)
         .expect("system clock before UNIX epoch")
         .as_secs() as i64;
-    // Past the 90-day default hard-fail cap.
     let iat = now - 180 * 24 * 60 * 60;
     let exp = now - 120 * 24 * 60 * 60;
 

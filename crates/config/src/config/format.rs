@@ -42,7 +42,6 @@ mod tests {
 
     #[test]
     fn output_format_all_variants_constructible() {
-        // Verify all variants can be constructed and pattern-matched
         assert!(matches!(OutputFormat::Human, OutputFormat::Human));
         assert!(matches!(OutputFormat::Json, OutputFormat::Json));
         assert!(matches!(OutputFormat::Sarif, OutputFormat::Sarif));
@@ -73,7 +72,6 @@ mod tests {
 
     #[test]
     fn output_format_debug_impl() {
-        // Verify Debug is derived and produces reasonable output
         let human = format!("{:?}", OutputFormat::Human);
         assert_eq!(human, "Human");
         let json = format!("{:?}", OutputFormat::Json);
@@ -103,7 +101,6 @@ mod tests {
         let original = OutputFormat::Json;
         let copied = original;
         assert!(matches!(copied, OutputFormat::Json));
-        // Original still usable (Copy)
         assert!(matches!(original, OutputFormat::Json));
     }
 
@@ -128,7 +125,6 @@ mod tests {
         ];
         for variant in variants {
             let cloned = variant.clone();
-            // Debug output must match between original and clone
             assert_eq!(format!("{cloned:?}"), format!("{variant:?}"));
         }
     }
@@ -150,13 +146,11 @@ mod tests {
 
     #[test]
     fn output_format_default_matches_human_debug() {
-        // Default variant should produce "Human" debug string
         assert_eq!(format!("{:?}", OutputFormat::default()), "Human");
     }
 
     #[test]
     fn output_format_variants_are_distinct() {
-        // Verify each variant has a unique debug representation
         let debug_strings: Vec<String> = [
             OutputFormat::Human,
             OutputFormat::Json,

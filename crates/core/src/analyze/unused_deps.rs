@@ -327,7 +327,6 @@ pub fn find_unused_dependencies(
     Vec<UnusedDependency>,
     Vec<UnusedDependency>,
 ) {
-    // Collect deps referenced in config files (discovered by plugins)
     let plugin_referenced: FxHashSet<&str> = plugin_result
         .map(|pr| {
             pr.referenced_dependencies
@@ -337,24 +336,20 @@ pub fn find_unused_dependencies(
         })
         .unwrap_or_default();
 
-    // Collect tooling deps from plugins
     let plugin_tooling: FxHashSet<&str> = plugin_result
         .map(|pr| pr.tooling_dependencies.iter().map(String::as_str).collect())
         .unwrap_or_default();
 
-    // Collect packages used as binaries in package.json scripts
     let script_used: FxHashSet<&str> = plugin_result
         .map(|pr| pr.script_used_packages.iter().map(String::as_str).collect())
         .unwrap_or_default();
 
-    // Pre-compute ignore deps as FxHashSet for O(1) lookups instead of O(n) linear scan
     let ignore_deps: FxHashSet<&str> = config
         .ignore_dependencies
         .iter()
         .map(String::as_str)
         .collect();
 
-    // Build per-package set of files that use it (globally)
     let used_packages: FxHashSet<&str> = graph.package_usage.keys().map(String::as_str).collect();
     let package_workspace_usage = collect_package_workspace_usage(graph, workspaces);
     let workspace_used_packages = collect_workspace_used_packages(graph, workspaces);
@@ -374,7 +369,6 @@ pub fn find_unused_dependencies(
     let is_used_globally = |dep: &str| used_packages.contains(dep) || root_peer_used.contains(dep);
     let no_workspace_context = |_dep: &str| Vec::new();
 
-    // --- Root package.json check (existing behavior: any file can satisfy usage) ---
     let mut unused_deps = collect_unused_for_category(
         pkg.production_dependency_names(),
         &prod_category(),
@@ -405,8 +399,6 @@ pub fn find_unused_dependencies(
         root_pkg_content.as_deref(),
     );
 
-    // --- Workspace package.json checks: scope usage to files within each workspace ---
-    // Track which deps are already flagged from root to avoid double-reporting
     let root_flagged: FxHashSet<String> = unused_deps
         .iter()
         .chain(unused_dev_deps.iter())
@@ -535,13 +527,10 @@ pub fn find_type_only_dependencies(
 
     let mut type_only_deps = Vec::new();
 
-    // Check root production dependencies
     for dep in pkg.production_dependency_names() {
-        // Skip internal workspace packages
         if workspace_names.contains(dep.as_str()) {
             continue;
         }
-        // Skip ignored dependencies
         if config.ignore_dependencies.iter().any(|d| d == &dep) {
             continue;
         }
@@ -550,12 +539,9 @@ pub fn find_type_only_dependencies(
         let has_type_only_usage = graph.type_only_package_usage.contains_key(dep.as_str());
 
         if !has_any_usage {
-            // Not used at all — this will be caught by unused_dependencies
             continue;
         }
 
-        // Check if ALL usages are type-only: the number of type-only usages must equal
-        // the total number of usages for this package
         let total_count = graph.package_usage.get(dep.as_str()).map_or(0, Vec::len);
         let type_only_count = graph
             .type_only_package_usage
@@ -587,7 +573,6 @@ pub fn find_test_only_dependencies(
     config: &ResolvedConfig,
     workspaces: &[fallow_config::WorkspaceInfo],
 ) -> Vec<TestOnlyDependency> {
-    // Build a GlobSet from the production exclude patterns (test/dev/story files)
     let test_globs = {
         let mut builder = globset::GlobSetBuilder::new();
         for pattern in crate::discover::PRODUCTION_EXCLUDE_PATTERNS {
@@ -624,11 +609,9 @@ pub fn find_test_only_dependencies(
         }
 
         let Some(file_ids) = graph.package_usage.get(dep.as_str()) else {
-            // Not used at all — caught by unused_dependencies
             continue;
         };
 
-        // Skip if already caught as type-only (all usages are type-only imports)
         let total_count = file_ids.len();
         let type_only_count = graph
             .type_only_package_usage
@@ -638,10 +621,6 @@ pub fn find_test_only_dependencies(
             continue;
         }
 
-        // Check if ALL importing files are test/dev/config files.
-        // Test/story files are matched by glob patterns from PRODUCTION_EXCLUDE_PATTERNS.
-        // Config files use the curated `is_config_file` predicate which avoids false
-        // matches on application config files like `app.config.ts` (see #111, #112).
         let all_test_only = file_ids.iter().all(|id| {
             graph.modules.get(id.0 as usize).is_some_and(|module| {
                 let relative = module
@@ -703,7 +682,6 @@ fn owning_workspace_deps<'a>(
 fn types_package_name(package_name: &str) -> String {
     package_name.strip_prefix('@').map_or_else(
         || format!("@types/{package_name}"),
-        // @scope/pkg -> @types/scope__pkg
         |scoped| format!("@types/{}", scoped.replacen('/', "__", 1)),
     )
 }
@@ -880,7 +858,6 @@ pub fn find_unlisted_dependencies(
         all_deps.insert(root_name.clone());
     }
 
-    // Map: canonical workspace root -> set of dep names (for per-file checks)
     let mut ws_dep_map: Vec<(PathBuf, FxHashSet<String>)> = Vec::new();
 
     for ws in workspaces {
@@ -892,12 +869,10 @@ pub fn find_unlisted_dependencies(
             let mut ws_deps: FxHashSet<String> =
                 ws_pkg.all_dependency_names().into_iter().collect();
             ws_deps.insert(ws.name.clone());
-            // Use raw workspace root path for starts_with checks (avoids per-file canonicalize)
             ws_dep_map.push((ws.root.clone(), ws_deps));
         }
     }
 
-    // Collect virtual module prefixes from active plugins (e.g., Docusaurus @theme/, @site/)
     let virtual_prefixes: Vec<&str> = plugin_result
         .map(|pr| {
             pr.virtual_module_prefixes
@@ -907,7 +882,6 @@ pub fn find_unlisted_dependencies(
         })
         .unwrap_or_default();
 
-    // Collect virtual package suffixes from active plugins (e.g., Vitest /__mocks__)
     let virtual_suffixes: Vec<&str> = plugin_result
         .map(|pr| {
             pr.virtual_package_suffixes
@@ -917,9 +891,6 @@ pub fn find_unlisted_dependencies(
         })
         .unwrap_or_default();
 
-    // Collect tooling dependencies from active plugins — these are framework-provided
-    // packages (e.g., Nuxt provides `ofetch`, `h3`, `vue-router` at runtime) that may
-    // be imported in user code without being listed in package.json.
     let plugin_tooling: FxHashSet<&str> = plugin_result
         .map(|pr| pr.tooling_dependencies.iter().map(String::as_str).collect())
         .unwrap_or_default();
@@ -928,9 +899,6 @@ pub fn find_unlisted_dependencies(
     let compiled_provided_dependency_rules =
         compile_provided_dependency_rules(provided_dependency_rules);
 
-    // Build a lookup from resolved modules so we can recover the source edge location when building
-    // UnlistedDependency results. Keep both the collapsed npm package name and original source
-    // specifier because `bun/foo` resolves to package `bun` but is not the builtin `bun` module.
     let mut import_spans_by_file: FxHashMap<FileId, Vec<(&str, &str, u32)>> = FxHashMap::default();
     for rm in resolved_modules {
         for edge in rm.all_resolved_source_edges() {
@@ -953,8 +921,6 @@ pub fn find_unlisted_dependencies(
     let mut unlisted: FxHashMap<String, Vec<ImportSite>> = FxHashMap::default();
 
     for (package_name, file_ids) in &graph.package_usage {
-        // The bare Bun builtin is handled per import below because `bun/foo` collapses to package
-        // `bun` but should still be reportable as an unlisted dependency.
         if (package_name != "bun" && is_builtin_module(package_name)) || is_path_alias(package_name)
         {
             continue;
@@ -976,17 +942,12 @@ pub fn find_unlisted_dependencies(
         {
             continue;
         }
-        // Plain `ends_with` is sufficient for suffixes; unlike prefixes, suffix
-        // entries always include the leading boundary character (e.g. `/__mocks__`)
-        // so there is no bare-equality case to special-case.
         if virtual_suffixes
             .iter()
             .any(|suffix| package_name.ends_with(suffix))
         {
             continue;
         }
-        // Check each importing file against the package.json that owns that file.
-        // Uses raw path comparison (module paths are absolute) to avoid per-file canonicalize().
         let mut unlisted_sites: Vec<ImportSite> = Vec::new();
         for id in file_ids {
             let Some(module) = graph.modules.get(id.0 as usize) else {
@@ -997,17 +958,12 @@ pub fn find_unlisted_dependencies(
             {
                 continue;
             }
-            // Deno/Supabase `npm:<pkg>` imports declare the dependency inline, so
-            // do not report it as unlisted for files that only import it that way.
             if package_imports_are_all_npm_scheme(&import_spans_by_file, *id, package_name) {
                 continue;
             }
             if is_package_listed_for_file(&module.path, package_name, &all_deps, &ws_dep_map) {
                 continue;
             }
-            // When @types/<package> is listed in the owning manifest, the bare
-            // package is used for types only. TypeScript resolves types from
-            // @types/ and erases the import at compile time.
             if has_types_package_for_file(&module.path, package_name, &all_deps, &ws_dep_map) {
                 continue;
             }
@@ -1060,36 +1016,18 @@ pub fn find_unresolved_imports(
     for module in resolved_modules {
         for edge in module.all_resolved_source_edges() {
             if let crate::resolve::ResolveResult::Unresolvable(spec) = edge.target() {
-                // Platform builtins are provided by the runtime, not the filesystem.
                 if is_builtin_module(spec) {
                     continue;
                 }
-                // Skip virtual module imports using the `virtual:` convention
-                // (e.g., `virtual:pwa-register`, `virtual:uno.css`)
                 if is_virtual_module(spec) {
                     continue;
                 }
-                // Skip virtual module imports provided by active framework plugins
-                // (e.g., Nuxt's #imports, #app, #components, #build).
-                // Note: `spec` is the full import specifier (e.g., `$app/navigation`),
-                // not the extracted package name, so trailing-slash prefixes like `$app/`
-                // always match when the import has a subpath. The shared
-                // `matches_virtual_prefix` helper also exact-matches bare
-                // specifiers like `ember` against a `prefix/` entry, mirroring
-                // the unlisted-dependency suppression site (and the plugin
-                // test helpers in `crates/core/src/plugins/`) so a single
-                // `prefix/` entry covers both the bare import and every
-                // subpath.
                 if virtual_prefixes
                     .iter()
                     .any(|prefix| matches_virtual_prefix(prefix, spec))
                 {
                     continue;
                 }
-                // Skip build-time generated relative imports from framework plugins
-                // (e.g., SvelteKit's `./$types` / `./$types.js` route type imports).
-                // Strip `.js` or `.ts` extension before matching so `/$types.js` and
-                // `/$types.ts` both match the `/$types` pattern.
                 if !generated_patterns.is_empty() {
                     let bare = spec
                         .strip_suffix(".js")
@@ -1099,9 +1037,6 @@ pub fn find_unresolved_imports(
                         continue;
                     }
                 }
-                // Skip build-time generated route type imports from framework plugins
-                // (e.g., React Router's `./+types/root`). Keep this type-only so
-                // missing runtime imports under the same directory remain visible.
                 if edge.is_type_only()
                     && generated_type_prefixes
                         .iter()
@@ -1122,9 +1057,6 @@ pub fn find_unresolved_imports(
                     edge.span().start,
                 );
 
-                // Compute the column of the source string literal for precise LSP highlighting.
-                // Falls back to the import statement column when source_span is not available
-                // (e.g., synthetic CSS/SFC imports that use Span::default()).
                 let source_span = edge.source_span();
                 let specifier_col = if source_span.end > source_span.start {
                     let (_, sc) = byte_offset_to_line_col(
@@ -1137,7 +1069,6 @@ pub fn find_unresolved_imports(
                     col
                 };
 
-                // Check inline suppression
                 if suppressions.is_suppressed(module.file_id, line, IssueKind::UnresolvedImport) {
                     continue;
                 }

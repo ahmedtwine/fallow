@@ -225,13 +225,9 @@ fn build_line_index(source: &str) -> CatalogLineIndex {
                 }
             }
             Section::NamedCatalogs => {
-                // Two indent levels are meaningful here:
-                // - level 1 (`  react17:`): a named catalog header
-                // - level 2 (`    react: ^17`): an entry inside the named catalog
                 if let Some(name) = parse_key(trimmed_left) {
                     match &named_catalog {
                         Some((_, existing_indent)) if indent > *existing_indent => {
-                            // Entry inside the active named catalog
                             entries.push((
                                 (
                                     named_catalog
@@ -243,7 +239,6 @@ fn build_line_index(source: &str) -> CatalogLineIndex {
                             ));
                         }
                         _ => {
-                            // New named catalog header (or first one seen)
                             groups.push((name.clone(), line_no));
                             named_catalog = Some((name, indent));
                         }
@@ -298,7 +293,6 @@ pub(super) fn parse_key(line: &str) -> Option<String> {
     }
 
     if first == b'"' || first == b'\'' {
-        // Quoted key: find the matching quote, then expect `:` after it.
         let quote = first;
         let mut i = 1;
         while i < bytes.len() {
@@ -308,7 +302,6 @@ pub(super) fn parse_key(line: &str) -> Option<String> {
                 continue;
             }
             if b == quote {
-                // Found closing quote
                 let key = &line[1..i];
                 let rest = &line[i + 1..];
                 let trimmed = rest.trim_start();
@@ -327,8 +320,6 @@ pub(super) fn parse_key(line: &str) -> Option<String> {
     if key.is_empty() {
         return None;
     }
-    // Disallow YAML flow / anchor / tag indicators in unquoted keys (we only
-    // care about simple `pkg: version` shapes in catalog maps).
     if key.contains(['{', '[', '&', '*', '!']) {
         return None;
     }
@@ -336,9 +327,6 @@ pub(super) fn parse_key(line: &str) -> Option<String> {
 }
 
 fn unescape_key(raw: &str) -> String {
-    // Catalog package names rarely need full YAML unescaping; we just collapse
-    // the common `\"` and `\\` sequences so quoted scoped names match the
-    // serde_yaml_ng-parsed form exactly.
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars();
     while let Some(c) = chars.next() {
@@ -479,7 +467,6 @@ mod tests {
 
     #[test]
     fn handles_object_form_entries() {
-        // pnpm 9.4+ supports object form for entries with specifier + extras
         let yaml = "catalog:\n  react:\n    specifier: ^18.2.0\n  vue: ^3.4.0\n";
         let data = parse_pnpm_catalog_data(yaml);
         assert_eq!(data.catalogs[0].entries.len(), 2);

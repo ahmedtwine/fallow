@@ -15,8 +15,6 @@ pub(in crate::report) fn print_cross_reference_findings(
         return;
     }
 
-    // Only emit human-readable output; structured formats (JSON, SARIF, Compact)
-    // should not have unstructured text mixed into stdout.
     if !matches!(output, OutputFormat::Human) {
         return;
     }

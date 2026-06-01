@@ -157,9 +157,6 @@ fn impact_is_read_only_closed_world() {
     let impact = tools.iter().find(|t| t.name == "impact").unwrap();
     let ann = impact.annotations.as_ref().unwrap();
     assert_eq!(ann.read_only_hint, Some(true));
-    // impact reads exactly one local file (.fallow/impact.json), a closed
-    // world, so it is open_world_hint=false like fallow_explain, NOT true like
-    // the project-crawling analysis tools.
     assert_eq!(ann.open_world_hint, Some(false));
     assert_eq!(ann.idempotent_hint, Some(true));
 }
@@ -170,7 +167,6 @@ fn fix_preview_is_not_destructive() {
     let tools = server.tool_router.list_all();
     let preview = tools.iter().find(|t| t.name == "fix_preview").unwrap();
     let ann = preview.annotations.as_ref().unwrap();
-    // fix_preview should be read-only (dry-run only)
     assert_eq!(ann.read_only_hint, Some(true));
     assert_ne!(ann.destructive_hint, Some(true));
 }
@@ -221,15 +217,12 @@ fn all_tools_have_input_schema() {
     let tools = server.tool_router.list_all();
     for tool in &tools {
         let name = tool.name.to_string();
-        // input_schema should be present (JSON Schema object)
         assert!(
             !tool.input_schema.is_empty(),
             "tool '{name}' should have a non-empty input_schema"
         );
     }
 }
-
-// ── Schema property validation ────────────────────────────────────
 
 #[test]
 fn analyze_schema_contains_expected_properties() {
@@ -286,12 +279,10 @@ fn check_changed_schema_requires_since() {
     let tools = server.tool_router.list_all();
     let tool = tools.iter().find(|t| t.name == "check_changed").unwrap();
     let schema = serde_json::to_string(&tool.input_schema).unwrap();
-    // "since" should appear in the "required" array
     assert!(
         schema.contains("\"required\""),
         "check_changed schema should have a required array"
     );
-    // The required field should reference "since"
     let schema_value: serde_json::Value = serde_json::from_str(&schema).unwrap();
     if let Some(required) = schema_value.get("required").and_then(|r| r.as_array()) {
         assert!(
@@ -523,9 +514,6 @@ fn trace_clone_schema_contains_expected_properties() {
             "trace_clone schema should contain property '{prop}'"
         );
     }
-    // No required fields: file+line and fingerprint are two optional addressing
-    // forms; the exactly-one-of rule is enforced in build_trace_clone_args, not
-    // the schema. Confirm neither addressing field is marked required.
     let schema: serde_json::Value = serde_json::to_value(&tool.input_schema).unwrap();
     let required: Vec<&str> = schema
         .get("required")
@@ -648,8 +636,6 @@ fn impact_schema_contains_root_and_omits_inert_flags() {
         .and_then(|p| p.as_object())
         .expect("impact schema has a properties object");
     assert!(props.contains_key("root"), "impact exposes 'root'");
-    // impact runs no analysis, so the analysis-tool knobs must NOT be exposed
-    // as properties (the doc text may still mention them by name).
     for inert in ["config", "no_cache", "threads"] {
         assert!(
             !props.contains_key(inert),
@@ -1008,23 +994,18 @@ fn feature_flags_schema_contains_expected_properties() {
     }
 }
 
-// ── fix_apply is not open_world ───────────────────────────────────
-
 #[test]
 fn fix_apply_does_not_have_open_world_hint() {
     let server = FallowMcp::new();
     let tools = server.tool_router.list_all();
     let fix = tools.iter().find(|t| t.name == "fix_apply").unwrap();
     let ann = fix.annotations.as_ref().unwrap();
-    // fix_apply is destructive, should not have open_world_hint=true
     assert_ne!(
         ann.open_world_hint,
         Some(true),
         "fix_apply should not have open_world_hint=true"
     );
 }
-
-// ── Tool descriptions mention key behaviors ───────────────────────
 
 #[test]
 fn analyze_description_mentions_unused_code() {
@@ -1098,8 +1079,6 @@ fn fix_preview_description_mentions_dry_run_or_preview() {
     );
 }
 
-// ── All schemas are valid JSON objects ─────────────────────────────
-
 #[test]
 fn all_tool_schemas_are_json_objects() {
     let server = FallowMcp::new();
@@ -1112,7 +1091,6 @@ fn all_tool_schemas_are_json_objects() {
             schema_value.is_object(),
             "tool '{name}' schema should be a JSON object"
         );
-        // Should have "type": "object" at the top level
         assert_eq!(
             schema_value.get("type").and_then(|t| t.as_str()),
             Some("object"),
@@ -1120,8 +1098,6 @@ fn all_tool_schemas_are_json_objects() {
         );
     }
 }
-
-// ── params.rs field-description style gate ────────────────────────
 
 /// Returns the 1-based line numbers of any field that carries BOTH a `///`
 /// doc comment AND a `#[schemars(description = ...)]` attribute (single or
@@ -1136,8 +1112,6 @@ fn fields_with_both_doc_and_schemars_description(src: &str) -> Vec<usize> {
         if !trimmed.starts_with("#[schemars(") {
             continue;
         }
-        // Walk forward to assemble the full attribute (single or multi-line)
-        // and confirm it carries a `description = ...` arg.
         let mut full = String::new();
         let mut depth: i32 = 0;
         let mut j = i;
@@ -1160,9 +1134,6 @@ fn fields_with_both_doc_and_schemars_description(src: &str) -> Vec<usize> {
             continue;
         }
 
-        // Walk backwards from i looking for a `///` line, stopping at the
-        // first block boundary (blank line, prior field decl, struct opener
-        // or closer). Sibling attributes are transparent.
         let mut has_doc = false;
         let mut k = i;
         while k > 0 {
@@ -1263,12 +1234,9 @@ pub struct A {
     );
 }
 
-// ── Server can be cloned (required for rmcp runtime) ───────────────
-
 #[test]
 fn server_is_cloneable() {
     let server = FallowMcp::new();
-    // Use clone in a way that isn't redundant — verify both instances work
     let cloned = server.clone();
     let tools_original = server.tool_router.list_all();
     let tools_cloned = cloned.tool_router.list_all();

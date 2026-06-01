@@ -11,7 +11,6 @@ use rustc_hash::FxHashSet;
 mod helpers;
 
 fn bench_parse_file(c: &mut Criterion) {
-    // Create a temporary file with typical TypeScript content
     let temp_dir = std::env::temp_dir().join("fallow-bench");
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -105,24 +104,20 @@ export default function App({ name, age }: Props) {
         });
     });
 
-    // Cleanup
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 fn bench_full_pipeline(c: &mut Criterion) {
-    // Create a small test project
     let temp_dir = std::env::temp_dir().join("fallow-bench-project");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(temp_dir.join("src")).unwrap();
 
-    // Create package.json
     std::fs::write(
         temp_dir.join("package.json"),
         r#"{"name": "bench-project", "main": "src/index.ts", "dependencies": {"react": "^18"}}"#,
     )
     .unwrap();
 
-    // Create 10 source files
     for i in 0..10 {
         let content = format!(
             r"
@@ -134,7 +129,6 @@ export type Type{i} = {{ value: number }};
         std::fs::write(temp_dir.join(format!("src/module{i}.ts")), content).unwrap();
     }
 
-    // Create index that imports some
     let imports: Vec<String> = (0..5)
         .map(|i| format!("import {{ value{i} }} from './module{i}';"))
         .collect();
@@ -153,7 +147,6 @@ export type Type{i} = {{ value: number }};
         });
     });
 
-    // Cleanup
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
@@ -196,15 +189,6 @@ fn bench_resolve_re_export_chains(c: &mut Criterion) {
     };
     use fallow_core::resolve::{ResolveResult, ResolvedImport, ResolvedModule, ResolvedReExport};
 
-    // Build a graph with multiple re-export chains:
-    //
-    //   entry.ts -> barrel1.ts -> barrel2.ts -> source_a.ts
-    //                                        -> source_b.ts
-    //            -> barrel3.ts -> source_c.ts
-    //
-    // Each source file has 10 exports. Barrel files re-export all of them.
-    // This exercises the iterative re-export chain resolution with the HashSet optimization.
-
     let source_count = 20;
     let barrel_count = 10;
     let exports_per_source = 10;
@@ -213,25 +197,18 @@ fn bench_resolve_re_export_chains(c: &mut Criterion) {
     let mut files: Vec<DiscoveredFile> = Vec::with_capacity(total_files);
     let mut resolved_modules: Vec<ResolvedModule> = Vec::with_capacity(total_files);
 
-    // FileId layout:
-    //   0        = entry.ts
-    //   1..=B    = barrel files (barrel_count)
-    //   B+1..=N  = source files (source_count)
     let barrel_start: u32 = 1;
     let source_start: u32 = barrel_start + barrel_count as u32;
 
-    // --- entry.ts (id=0) ---
     files.push(DiscoveredFile {
         id: FileId(0),
         path: PathBuf::from("/project/src/entry.ts"),
         size_bytes: 100,
     });
 
-    // Entry imports from each barrel
     let entry_imports: Vec<ResolvedImport> = (0..barrel_count)
         .flat_map(|b| {
             let barrel_id = FileId(barrel_start + b as u32);
-            // Import the first 3 re-exported symbols from each barrel
             (0..3).map(move |e| ResolvedImport {
                 info: ImportInfo {
                     source: format!("./barrel{b}"),
@@ -265,9 +242,6 @@ fn bench_resolve_re_export_chains(c: &mut Criterion) {
         namespace_object_aliases: vec![],
     });
 
-    // --- Barrel files ---
-    // Each barrel re-exports from 2 sources (creating chains).
-    // barrels 0..4 also re-export from barrel 5..9, forming 2-level chains.
     for b in 0..barrel_count {
         let barrel_id = FileId(barrel_start + b as u32);
         files.push(DiscoveredFile {
@@ -279,7 +253,6 @@ fn bench_resolve_re_export_chains(c: &mut Criterion) {
         let mut re_exports: Vec<ResolvedReExport> = Vec::new();
 
         if b < barrel_count / 2 {
-            // First half of barrels re-export from a second-tier barrel (chaining)
             let chained_barrel = barrel_count / 2 + (b % (barrel_count / 2));
             let chained_id = FileId(barrel_start + chained_barrel as u32);
             for e in 0..exports_per_source {
@@ -295,7 +268,6 @@ fn bench_resolve_re_export_chains(c: &mut Criterion) {
                 });
             }
         } else {
-            // Second half of barrels re-export directly from source files
             let src_a = (b * 2) % source_count;
             let src_b = (b * 2 + 1) % source_count;
             let src_a_id = FileId(source_start + src_a as u32);
@@ -344,7 +316,6 @@ fn bench_resolve_re_export_chains(c: &mut Criterion) {
         });
     }
 
-    // --- Source files ---
     for s in 0..source_count {
         let source_id = FileId(source_start + s as u32);
         files.push(DiscoveredFile {
@@ -423,9 +394,6 @@ fn bench_cache_round_trip(c: &mut Criterion) {
         MemberInfo, MemberKind, ModuleInfo, ReExportInfo, RequireCallInfo, VisibilityTag,
     };
 
-    // Build a representative ModuleInfo with realistic data:
-    // imports, exports (including enums and classes with members), re-exports,
-    // dynamic imports, require calls, and member accesses.
     let module = ModuleInfo {
         file_id: FileId(0),
         exports: vec![
@@ -664,8 +632,6 @@ fn bench_cache_round_trip(c: &mut Criterion) {
     });
 }
 
-// ── Dupe detection benchmarks ──────────────────────────────────────
-
 fn make_hashed_tokens(hashes: &[u64]) -> Vec<fallow_core::duplicates::normalize::HashedToken> {
     hashes
         .iter()
@@ -795,7 +761,6 @@ fn bench_dupe_detect_50x200_diverse(c: &mut Criterion) {
 
 fn bench_dupe_detect_100x200_mixed(c: &mut Criterion) {
     use fallow_core::duplicates::detect::CloneDetector;
-    // 20 identical + 80 diverse
     let hashes: Vec<u64> = (1..=200).collect();
     let data: DupeInput = (0..100)
         .map(|i| {
@@ -856,8 +821,6 @@ fn bench_dupe_detect_100x200_mixed_focused(c: &mut Criterion) {
 }
 
 fn bench_dupe_suffix_array_only(c: &mut Criterion) {
-    // Benchmark just the suffix array construction on a large input
-    // to isolate its cost. We access it through the public detect() API.
     use fallow_core::duplicates::detect::CloneDetector;
     let data = make_identical_files(2, 5000);
     c.bench_function("dupe_detect_2x5000_identical", |b| {

@@ -72,7 +72,6 @@ pub(in crate::report) fn print_duplication_human(
             .red()
             .bold()
         );
-        // Advisory when duplication rate is very high (likely mirrored directories)
         if stats.duplication_percentage > 80.0 {
             eprintln!(
                 "  {}",
@@ -106,7 +105,6 @@ fn build_duplication_human_lines_with_explain(
         return lines;
     }
 
-    // Sort clone groups by line count descending for most impactful first
     let mut sorted_groups: Vec<&fallow_core::duplicates::CloneGroup> =
         report.clone_groups.iter().collect();
     sorted_groups.sort_by_key(|b| std::cmp::Reverse(b.line_count));
@@ -133,7 +131,6 @@ fn build_duplication_human_lines_with_explain(
     for group in &sorted_groups[..shown] {
         let instance_count = group.instances.len();
 
-        // Line count: right-aligned, color-coded
         let lc = group.line_count;
         let lc_str = format!("{:>5}", thousands(lc));
         let lc_colored = if lc > 1000 {
@@ -182,9 +179,6 @@ fn build_duplication_human_lines_with_explain(
     ));
     lines.push(String::new());
 
-    // Detect mirrored directory patterns across families.
-    // Families with exactly 2 files that share a common filename after stripping
-    // directory prefixes are grouped under a "Mirrored directories" header.
     let (mirrored, non_mirrored) = detect_mirrored_families(&report.clone_families, root);
 
     if !mirrored.is_empty() {
@@ -234,8 +228,6 @@ fn build_duplication_human_lines_with_explain(
         lines.push(String::new());
     }
 
-    // Print remaining clone families with refactoring suggestions
-    // Suppress single-group families -- not actionable
     let multi_group_families: Vec<_> = non_mirrored.iter().filter(|f| f.groups.len() > 1).collect();
 
     if !multi_group_families.is_empty() {
@@ -270,7 +262,6 @@ fn build_duplication_human_lines_with_explain(
             ));
 
             for suggestion in &family.suggestions {
-                // Drop "lines saved" -- misleading
                 lines.push(format!(
                     "    {} {}",
                     "\u{2192}".yellow(),
@@ -327,8 +318,6 @@ pub(super) fn detect_mirrored_families<'a>(
 ) {
     const MIN_MIRROR_FAMILIES: usize = 3;
 
-    // For each 2-file family, extract the directory pair + relative filename
-    // Entry: (family_index, filename, duplicated_lines)
     type MirrorEntry = (usize, String, usize);
     let mut pair_map: rustc_hash::FxHashMap<(String, String), Vec<MirrorEntry>> =
         rustc_hash::FxHashMap::default();
@@ -343,12 +332,10 @@ pub(super) fn detect_mirrored_families<'a>(
         let (dir_a, file_a) = split_dir_filename(&path_a);
         let (dir_b, file_b) = split_dir_filename(&path_b);
 
-        // Only match if the filenames are the same
         if file_a != file_b {
             continue;
         }
 
-        // Normalize: always use the lexically smaller dir first
         let (da, db) = if dir_a <= dir_b {
             (dir_a.to_string(), dir_b.to_string())
         } else {
@@ -385,7 +372,6 @@ pub(super) fn detect_mirrored_families<'a>(
         });
     }
 
-    // Sort mirrors by total lines descending
     mirrors.sort_by_key(|b| std::cmp::Reverse(b.total_lines));
 
     let non_mirrored: Vec<&fallow_core::duplicates::CloneFamily> = families
@@ -481,8 +467,6 @@ pub(in crate::report) fn print_grouped_duplication_human(
         return;
     }
 
-    // Top-level grouped section header, matching health's grouped output:
-    //   "● Per-{mode} duplication"
     println!(
         "{} {}",
         "\u{25cf}".cyan(),
@@ -490,9 +474,6 @@ pub(in crate::report) fn print_grouped_duplication_human(
     );
     println!();
 
-    // Per-bucket render. Each bucket leads with a cyan-bullet sub-header
-    // (matching the design system) followed by a blank line before the
-    // first clone-group row.
     for bucket in &grouping.groups {
         let total_groups = bucket.clone_groups.len();
         let dup_lines = bucket.stats.duplicated_lines;
@@ -556,7 +537,6 @@ pub(in crate::report) fn print_grouped_duplication_human(
                 .dimmed()
             );
         }
-        // Per-group stats footer
         println!(
             "  {}",
             format!(
@@ -571,7 +551,6 @@ pub(in crate::report) fn print_grouped_duplication_human(
         println!();
     }
 
-    // Project-level totals footer
     let stats = &report.stats;
     if !quiet {
         eprintln!(
@@ -587,20 +566,12 @@ pub(in crate::report) fn print_grouped_duplication_human(
             .red()
             .bold()
         );
-        // The largest-owner attribution rule only matters when grouping
-        // produces ambiguity. In `directory`, `package`, and `section` modes,
-        // every file lives in exactly one bucket so attribution is
-        // unambiguous and the preamble is noise. Only render it for owner
-        // grouping where a clone group can span multiple owners.
         if grouping.mode == "owner" {
             eprintln!(
                 "  {}",
                 format!("Group attribution rule: largest owner (most instances; alphabetical tiebreak); see {DOCS_DUPLICATION}#grouping").dimmed()
             );
         }
-        // Per-bucket files-with-clones is local to that bucket; the project
-        // total deduplicates files appearing in multiple buckets so per-bucket
-        // counts can sum to more than the project headline.
         eprintln!(
             "  {}",
             "Per-bucket files-with-clones is local; project total deduplicates across buckets."
@@ -663,13 +634,11 @@ mod tests {
         };
         let lines = build_duplication_human_lines(&report, &root);
         let text = plain(&lines);
-        // Line-count-led format, no "Clone group N" label
         assert!(text.contains("10"));
         assert!(text.contains("lines"));
         assert!(text.contains("2 instances"));
         assert!(text.contains("a.ts:1-10"));
         assert!(text.contains("b.ts:5-14"));
-        // No tree connectors
         assert!(!text.contains("\u{251c}\u{2500}"));
         assert!(!text.contains("\u{2514}\u{2500}"));
     }
@@ -739,7 +708,6 @@ mod tests {
         let text = plain(&lines);
         assert!(text.contains("Clone families"));
         assert!(text.contains("Extract shared utility function"));
-        // "lines saved" is no longer shown
         assert!(!text.contains("lines saved"));
     }
 
@@ -816,7 +784,6 @@ mod tests {
         };
         let lines = build_duplication_human_lines(&report, &root);
         let text = plain(&lines);
-        // Single-group families are suppressed from output
         assert!(!text.contains("Clone families"));
     }
 
@@ -878,7 +845,6 @@ mod tests {
         };
         let lines = build_duplication_human_lines(&report, &root);
         let text = plain(&lines);
-        // No tree connectors -- simple indentation
         assert!(!text.contains("\u{2514}\u{2500}"));
         assert!(!text.contains("\u{251c}\u{2500}"));
         assert!(text.contains("a.ts:1-10"));
@@ -888,7 +854,6 @@ mod tests {
     fn mirrored_dirs_detected() {
         let root = PathBuf::from("/project");
         let mut families = Vec::new();
-        // 4 families with same dir pattern (above MIN_MIRROR_FAMILIES threshold of 3)
         for name in &["a.ts", "b.ts", "c.ts", "d.ts"] {
             families.push(CloneFamily {
                 files: vec![
@@ -931,7 +896,6 @@ mod tests {
             },
         ];
         let (mirrored, _) = detect_mirrored_families(&families, &root);
-        // Only 2 families -- below threshold of 3
         assert!(mirrored.is_empty());
     }
 }

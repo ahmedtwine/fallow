@@ -5,7 +5,6 @@ use oxc_ast_visit::Visit;
 use oxc_parser::Parser;
 use oxc_span::{SourceType, Span};
 
-// Re-export all public types so existing `use ... tokenize::X` paths continue to work.
 pub use super::token_types::{
     FileTokens, KeywordType, OperatorType, PunctuationType, SourceToken, TokenKind,
 };
@@ -195,8 +194,6 @@ fn tokenize_js_ts(path: &Path, source: &str, strip_types: bool, skip_imports: bo
     let mut extractor = TokenExtractor::new(strip_types, skip_imports);
     extractor.visit_program(&parser_return.program);
 
-    // If parsing produced very few tokens relative to source size (likely parse errors
-    // from Flow types or JSX in .js files), retry with JSX/TSX source type as a fallback.
     if extractor.tokens.len() < 5 && source.len() > 100 && !source_type.is_jsx() {
         let jsx_type = if source_type.is_typescript() {
             SourceType::tsx()

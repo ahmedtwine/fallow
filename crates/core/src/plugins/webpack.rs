@@ -36,7 +36,6 @@ define_plugin!(
             result.referenced_dependencies.push(dep);
         }
 
-        // entry → entry points (string, array, object values, or Webpack 5 descriptors)
         let entries =
             config_parser::extract_config_string_or_array(source, config_path, &["entry"]);
         let context = config_parser::extract_config_path_string(source, config_path, &["context"])
@@ -58,7 +57,6 @@ define_plugin!(
             }
         }
 
-        // require() calls for loaders/plugins in CJS configs
         let require_deps =
             config_parser::extract_config_require_strings(source, config_path, "plugins");
         for dep in &require_deps {
@@ -67,7 +65,6 @@ define_plugin!(
                 .push(crate::resolve::extract_package_name(dep));
         }
 
-        // externals → referenced dependencies (string array form)
         let externals =
             config_parser::extract_config_shallow_strings(source, config_path, "externals");
         for ext in &externals {
@@ -76,7 +73,6 @@ define_plugin!(
                 .push(crate::resolve::extract_package_name(ext));
         }
 
-        // module.rules → extract loader package names
         parse_webpack_loaders(source, config_path, &mut result);
 
         result
@@ -104,7 +100,6 @@ pub(super) fn parse_webpack_loaders(source: &str, path: &Path, result: &mut Plug
         return;
     };
 
-    // Navigate to module.rules
     let Some(module_prop) = find_obj_prop(obj, "module") else {
         return;
     };
@@ -164,14 +159,12 @@ fn walk_rule(rule: &oxc_ast::ast::ObjectExpression, result: &mut PluginResult) {
         };
 
         match key_name {
-            // loader: 'ts-loader'
             "loader" => {
                 if let Expression::StringLiteral(s) = &p.value {
                     let dep = crate::resolve::extract_package_name(&s.value);
                     result.referenced_dependencies.push(dep);
                 }
             }
-            // use: 'babel-loader' or use: ['style-loader', { loader: 'css-loader' }]
             "use" => match &p.value {
                 Expression::StringLiteral(s) => {
                     let dep = crate::resolve::extract_package_name(&s.value);
@@ -200,7 +193,6 @@ fn walk_rule(rule: &oxc_ast::ast::ObjectExpression, result: &mut PluginResult) {
                 }
                 _ => {}
             },
-            // oneOf: [...rules] → recurse
             "oneOf" => {
                 if let Expression::ArrayExpression(one_of) = &p.value {
                     walk_rules(one_of, result);

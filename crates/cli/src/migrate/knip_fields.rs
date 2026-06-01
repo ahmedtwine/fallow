@@ -79,10 +79,6 @@ pub(super) fn migrate_rules(
         }
     }
 
-    // Warn about every key the migrator did not translate. Two shapes:
-    // documented-unmappable issue types reuse the existing message;
-    // completely-unknown keys (typo or future knip rule) get a docs-pointer
-    // suggestion so the user can fix the typo or report the missing mapping.
     for key in rules_obj.keys() {
         if KNIP_RULE_MAP.iter().any(|(k, _)| k == key) {
             continue;
@@ -132,13 +128,11 @@ pub(super) fn migrate_include(
 
     for (knip_name, fallow_name) in KNIP_RULE_MAP {
         if !included.iter().any(|i| i == knip_name) {
-            // Not included -- set to off (unless already set by rules)
             rules_obj
                 .entry((*fallow_name).to_string())
                 .or_insert_with(|| Value::String("off".to_string()));
         }
     }
-    // Warn about included types the migrator did not translate.
     for name in included {
         if KNIP_RULE_MAP.iter().any(|(k, _)| k == name) {
             continue;
@@ -157,7 +151,6 @@ pub(super) fn migrate_ignore_deps(
     let non_regex: Vec<String> = deps
         .into_iter()
         .filter(|d| {
-            // Skip values that look like regex patterns
             if d.starts_with('/') && d.ends_with('/') {
                 warnings.push(MigrationWarning {
                     source: "knip",
@@ -257,8 +250,6 @@ mod tests {
         Map::new()
     }
 
-    // -- migrate_simple_field -------------------------------------------------
-
     #[test]
     fn simple_field_present_array() {
         let obj: JsonMap =
@@ -321,8 +312,6 @@ mod tests {
         assert!(!config.contains_key("entry"));
     }
 
-    // -- migrate_rules --------------------------------------------------------
-
     #[test]
     fn rules_known_mapping() {
         let rules_val = json!({"files": "error", "exports": "warn"});
@@ -356,10 +345,7 @@ mod tests {
         let mut warnings = Vec::new();
         migrate_rules(&rules_val, &mut config, &mut warnings);
 
-        // No config emitted (unknown key has no fallow target).
         assert!(!config.contains_key("rules"));
-        // But the migration must NOT be silent: the user needs to know their
-        // rule was dropped. See issue #457.
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].field, "rules.totallyUnknown");
         assert!(warnings[0].message.contains("unknown knip issue type"));
@@ -391,8 +377,6 @@ mod tests {
         assert!(!config.contains_key("rules"));
         assert!(warnings.is_empty());
     }
-
-    // -- migrate_exclude ------------------------------------------------------
 
     #[test]
     fn exclude_single_known_type() {
@@ -446,13 +430,10 @@ mod tests {
         let mut warnings = Vec::new();
         migrate_exclude(&[], &mut config, &mut warnings);
 
-        // Empty rules object is still created via or_insert_with, but has no entries
         let rules = config.get("rules").unwrap().as_object().unwrap();
         assert!(rules.is_empty());
         assert!(warnings.is_empty());
     }
-
-    // -- migrate_include ------------------------------------------------------
 
     #[test]
     fn include_known_types_sets_others_to_off() {
@@ -465,10 +446,8 @@ mod tests {
         );
 
         let rules = config.get("rules").unwrap().as_object().unwrap();
-        // Included types should NOT be in rules
         assert!(!rules.contains_key("unused-files"));
         assert!(!rules.contains_key("unused-exports"));
-        // Non-included should be "off"
         assert_eq!(rules.get("unused-dependencies").unwrap(), "off");
         assert_eq!(rules.get("unused-types").unwrap(), "off");
         assert!(warnings.is_empty());
@@ -491,7 +470,6 @@ mod tests {
     #[test]
     fn include_respects_existing_rules() {
         let mut config = empty_config();
-        // Pre-set a rule
         let mut rules = Map::new();
         rules.insert(
             "unused-dependencies".to_string(),
@@ -503,11 +481,8 @@ mod tests {
         migrate_include(&["files".to_string()], &mut config, &mut warnings);
 
         let rules = config.get("rules").unwrap().as_object().unwrap();
-        // "unused-dependencies" was already "warn", include should not override to "off"
         assert_eq!(rules.get("unused-dependencies").unwrap(), "warn");
     }
-
-    // -- migrate_ignore_deps --------------------------------------------------
 
     #[test]
     fn ignore_deps_plain_strings() {
@@ -573,8 +548,6 @@ mod tests {
         assert!(warnings.is_empty());
     }
 
-    // -- warn_unmappable_fields -----------------------------------------------
-
     #[test]
     fn warn_unmappable_fields_detects_known_fields() {
         let obj: JsonMap =
@@ -608,7 +581,6 @@ mod tests {
 
     #[test]
     fn warn_unmappable_fields_suggestion_presence() {
-        // "ignoreFiles" has a suggestion, "project" does not
         let obj: JsonMap =
             serde_json::from_str(r#"{"ignoreFiles": ["x.ts"], "project": ["src"]}"#).unwrap();
         let mut warnings = Vec::new();
@@ -621,8 +593,6 @@ mod tests {
         assert!(project_warning.suggestion.is_none());
     }
 
-    // -- warn_plugin_keys -----------------------------------------------------
-
     #[test]
     fn warn_plugin_keys_detects_plugins() {
         let obj: JsonMap =
@@ -634,7 +604,6 @@ mod tests {
         let fields: Vec<&str> = warnings.iter().map(|w| w.field.as_str()).collect();
         assert!(fields.contains(&"eslint"));
         assert!(fields.contains(&"jest"));
-        // All plugin warnings should have suggestions
         for w in &warnings {
             assert!(w.suggestion.is_some());
         }

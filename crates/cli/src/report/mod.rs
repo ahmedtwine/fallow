@@ -22,14 +22,12 @@ use fallow_core::results::AnalysisResults;
 use fallow_core::trace::{CloneTrace, DependencyTrace, ExportTrace, FileTrace, PipelineTimings};
 
 pub use grouping::OwnershipResolver;
+pub use human::health::{render_health_score, render_health_trend};
 #[allow(
     unused_imports,
     reason = "used by binary crate modules (combined.rs, audit.rs)"
 )]
 pub use json::strip_root_prefix;
-// Re-exported for combined.rs so `fallow --score` / `fallow --trend` can
-// render the same score / trend block as `fallow health --score` (issue #557).
-pub use human::health::{render_health_score, render_health_trend};
 
 /// Shared context for all report dispatch functions.
 ///
@@ -175,7 +173,6 @@ pub const fn severity_to_level(s: Severity) -> Level {
     match s {
         Severity::Error => Level::Error,
         Severity::Warn => Level::Warn,
-        // Off issues are filtered before reporting; fall back to Info.
         Severity::Off => Level::Info,
     }
 }
@@ -192,7 +189,6 @@ pub fn print_results(
     output: OutputFormat,
     regression: Option<&crate::regression::RegressionOutcome>,
 ) -> ExitCode {
-    // Grouped output: partition results and render per-group
     if let Some(ref resolver) = ctx.group_by {
         let groups = grouping::group_analysis_results(results, ctx.root, resolver);
         return print_grouped_results(&groups, results, ctx, output, resolver);
@@ -338,8 +334,6 @@ fn print_grouped_results(
     }
 }
 
-// ── Duplication report ────────────────────────────────────────────
-
 /// Print duplication analysis results in the configured format.
 #[must_use]
 pub fn print_duplication_report(
@@ -347,9 +341,6 @@ pub fn print_duplication_report(
     ctx: &ReportContext<'_>,
     output: OutputFormat,
 ) -> ExitCode {
-    // Grouped output: build the grouping payload once and dispatch
-    // per-format. Compact, markdown, and badge fall back to ungrouped output
-    // with a stderr note (parity with the health grouped fallback).
     if let Some(ref resolver) = ctx.group_by {
         let grouping = dupes_grouping::build_duplication_grouping(report, ctx.root, resolver);
         return print_grouped_duplication_report(report, &grouping, ctx, output, resolver);
@@ -492,8 +483,6 @@ fn warn_dupes_grouping_unsupported(grouping: &dupes_grouping::DuplicationGroupin
     );
 }
 
-// ── Health / complexity report ─────────────────────────────────────
-
 /// Print health (complexity) analysis results in the configured format.
 ///
 /// `grouping` and `group_resolver` carry per-group output produced by
@@ -622,8 +611,6 @@ pub fn print_cross_reference_findings(
     human::print_cross_reference_findings(cross_ref, root, quiet, output);
 }
 
-// ── Trace output ──────────────────────────────────────────────────
-
 /// Print export trace results.
 pub fn print_export_trace(trace: &ExportTrace, format: OutputFormat) {
     match format {
@@ -683,8 +670,6 @@ pub fn print_health_performance(
     }
 }
 
-// Re-exported for snapshot testing via the lib target.
-// Uses #[allow] because unused_imports is target-dependent (used in lib, unused in bin).
 #[allow(
     unused_imports,
     reason = "target-dependent: used in lib, unused in bin"
@@ -776,8 +761,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    // ── normalize_uri ────────────────────────────────────────────────
-
     #[test]
     fn normalize_uri_forward_slashes_unchanged() {
         assert_eq!(normalize_uri("src/utils.ts"), "src/utils.ts");
@@ -805,8 +788,6 @@ mod tests {
     fn normalize_uri_empty_string() {
         assert_eq!(normalize_uri(""), "");
     }
-
-    // ── relative_path ────────────────────────────────────────────────
 
     #[test]
     fn relative_path_strips_root_prefix() {
@@ -839,8 +820,6 @@ mod tests {
         );
     }
 
-    // ── format_display_path ──────────────────────────────────────────
-
     #[test]
     fn format_display_path_returns_workspace_relative() {
         let root = Path::new("/project");
@@ -850,9 +829,6 @@ mod tests {
 
     #[test]
     fn format_display_path_collides_in_nx_layout_renders_full_relative() {
-        // Two Nx workspace packages with their own src/index.ts. Both render
-        // workspace-relative without any per-call collision logic; the reader
-        // disambiguates from the path itself.
         let root = Path::new("/project");
         let server = Path::new("/project/apps/server/src/index.ts");
         let client = Path::new("/project/apps/client/src/index.ts");
@@ -880,8 +856,6 @@ mod tests {
 
     #[test]
     fn format_display_path_falls_back_to_full_path_when_root_does_not_prefix() {
-        // Mirrors relative_path behavior: if the path is not under root, we
-        // emit the path verbatim (still forward-slash normalized).
         let root = Path::new("/other");
         let path = Path::new("/project/src/utils.ts");
         let rendered = format_display_path(path, root);
@@ -892,10 +866,6 @@ mod tests {
 
     #[test]
     fn format_display_path_normalizes_backslashes_to_forward_slashes() {
-        // Simulate Windows-style absolute paths. Path::strip_prefix matches on
-        // OsStr segments, so we can use forward-slash root + backslash path
-        // segments only on Windows. On Unix the test verifies the replace step
-        // by feeding a path that contains literal backslashes.
         let root = Path::new("/project");
         let path = Path::new("/project/src/sub\\file.ts");
         let rendered = format_display_path(path, root);
@@ -907,8 +877,6 @@ mod tests {
 
     #[test]
     fn format_display_path_handles_brackets_verbatim() {
-        // Unlike SARIF URIs, human-display paths preserve brackets so users see
-        // Next.js dynamic-route names as authored.
         let root = Path::new("/project");
         let path = Path::new("/project/app/[slug]/page.tsx");
         assert_eq!(format_display_path(path, root), "app/[slug]/page.tsx");
@@ -927,8 +895,6 @@ mod tests {
         let path = Path::new("/project/Cargo.toml");
         assert_eq!(format_display_path(path, root), "Cargo.toml");
     }
-
-    // ── relative_uri ─────────────────────────────────────────────────
 
     #[test]
     fn relative_uri_produces_forward_slash_path() {
@@ -963,8 +929,6 @@ mod tests {
         assert!(uri.contains("utils.ts"));
     }
 
-    // ── severity_to_level ────────────────────────────────────────────
-
     #[test]
     fn severity_error_maps_to_level_error() {
         assert!(matches!(severity_to_level(Severity::Error), Level::Error));
@@ -979,8 +943,6 @@ mod tests {
     fn severity_off_maps_to_level_info() {
         assert!(matches!(severity_to_level(Severity::Off), Level::Info));
     }
-
-    // ── normalize_uri bracket encoding ──────────────────────────────
 
     #[test]
     fn normalize_uri_single_bracket_pair() {
@@ -1022,8 +984,6 @@ mod tests {
         assert_eq!(normalize_uri("a\\b\\c"), "a/b/c");
     }
 
-    // ── relative_path edge cases ────────────────────────────────────
-
     #[test]
     fn relative_path_identical_paths_returns_empty() {
         let root = Path::new("/project");
@@ -1032,21 +992,16 @@ mod tests {
 
     #[test]
     fn relative_path_partial_name_match_not_stripped() {
-        // "/project-two/src/a.ts" should NOT strip "/project" because
-        // "/project" is not a proper prefix of "/project-two".
         let root = Path::new("/project");
         let path = Path::new("/project-two/src/a.ts");
         assert_eq!(relative_path(path, root), path);
     }
-
-    // ── relative_uri edge cases ─────────────────────────────────────
 
     #[test]
     fn relative_uri_combines_stripping_and_encoding() {
         let root = PathBuf::from("/project");
         let path = root.join("src/app/[slug]/page.tsx");
         let uri = relative_uri(&path, &root);
-        // Should both strip the prefix AND encode brackets.
         assert_eq!(uri, "src/app/%5Bslug%5D/page.tsx");
         assert!(!uri.starts_with('/'));
     }
@@ -1058,11 +1013,8 @@ mod tests {
         assert_eq!(relative_uri(&path, &root), "index.ts");
     }
 
-    // ── severity_to_level exhaustiveness ────────────────────────────
-
     #[test]
     fn severity_to_level_is_const_evaluable() {
-        // Verify the function can be used in const context.
         const LEVEL_FROM_ERROR: Level = severity_to_level(Severity::Error);
         const LEVEL_FROM_WARN: Level = severity_to_level(Severity::Warn);
         const LEVEL_FROM_OFF: Level = severity_to_level(Severity::Off);
@@ -1071,18 +1023,13 @@ mod tests {
         assert!(matches!(LEVEL_FROM_OFF, Level::Info));
     }
 
-    // ── Level is Copy ───────────────────────────────────────────────
-
     #[test]
     fn level_is_copy() {
         let level = severity_to_level(Severity::Error);
         let copy = level;
-        // Both should still be usable (Copy semantics).
         assert!(matches!(level, Level::Error));
         assert!(matches!(copy, Level::Error));
     }
-
-    // ── elide_common_prefix ─────────────────────────────────────────
 
     #[test]
     fn elide_common_prefix_shared_dir() {
@@ -1110,7 +1057,6 @@ mod tests {
 
     #[test]
     fn elide_common_prefix_identical_files() {
-        // Same dir, different file
         assert_eq!(elide_common_prefix("a/b/x.ts", "a/b/y.ts"), "y.ts");
     }
 
@@ -1129,8 +1075,6 @@ mod tests {
             "SearchSelectItem.tsx"
         );
     }
-
-    // ── split_dir_filename ───────────────────────────────────────
 
     #[test]
     fn split_dir_filename_with_dir() {
@@ -1167,8 +1111,6 @@ mod tests {
         assert_eq!(file, "");
     }
 
-    // ── plural ──────────────────────────────────────────────────
-
     #[test]
     fn plural_zero_is_plural() {
         assert_eq!(plural(0), "s");
@@ -1189,8 +1131,6 @@ mod tests {
         assert_eq!(plural(999), "s");
     }
 
-    // ── elide_common_prefix edge cases ──────────────────────────
-
     #[test]
     fn elide_common_prefix_empty_base() {
         assert_eq!(elide_common_prefix("", "src/foo.ts"), "src/foo.ts");
@@ -1208,7 +1148,6 @@ mod tests {
 
     #[test]
     fn elide_common_prefix_same_file_different_extension() {
-        // "src/utils.ts" vs "src/utils.js" — common prefix is "src/"
         assert_eq!(
             elide_common_prefix("src/utils.ts", "src/utils.js"),
             "utils.js"
@@ -1217,7 +1156,6 @@ mod tests {
 
     #[test]
     fn elide_common_prefix_partial_filename_match_not_stripped() {
-        // "src/App.tsx" vs "src/AppUtils.tsx" — both in src/, but file names differ
         assert_eq!(
             elide_common_prefix("src/App.tsx", "src/AppUtils.tsx"),
             "AppUtils.tsx"

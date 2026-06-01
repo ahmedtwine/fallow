@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 #[test]
 fn graph_re_export_chain_propagates_references() {
-    // entry.ts -> barrel.ts -re-exports-> source.ts
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -33,7 +32,6 @@ fn graph_re_export_chain_propagates_references() {
     }];
 
     let resolved_modules = vec![
-        // entry imports "foo" from barrel
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/entry.ts"),
@@ -51,7 +49,6 @@ fn graph_re_export_chain_propagates_references() {
             }],
             ..Default::default()
         },
-        // barrel re-exports "foo" from source
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/barrel.ts"),
@@ -77,7 +74,6 @@ fn graph_re_export_chain_propagates_references() {
             }],
             ..Default::default()
         },
-        // source has the actual export
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/source.ts"),
@@ -97,7 +93,6 @@ fn graph_re_export_chain_propagates_references() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // The source module's "foo" export should have references propagated through the barrel
     let source_module = &graph.modules[2];
     let foo_export = source_module
         .exports
@@ -691,9 +686,6 @@ fn multi_level_re_export_chain_propagation() {
 
 #[test]
 fn entry_point_named_re_export_propagates_to_source() {
-    // Bug fix: entry point barrels that re-export from a source file should
-    // propagate "used" status to the source, even with zero in-graph consumers.
-    // The entry point's exports are consumed externally.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -713,7 +705,6 @@ fn entry_point_named_re_export_propagates_to_source() {
     }];
 
     let resolved_modules = vec![
-        // index.js (entry point) re-exports render and hydrate from ./render
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/src/index.js"),
@@ -741,7 +732,6 @@ fn entry_point_named_re_export_propagates_to_source() {
             ],
             ..Default::default()
         },
-        // render.js exports render and hydrate (no one imports them directly)
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/src/render.js"),
@@ -773,10 +763,8 @@ fn entry_point_named_re_export_propagates_to_source() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // The entry point itself should be marked as such
     assert!(graph.modules[0].is_entry_point());
 
-    // render.js exports should have synthetic references from the entry point
     let render_module = &graph.modules[1];
     let render_export = render_module
         .exports
@@ -801,7 +789,6 @@ fn entry_point_named_re_export_propagates_to_source() {
 
 #[test]
 fn entry_point_star_re_export_propagates_to_source() {
-    // Entry point with `export * from './source'` should mark all source exports as used.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -891,7 +878,6 @@ fn entry_point_star_re_export_propagates_to_source() {
 
 #[test]
 fn entry_point_star_re_export_does_not_mark_default_as_used() {
-    // `export *` does not re-export the default export per ES spec.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -981,8 +967,6 @@ fn entry_point_star_re_export_does_not_mark_default_as_used() {
 
 #[test]
 fn entry_point_multi_level_named_re_export_chain() {
-    // entry.ts (entry point) re-exports from barrel.ts, which re-exports from source.ts.
-    // No internal consumer imports any of these — only the entry point exposes them.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1007,7 +991,6 @@ fn entry_point_multi_level_named_re_export_chain() {
     }];
 
     let resolved_modules = vec![
-        // index.ts (entry point) re-exports foo from barrel.ts
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/src/index.ts"),
@@ -1023,7 +1006,6 @@ fn entry_point_multi_level_named_re_export_chain() {
             }],
             ..Default::default()
         },
-        // barrel.ts re-exports foo from source.ts (not an entry point)
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/src/barrel.ts"),
@@ -1039,7 +1021,6 @@ fn entry_point_multi_level_named_re_export_chain() {
             }],
             ..Default::default()
         },
-        // source.ts has the actual export
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/src/source.ts"),
@@ -1059,7 +1040,6 @@ fn entry_point_multi_level_named_re_export_chain() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // barrel.ts should have a synthetic ExportSymbol for foo with a reference
     let barrel = &graph.modules[1];
     let barrel_foo = barrel
         .exports
@@ -1071,7 +1051,6 @@ fn entry_point_multi_level_named_re_export_chain() {
         "barrel's foo should be referenced (from entry point synthetic ref)"
     );
 
-    // source.ts's foo should be referenced through the 2-level chain
     let source = &graph.modules[2];
     let source_foo = source
         .exports
@@ -1086,10 +1065,6 @@ fn entry_point_multi_level_named_re_export_chain() {
 
 #[test]
 fn star_re_export_through_multiple_barrel_layers() {
-    // consumer.ts imports { foo } from barrel_a.ts
-    // barrel_a.ts: export * from './barrel_b'
-    // barrel_b.ts: export * from './source'
-    // source.ts: export const foo = 1; export const bar = 2;
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1119,7 +1094,6 @@ fn star_re_export_through_multiple_barrel_layers() {
     }];
 
     let resolved_modules = vec![
-        // consumer imports foo from barrel_a
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/consumer.ts"),
@@ -1137,7 +1111,6 @@ fn star_re_export_through_multiple_barrel_layers() {
             }],
             ..Default::default()
         },
-        // barrel_a: export * from './barrel_b'
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/barrel_a.ts"),
@@ -1153,7 +1126,6 @@ fn star_re_export_through_multiple_barrel_layers() {
             }],
             ..Default::default()
         },
-        // barrel_b: export * from './source'
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/barrel_b.ts"),
@@ -1169,7 +1141,6 @@ fn star_re_export_through_multiple_barrel_layers() {
             }],
             ..Default::default()
         },
-        // source.ts: export const foo, bar
         ResolvedModule {
             file_id: FileId(3),
             path: PathBuf::from("/project/source.ts"),
@@ -1201,7 +1172,6 @@ fn star_re_export_through_multiple_barrel_layers() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // source's foo should be referenced (propagated through 2 star-re-export layers)
     let source = &graph.modules[3];
     let foo = source
         .exports
@@ -1213,7 +1183,6 @@ fn star_re_export_through_multiple_barrel_layers() {
         "foo should be referenced through 2-level star re-export chain"
     );
 
-    // bar was not imported by anyone, so it should remain unreferenced
     let bar = source
         .exports
         .iter()
@@ -1333,9 +1302,6 @@ fn entry_point_star_re_export_through_multiple_barrel_layers() {
 
 #[test]
 fn named_re_export_with_rename() {
-    // consumer.ts: import { bar } from './barrel'
-    // barrel.ts: export { foo as bar } from './source'
-    // source.ts: export const foo = 1
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1360,7 +1326,6 @@ fn named_re_export_with_rename() {
     }];
 
     let resolved_modules = vec![
-        // consumer imports "bar" from barrel
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/consumer.ts"),
@@ -1378,7 +1343,6 @@ fn named_re_export_with_rename() {
             }],
             ..Default::default()
         },
-        // barrel: export { foo as bar } from './source'
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/barrel.ts"),
@@ -1394,7 +1358,6 @@ fn named_re_export_with_rename() {
             }],
             ..Default::default()
         },
-        // source: export const foo
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/source.ts"),
@@ -1414,7 +1377,6 @@ fn named_re_export_with_rename() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // barrel should have a synthetic ExportSymbol for "bar"
     let barrel = &graph.modules[1];
     let bar_export = barrel
         .exports
@@ -1426,7 +1388,6 @@ fn named_re_export_with_rename() {
         "barrel's bar should be referenced by consumer"
     );
 
-    // source's "foo" should be referenced (imported_name="foo" maps to source)
     let source = &graph.modules[2];
     let foo_export = source
         .exports
@@ -1441,8 +1402,6 @@ fn named_re_export_with_rename() {
 
 #[test]
 fn entry_point_star_re_export_source_has_only_default() {
-    // Entry point barrel with export * from './source' where source only has a default export.
-    // Per ES spec, export * does not re-export default, so nothing should be marked used.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1477,7 +1436,6 @@ fn entry_point_star_re_export_source_has_only_default() {
             }],
             ..Default::default()
         },
-        // source only has a default export
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/src/source.js"),
@@ -1512,11 +1470,6 @@ fn entry_point_star_re_export_source_has_only_default() {
 
 #[test]
 fn cycle_detection_does_not_infinite_loop() {
-    // a.ts: export { foo } from './b'  (re-exports foo from b)
-    // b.ts: export { foo } from './a'  (re-exports foo from a)
-    // consumer.ts: import { foo } from './a'
-    // This creates a cycle. The loop should terminate (max_iterations guard)
-    // without panicking.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1541,7 +1494,6 @@ fn cycle_detection_does_not_infinite_loop() {
     }];
 
     let resolved_modules = vec![
-        // a.ts: export { foo } from './b'
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/a.ts"),
@@ -1557,7 +1509,6 @@ fn cycle_detection_does_not_infinite_loop() {
             }],
             ..Default::default()
         },
-        // b.ts: export { foo } from './a'
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/b.ts"),
@@ -1573,7 +1524,6 @@ fn cycle_detection_does_not_infinite_loop() {
             }],
             ..Default::default()
         },
-        // consumer imports foo from a
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/consumer.ts"),
@@ -1593,16 +1543,11 @@ fn cycle_detection_does_not_infinite_loop() {
         },
     ];
 
-    // The key assertion: this should not hang or panic
     let _graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 }
 
 #[test]
 fn star_re_export_cycle_terminates() {
-    // a.ts: export * from './b'
-    // b.ts: export * from './a'
-    // consumer.ts: import { x } from './a'
-    // Both have an actual export "x" to make propagation meaningful.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1627,7 +1572,6 @@ fn star_re_export_cycle_terminates() {
     }];
 
     let resolved_modules = vec![
-        // a.ts: export * from './b', also exports x
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/a.ts"),
@@ -1653,7 +1597,6 @@ fn star_re_export_cycle_terminates() {
             }],
             ..Default::default()
         },
-        // b.ts: export * from './a'
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/b.ts"),
@@ -1669,7 +1612,6 @@ fn star_re_export_cycle_terminates() {
             }],
             ..Default::default()
         },
-        // consumer imports x from a
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/consumer.ts"),
@@ -1689,10 +1631,8 @@ fn star_re_export_cycle_terminates() {
         },
     ];
 
-    // Should not hang
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // a's x should still be referenced
     let a_module = &graph.modules[0];
     let x_export = a_module
         .exports
@@ -1707,9 +1647,6 @@ fn star_re_export_cycle_terminates() {
 
 #[test]
 fn mixed_star_and_named_re_exports_from_same_source() {
-    // consumer.ts: import { foo, bar } from './barrel'
-    // barrel.ts: export * from './source'; export { baz as bar } from './source'
-    // source.ts: export const foo, baz
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1734,7 +1671,6 @@ fn mixed_star_and_named_re_exports_from_same_source() {
     }];
 
     let resolved_modules = vec![
-        // consumer imports foo and bar from barrel
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/consumer.ts"),
@@ -1766,7 +1702,6 @@ fn mixed_star_and_named_re_exports_from_same_source() {
             ],
             ..Default::default()
         },
-        // barrel: export * from './source' AND export { baz as bar } from './source'
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/barrel.ts"),
@@ -1794,7 +1729,6 @@ fn mixed_star_and_named_re_exports_from_same_source() {
             ],
             ..Default::default()
         },
-        // source: export const foo, baz
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/source.ts"),
@@ -1828,7 +1762,6 @@ fn mixed_star_and_named_re_exports_from_same_source() {
 
     let source = &graph.modules[2];
 
-    // foo should be referenced via the star re-export path
     let foo = source
         .exports
         .iter()
@@ -1839,7 +1772,6 @@ fn mixed_star_and_named_re_exports_from_same_source() {
         "foo should be referenced through star re-export"
     );
 
-    // baz should be referenced via the named re-export (barrel exports it as "bar")
     let baz = source
         .exports
         .iter()
@@ -1853,9 +1785,6 @@ fn mixed_star_and_named_re_exports_from_same_source() {
 
 #[test]
 fn entry_point_named_re_export_no_in_graph_consumers_multiple_exports() {
-    // Entry point re-exports named symbols but nothing in the graph imports them.
-    // All re-exported source exports should still be marked as used.
-    // Additionally, source has an export NOT re-exported by the entry point.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1875,7 +1804,6 @@ fn entry_point_named_re_export_no_in_graph_consumers_multiple_exports() {
     }];
 
     let resolved_modules = vec![
-        // index.ts (entry point) re-exports only "create" and "destroy" from lib
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/src/index.ts"),
@@ -1903,7 +1831,6 @@ fn entry_point_named_re_export_no_in_graph_consumers_multiple_exports() {
             ],
             ..Default::default()
         },
-        // lib.ts: export create, destroy, internal_helper
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/src/lib.ts"),
@@ -1980,8 +1907,6 @@ fn entry_point_named_re_export_no_in_graph_consumers_multiple_exports() {
 
 #[test]
 fn entry_point_star_re_export_skips_default() {
-    // Per ES spec, `export * from './source'` does NOT re-export the default export.
-    // Verify that entry point star re-export does not mark the source's default as used.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -1999,7 +1924,6 @@ fn entry_point_star_re_export_skips_default() {
         source: EntryPointSource::PackageJsonMain,
     }];
     let resolved_modules = vec![
-        // index.ts: export * from './source'
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/index.ts"),
@@ -2015,7 +1939,6 @@ fn entry_point_star_re_export_skips_default() {
             }],
             ..Default::default()
         },
-        // source.ts: export default function() {} and export const named = 42
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/source.ts"),
@@ -2071,7 +1994,6 @@ fn entry_point_star_re_export_skips_default() {
 
 #[test]
 fn no_re_exports_skips_chain_resolution() {
-    // When there are no re-exports, chain resolution should be a no-op.
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -2130,21 +2052,10 @@ fn no_re_exports_skips_chain_resolution() {
         .iter()
         .find(|e| e.name.to_string() == "foo")
         .unwrap();
-    // Direct import reference should still work
     assert_eq!(foo.references.len(), 1);
     assert_eq!(foo.references[0].from_file, FileId(0));
 }
 
-/// Regression test for quadratic duplicate detection in star re-export propagation.
-///
-/// When many consumers import the same named export through a star-re-exporting barrel,
-/// the reference list grows across iterations. The duplicate check must remain efficient
-/// (O(1) via HashSet, not O(n) via linear scan) to avoid quadratic blowup.
-///
-/// Layout:
-///   consumer_0..consumer_N each import { shared } from barrel
-///   barrel: export * from './source'
-///   source: export const shared = 1; export const other = 2;
 #[expect(
     clippy::cast_possible_truncation,
     reason = "test file/span counts are trivially small"
@@ -2198,7 +2109,6 @@ fn star_re_export_many_consumers_no_quadratic_blowup() {
         })
         .collect();
 
-    // barrel: export * from './source'
     resolved_modules.push(ResolvedModule {
         file_id: barrel_id,
         path: PathBuf::from("/project/barrel.ts"),
@@ -2215,7 +2125,6 @@ fn star_re_export_many_consumers_no_quadratic_blowup() {
         ..Default::default()
     });
 
-    // source: export const shared = 1; export const other = 2;
     resolved_modules.push(ResolvedModule {
         file_id: source_id,
         path: PathBuf::from("/project/source.ts"),
@@ -2246,7 +2155,6 @@ fn star_re_export_many_consumers_no_quadratic_blowup() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // The source module's "shared" export should have references from all consumers
     let source = &graph.modules[source_id.0 as usize];
     let shared = source
         .exports
@@ -2259,7 +2167,6 @@ fn star_re_export_many_consumers_no_quadratic_blowup() {
         "each consumer should add exactly one reference to the source export"
     );
 
-    // The "other" export should have no references (nobody imports it)
     let other = source
         .exports
         .iter()
@@ -2270,7 +2177,6 @@ fn star_re_export_many_consumers_no_quadratic_blowup() {
         "'other' should have no references since no consumer imports it"
     );
 
-    // Verify no duplicate references (the HashSet dedup must work correctly)
     let unique_from_files: FxHashSet<FileId> =
         shared.references.iter().map(|r| r.from_file).collect();
     assert_eq!(
@@ -2280,22 +2186,9 @@ fn star_re_export_many_consumers_no_quadratic_blowup() {
     );
 }
 
-/// Regression for issue #442: the old `max_iterations = 20` cap silently
-/// truncated barrel chains beyond 20 hops, so a deep `export { foo } from
-/// './next'` ladder lost the bottom of the chain. The fixpoint loop now
-/// terminates naturally on monotone growth, so even a 25-hop chain
-/// propagates end-to-end.
-///
-/// The test asserts the leaf's `foo` carries references on both a 21-hop
-/// chain (just over the old cap) and a 25-hop chain (well beyond it). The
-/// 21-hop case is the smallest configuration that would have failed
-/// under the previous implementation, so it doubles as a self-validating
-/// guard against any future re-introduction of an iteration cap.
 #[test]
 fn deep_named_re_export_chain_propagates_25_hops() {
     fn run_chain(barrel_count: u32) {
-        // Layout: consumer (id 0) -> barrel_1 (id 1) -> barrel_2 (id 2)
-        //   -> ... -> barrel_N (id N) -> leaf (id N+1).
         let consumer_id = FileId(0);
         let leaf_id = FileId(barrel_count + 1);
 
@@ -2318,7 +2211,6 @@ fn deep_named_re_export_chain_propagates_25_hops() {
             source: EntryPointSource::PackageJsonMain,
         }];
 
-        // consumer imports foo from barrel_1.
         let mut resolved_modules: Vec<ResolvedModule> = vec![ResolvedModule {
             file_id: consumer_id,
             path: PathBuf::from("/project/consumer.ts"),
@@ -2337,7 +2229,6 @@ fn deep_named_re_export_chain_propagates_25_hops() {
             ..Default::default()
         }];
 
-        // Each barrel_i re-exports foo from the next file in the chain.
         for i in 1..=barrel_count {
             let next_id = FileId(i + 1);
             let next_source = if i == barrel_count {
@@ -2362,7 +2253,6 @@ fn deep_named_re_export_chain_propagates_25_hops() {
             });
         }
 
-        // Leaf has the actual export.
         resolved_modules.push(ResolvedModule {
             file_id: leaf_id,
             path: PathBuf::from("/project/leaf.ts"),
@@ -2394,28 +2284,16 @@ fn deep_named_re_export_chain_propagates_25_hops() {
         );
     }
 
-    // 21 hops: just over the old `max_iterations = 20` cap, the smallest
-    // configuration that fails under the previous implementation.
     run_chain(21);
-    // 25 hops: comfortably beyond the old cap, matches issue #442's example.
     run_chain(25);
 }
 
-/// Regression for issue #442: re-export cycles should not panic or hang,
-/// AND all reachable exports outside the cycle should still propagate
-/// correctly. The diagnostic is emitted via `tracing::warn!` with the
-/// member paths; verify manually with `RUST_LOG=warn cargo test`.
 #[expect(
     clippy::too_many_lines,
     reason = "fixture construction dominates; assertions stay tight"
 )]
 #[test]
 fn re_export_cycle_terminates_and_does_not_block_unrelated_propagation() {
-    // a.ts: export * from './b'; export const x = 1;
-    // b.ts: export * from './c'; export * from './a';
-    // c.ts: export * from './a';
-    // outside.ts: export const y = 2; (used by consumer)
-    // consumer.ts: import { x } from './a'; import { y } from './outside';
     let files = vec![
         DiscoveredFile {
             id: FileId(0),
@@ -2565,10 +2443,8 @@ fn re_export_cycle_terminates_and_does_not_block_unrelated_propagation() {
         },
     ];
 
-    // Must not hang or panic despite the 3-node cycle (a -> b -> c -> a).
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // a's x should still be referenced (consumer imports it directly).
     let a = &graph.modules[0];
     let x = a
         .exports
@@ -2580,7 +2456,6 @@ fn re_export_cycle_terminates_and_does_not_block_unrelated_propagation() {
         "x should be referenced despite the cycle"
     );
 
-    // outside's y, completely unrelated to the cycle, must propagate normally.
     let outside = &graph.modules[3];
     let y = outside
         .exports
@@ -2593,18 +2468,6 @@ fn re_export_cycle_terminates_and_does_not_block_unrelated_propagation() {
     );
 }
 
-/// Regression for issue #442: when `propagate_star_re_export` synthesises
-/// a stub `ExportSymbol` on a source module that itself has `export *`,
-/// the stub previously hardcoded `is_type_only: false`. Reading it from
-/// the triggering re-export edge means multi-hop `export type *` chains
-/// tag the synthesised stub correctly, preventing latent
-/// misclassification under `find_unused_types`.
-///
-/// Chain: barrel.ts is the entry point and does `export type * from
-/// './source'`. source.ts does `export * from './leaf'`. leaf.ts exports
-/// const X. Because barrel's edge is type-only, the stub synthesised on
-/// source (when propagation needs to bridge through source's own
-/// `export *`) must inherit `is_type_only: true`.
 #[test]
 fn type_only_star_chain_synthesizes_type_only_stub() {
     let files = vec![
@@ -2625,15 +2488,12 @@ fn type_only_star_chain_synthesizes_type_only_stub() {
         },
     ];
 
-    // barrel is the entry point so its type-only star re-export marks the
-    // chain as externally consumed.
     let entry_points = vec![EntryPoint {
         path: PathBuf::from("/project/barrel.ts"),
         source: EntryPointSource::PackageJsonMain,
     }];
 
     let resolved_modules = vec![
-        // barrel.ts: export type * from './source'
         ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/project/barrel.ts"),
@@ -2649,7 +2509,6 @@ fn type_only_star_chain_synthesizes_type_only_stub() {
             }],
             ..Default::default()
         },
-        // source.ts: export * from './leaf' (NOT type-only)
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/source.ts"),
@@ -2665,7 +2524,6 @@ fn type_only_star_chain_synthesizes_type_only_stub() {
             }],
             ..Default::default()
         },
-        // leaf.ts: export type X
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/leaf.ts"),
@@ -2685,13 +2543,6 @@ fn type_only_star_chain_synthesizes_type_only_stub() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // The barrel propagation visits source's exports and finds nothing
-    // matching, then synthesises a stub on source for any name the chain
-    // needs to bridge. Because source has its own `export *`, the
-    // synthesis path is engaged. The propagation also recurses into leaf
-    // because barrel is an entry point doing `export *`.
-    //
-    // Assert the leaf's X is reachable through the type-only chain.
     let leaf = &graph.modules[2];
     let x = leaf
         .exports
@@ -2703,12 +2554,6 @@ fn type_only_star_chain_synthesizes_type_only_stub() {
         "X should be referenced through the entry-point type-only star chain"
     );
 
-    // If a synthetic stub was created on source for X, it must carry
-    // `is_type_only: true` (inherited from barrel's `export type *`).
-    // The stub creation only fires when the source has its own `export *`
-    // AND the propagation has a named ref to bridge; the entry-point fast
-    // path may skip synthesis, so the stub's presence is best-effort.
-    // When present, verify the type-only flag.
     let source = &graph.modules[1];
     if let Some(stub) = source.exports.iter().find(|e| e.name.to_string() == "X") {
         assert!(
@@ -2719,22 +2564,6 @@ fn type_only_star_chain_synthesizes_type_only_stub() {
     }
 }
 
-/// Direct regression for the synthetic-stub creation path in
-/// `propagate_star_re_export`, exercising the non-entry-point branch
-/// where the named-ref bridging into `source.exports.push(...)` is the
-/// only way to land. Layout:
-///
-/// consumer.ts: import { X } from './barrel'  (type-only)
-/// barrel.ts:  export type * from './source'
-/// source.ts:  export * from './leaf'
-/// leaf.ts:    export type X = ...
-///
-/// barrel is NOT an entry point, so the entry-point fast paths in
-/// `propagate_entry_point_star` / `propagate_entry_point_named` do not
-/// fire. The named-import on the consumer drives the standard star
-/// propagation path, which synthesises a stub on `source` for `X` so the
-/// next iteration can carry the reference into leaf. The stub MUST
-/// inherit `is_type_only: true` from the triggering edge.
 #[test]
 fn type_only_star_chain_named_consumer_synthesizes_type_only_stub() {
     let files = vec![
@@ -2783,7 +2612,6 @@ fn type_only_star_chain_named_consumer_synthesizes_type_only_stub() {
             }],
             ..Default::default()
         },
-        // barrel.ts: export type * from './source'
         ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/project/barrel.ts"),
@@ -2799,7 +2627,6 @@ fn type_only_star_chain_named_consumer_synthesizes_type_only_stub() {
             }],
             ..Default::default()
         },
-        // source.ts: export * from './leaf' (NOT type-only)
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/source.ts"),
@@ -2815,7 +2642,6 @@ fn type_only_star_chain_named_consumer_synthesizes_type_only_stub() {
             }],
             ..Default::default()
         },
-        // leaf.ts: export type X
         ResolvedModule {
             file_id: FileId(3),
             path: PathBuf::from("/project/leaf.ts"),
@@ -2835,9 +2661,6 @@ fn type_only_star_chain_named_consumer_synthesizes_type_only_stub() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // The named import on consumer (X) flows through barrel's star edge
-    // into source. source has no X export but does `export *`, so the
-    // synthesis path fires.
     let source = &graph.modules[2];
     let stub = source
         .exports
@@ -2851,19 +2674,6 @@ fn type_only_star_chain_named_consumer_synthesizes_type_only_stub() {
     );
 }
 
-/// Regression for issue #442: when two star re-export edges reach the
-/// same source with conflicting `is_type_only` flags (one type-only,
-/// one value), the synthesised stub must end up `is_type_only: false`.
-/// A value-bearing access widens a previously type-only stub; the
-/// reverse direction never widens a real type-only declaration.
-///
-/// Layout:
-///   consumer_type.ts: import type { X } from './barrel_type'
-///   consumer_val.ts:  import { X } from './barrel_val'
-///   barrel_type.ts:   export type * from './source'
-///   barrel_val.ts:    export * from './source'
-///   source.ts:        export * from './leaf'
-///   leaf.ts:          export type X
 #[test]
 fn mixed_type_only_and_value_star_paths_synthesize_value_stub() {
     let files = vec![
@@ -2945,7 +2755,6 @@ fn mixed_type_only_and_value_star_paths_synthesize_value_stub() {
             }],
             ..Default::default()
         },
-        // barrel_type.ts: export type * from './source'
         ResolvedModule {
             file_id: FileId(2),
             path: PathBuf::from("/project/barrel_type.ts"),
@@ -2961,7 +2770,6 @@ fn mixed_type_only_and_value_star_paths_synthesize_value_stub() {
             }],
             ..Default::default()
         },
-        // barrel_val.ts: export * from './source'
         ResolvedModule {
             file_id: FileId(3),
             path: PathBuf::from("/project/barrel_val.ts"),
@@ -2977,7 +2785,6 @@ fn mixed_type_only_and_value_star_paths_synthesize_value_stub() {
             }],
             ..Default::default()
         },
-        // source.ts: export * from './leaf'
         ResolvedModule {
             file_id: FileId(4),
             path: PathBuf::from("/project/source.ts"),
@@ -3012,11 +2819,6 @@ fn mixed_type_only_and_value_star_paths_synthesize_value_stub() {
 
     let graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 
-    // After propagation, the synthetic stub on `source` for X must be
-    // value-typed (the value path widens the type-only stub). Iteration
-    // order through re_export_info is deterministic; whichever barrel
-    // synthesises first sets the initial flag, but the conflicting
-    // value edge always downgrades to false.
     let source = &graph.modules[4];
     let stub = source
         .exports
@@ -3030,11 +2832,6 @@ fn mixed_type_only_and_value_star_paths_synthesize_value_stub() {
     );
 }
 
-/// Regression for issue #442: a barrel that re-exports from itself
-/// (`export * from './<same-file>'`) is a real bug, usually introduced
-/// after a rename or move. Surface it via a dedicated `tracing::warn!`
-/// instead of silently skipping it inside the SCC pass. Verify the
-/// build does not panic and the diagnostic message is reachable.
 #[test]
 fn self_re_export_does_not_panic() {
     let files = vec![DiscoveredFile {
@@ -3051,7 +2848,6 @@ fn self_re_export_does_not_panic() {
     let resolved_modules = vec![ResolvedModule {
         file_id: FileId(0),
         path: PathBuf::from("/project/barrel.ts"),
-        // export * from './barrel' (resolves back to self)
         re_exports: vec![ResolvedReExport {
             info: fallow_types::extract::ReExportInfo {
                 source: "./barrel".to_string(),
@@ -3065,17 +2861,9 @@ fn self_re_export_does_not_panic() {
         ..Default::default()
     }];
 
-    // The key structural assertion is "does not panic". The exact
-    // warn-payload shape is asserted separately by
-    // `self_re_export_warn_payload_names_file` below.
     let _graph = ModuleGraph::build(&resolved_modules, &entry_points, &files);
 }
 
-/// Regression for issue #442 plus PR #516 reviewer feedback: confirm
-/// the structured re-export cycle payload names every member's file
-/// path. Without this assertion, the diagnostic could regress to a
-/// context-free "cycle detected" result and the structural termination
-/// test would still pass.
 #[test]
 fn re_export_cycle_payload_lists_member_paths() {
     let files = vec![
@@ -3187,9 +2975,6 @@ fn re_export_cycle_payload_lists_member_paths() {
     );
 }
 
-/// Regression for issue #442 plus PR #516 reviewer feedback: confirm
-/// the structured payload for a barrel re-exporting from itself names
-/// the offending file path.
 #[test]
 fn self_re_export_payload_names_file() {
     let files = vec![DiscoveredFile {

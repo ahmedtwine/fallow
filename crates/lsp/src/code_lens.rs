@@ -15,7 +15,6 @@ pub fn build_code_lenses(
         .iter()
         .filter(|usage| usage.path == file_path)
         .map(|usage| {
-            // usage.line is 1-based; LSP positions are 0-based
             let line = usage.line.saturating_sub(1);
             let title = if usage.reference_count == 1 {
                 "1 reference".to_string()
@@ -28,7 +27,6 @@ pub fn build_code_lenses(
                 character: usage.col,
             };
 
-            // Build reference Location objects for editor.action.showReferences
             let ref_locations: Vec<serde_json::Value> = usage
                 .reference_locations
                 .iter()
@@ -45,8 +43,6 @@ pub fn build_code_lenses(
                 })
                 .collect();
 
-            // Use editor.action.showReferences when we have reference locations,
-            // fall back to display-only noop otherwise
             let (command_name, arguments) = if ref_locations.is_empty() {
                 ("fallow.noop".to_string(), None)
             } else {
@@ -208,7 +204,6 @@ mod tests {
         let lenses = build_code_lenses(&results, &utils_path, &uri);
         assert_eq!(lenses.len(), 1);
 
-        // 1-based line 15 → 0-based line 14
         assert_eq!(lenses[0].range.start.line, 14);
         assert_eq!(lenses[0].range.start.character, 4);
         assert_eq!(lenses[0].range.end.line, 14);
@@ -273,18 +268,11 @@ mod tests {
         let args = cmd.arguments.as_ref().unwrap();
         assert_eq!(args.len(), 3);
 
-        // First arg is the document URI
         assert_eq!(args[0], serde_json::json!(uri.as_str()));
-
-        // Second arg is the export position (0-based)
         assert_eq!(args[1]["line"], 4); // 1-based 5 → 0-based 4
         assert_eq!(args[1]["character"], 7);
-
-        // Third arg is the reference locations array
         let ref_locs = args[2].as_array().unwrap();
         assert_eq!(ref_locs.len(), 2);
-
-        // First reference: app.ts line 3 → 0-based 2
         let app_uri = Url::from_file_path(root.join("src/app.ts")).unwrap();
         assert_eq!(ref_locs[0]["uri"], app_uri.as_str());
         assert_eq!(ref_locs[0]["range"]["start"]["line"], 2);
@@ -343,7 +331,7 @@ mod tests {
         results.export_usages.push(ExportUsage {
             path: edge_path.clone(),
             export_name: "x".to_string(),
-            line: 0, // edge case: 0 saturates to 0
+            line: 0,
             col: 0,
             reference_count: 1,
             reference_locations: vec![],
@@ -368,11 +356,10 @@ mod tests {
             reference_count: 2,
             reference_locations: vec![
                 ReferenceLocation {
-                    path: root.join("src/app.ts"), // valid absolute path
+                    path: root.join("src/app.ts"),
                     line: 3,
                     col: 10,
                 },
-                // An empty path won't produce a valid file URI on most platforms
                 ReferenceLocation {
                     path: std::path::PathBuf::new(),
                     line: 1,
@@ -386,12 +373,10 @@ mod tests {
         assert_eq!(lenses.len(), 1);
 
         let cmd = lenses[0].command.as_ref().unwrap();
-        // Should still use showReferences because at least one valid location exists
         assert_eq!(cmd.command, "editor.action.showReferences");
 
         let args = cmd.arguments.as_ref().unwrap();
         let ref_locs = args[2].as_array().unwrap();
-        // Only the valid path should be in the references
         assert_eq!(ref_locs.len(), 1);
     }
 
@@ -413,7 +398,6 @@ mod tests {
         let lenses = build_code_lenses(&results, &path, &uri);
         assert_eq!(lenses.len(), 1);
 
-        // Code lens range should be a zero-width point (start == end)
         assert_eq!(lenses[0].range.start, lenses[0].range.end);
     }
 
@@ -464,7 +448,6 @@ mod tests {
         let args = cmd.arguments.as_ref().unwrap();
         let ref_locs = args[2].as_array().unwrap();
 
-        // Reference line should be converted to 0-based (42 -> 41)
         assert_eq!(ref_locs[0]["range"]["start"]["line"], 41);
         assert_eq!(ref_locs[0]["range"]["start"]["character"], 5);
     }

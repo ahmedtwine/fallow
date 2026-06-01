@@ -37,10 +37,8 @@ fn is_native_custom_element_lifecycle_method(member_name: &str, super_class: Opt
         && NATIVE_CUSTOM_ELEMENT_LIFECYCLE_MEMBERS.contains(&member_name)
 }
 
-/// Native ECMAScript `Error` constructors. A class extending any of these is an
-/// error type whose `name` member is consumed at runtime (logs, serializers,
-/// `err.name === "..."` discrimination) rather than via a static member access
-/// fallow can see.
+/// Native ECMAScript `Error` constructors whose subclasses treat `name` as
+/// runtime-used.
 const NATIVE_ERROR_BASE_NAMES: &[&str] = &[
     "Error",
     "TypeError",
@@ -52,18 +50,16 @@ const NATIVE_ERROR_BASE_NAMES: &[&str] = &[
     "AggregateError",
 ];
 
-/// Class members treated as runtime-used on error subclasses. Scoped to `name`
-/// only: `message` / `stack` / `cause` are inherited from `Error` and rarely
-/// re-declared as own members, so keeping the set narrow preserves reporting of
-/// genuinely-unused members on error classes (issue #620).
+/// Runtime-used members on error subclasses. Kept narrow so unrelated members
+/// on error classes still report.
 const ERROR_SUBCLASS_RUNTIME_MEMBERS: &[&str] = &["name"];
 
 fn is_native_error_base_name(name: &str) -> bool {
     NATIVE_ERROR_BASE_NAMES.contains(&name)
 }
 
-/// `name` (and any future entry in `ERROR_SUBCLASS_RUNTIME_MEMBERS`) is
-/// runtime-used when its declaring class is in the error-subclass closure.
+/// `name` is runtime-used when its declaring class is in the error-subclass
+/// closure.
 fn is_error_subclass_runtime_member(
     member_name: &str,
     export_key: &ExportKey,
@@ -75,16 +71,8 @@ fn is_error_subclass_runtime_member(
 
 /// Find unused enum and class members in exported symbols.
 ///
-/// Collects all `Identifier.member` static member accesses from all modules,
-/// maps them to their imported names, and filters out members that are accessed.
-///
-/// `user_class_member_allowlist` extends the built-in Angular/React lifecycle
-/// allowlist with framework-invoked method names contributed by plugins and
-/// top-level config (see `FallowConfig::used_class_members` and
-/// `Plugin::used_class_members`). Plain string entries suppress matching member
-/// names or glob patterns globally; scoped object entries only suppress classes
-/// whose heritage clause matches the configured `extends` / `implements`
-/// constraints.
+/// Collects `Identifier.member` accesses, resolves imports, and filters out
+/// members that are accessed or explicitly allowlisted.
 #[derive(Default)]
 struct ClassMemberAllowlist<'a> {
     global: FxHashSet<&'a str>,
@@ -246,29 +234,18 @@ fn compile_member_pattern(member: &str) -> Option<GlobMatcher> {
         .map(|glob| glob.compile_matcher())
 }
 
-/// User-supplied decorator names that should NOT count as evidence of
-/// reflective use. Built from `FallowConfig::ignore_decorators`.
+/// User-supplied decorator names that should not count as reflective use.
 ///
-/// Matching rule: entries containing `.` match the full dotted path of a
-/// decorator (e.g. `"decorators.log"` matches `@decorators.log` but not
-/// `@decorators.audit`). Bare entries match the leftmost segment of the path
-/// (e.g. `"decorators"` matches `@decorators.log` AND `@decorators.audit`;
-/// `"step"` matches `@step` and `@step("x")`). Both `"@step"` and `"step"`
-/// round-trip equivalently because a leading `@` is stripped at construction.
-///
-/// Each entry tracks whether it matched at least one decorator during the
-/// run; unmatched entries surface as a `tracing::warn!` at end of run,
-/// mirroring `ClassMemberAllowlist::warn_unmatched_patterns`.
+/// Dotted entries match the full path; bare entries match the leftmost
+/// segment. Unmatched entries are warned at end of run.
 struct IgnoreDecoratorSet {
     entries: Vec<IgnoreDecoratorEntry>,
 }
 
 struct IgnoreDecoratorEntry {
-    /// Original user-provided string (after `@` strip + trim). Used in the
-    /// unmatched-pattern warning so the message echoes the user's input.
+    /// Original user input, after `@` strip + trim.
     raw: String,
-    /// Whether the entry contains `.` (dotted = exact-path match; bare =
-    /// leftmost-segment match).
+    /// Whether the entry is dotted, which means exact-path matching.
     is_dotted: bool,
     matched: AtomicBool,
 }
@@ -297,11 +274,8 @@ impl IgnoreDecoratorSet {
         self.entries.is_empty()
     }
 
-    /// Returns true when `decorator_path` matches any ignore-list entry under
-    /// the dual matching rule. An empty `decorator_path` (the silent fallback
-    /// for decorators whose expression is not an identifier ladder) never
-    /// matches. Side effect: marks every matching entry as seen for the
-    /// end-of-run `warn_unmatched` report.
+    /// Returns true when `decorator_path` matches any ignore-list entry.
+    /// Empty paths never match. Matching entries are marked as seen.
     fn matches(&self, decorator_path: &str) -> bool {
         if decorator_path.is_empty() {
             return false;
@@ -323,12 +297,8 @@ impl IgnoreDecoratorSet {
         false
     }
 
-    /// Mark every entry matching `decorator_path` as seen, without returning
-    /// the predicate result. Used during the pre-pass over all class-member
-    /// decorators (including those on members that never reach the skip
-    /// predicate because they were already credited as used). Without this,
-    /// the `warn_unmatched` report falsely flags entries whose decorators
-    /// only appear on used members. Caught 2026-05-20 by /fallow-review.
+    /// Mark matching entries as seen without returning the predicate result.
+    /// Used by the pre-pass so used members do not trigger false warnings.
     fn record_seen(&self, decorator_path: &str) {
         if decorator_path.is_empty() {
             return;
@@ -424,22 +394,10 @@ fn build_local_to_export_keys(resolved: &ResolvedModule) -> FxHashMap<&str, Vec<
     local_to_export_keys
 }
 
-/// Walk the re-export chain starting at `(start_file, start_name)` and return
-/// every defining-site `ExportKey` reachable from it.
+/// Walk re-export chains to the defining-site `ExportKey`s.
 ///
-/// A barrel like `lib/index.ts` with `export { Foo } from './types'` produces
-/// a `ReExportEdge { source_file: types.ts, imported_name: "Foo", exported_name: "Foo" }`
-/// on the barrel module, AND Phase 4 chain resolution synthesizes an
-/// `ExportSymbol` for `Foo` on the barrel as a stub for reference tracking.
-/// We must prefer re-export edges over the local stub so the walk reaches
-/// the file where the enum/class is actually defined (and where `members`
-/// are populated). Cross-package consumers resolve their import to the
-/// barrel's `file_id`, so the access map keys at the barrel; without this
-/// chain walk, `find_unused_members` looks up accesses at the origin file
-/// and finds nothing (issue #178).
-///
-/// Handles named re-exports (with renames) and `export *` re-exports as a
-/// fallback when no named edge matches. Cycle-protected via a visited set.
+/// Prefers real re-export edges over barrel stubs and handles renamed or
+/// star re-exports.
 fn walk_re_export_origins(
     graph: &ModuleGraph,
     start_file: FileId,
@@ -457,21 +415,8 @@ fn walk_re_export_origins(
             continue;
         };
 
-        // Prefer re-export edges over the local export stub: Phase 4 chain
-        // resolution synthesizes an `ExportSymbol` for chained re-exports so
-        // reference propagation can attach SymbolReferences. That stub is
-        // indistinguishable from a real `export const X = ...` declaration
-        // by name alone, so we follow the named edge first whenever both
-        // are present.
         let mut matched_named = false;
         for re in &module.re_exports {
-            // `export * as ns from './mod'` produces an edge with
-            // `exported_name = "ns"` and `imported_name = "*"`. Following
-            // that edge would push `(source_file, "*")` and dead-end on the
-            // next iteration. Member access through a re-exported namespace
-            // (`ns.Foo.member`) is two property accesses deep and isn't
-            // tracked at extract time anyway, so skipping the edge here
-            // matches the existing extraction contract.
             if re.exported_name != "*" && re.imported_name != "*" && re.exported_name == name {
                 stack.push((re.source_file, re.imported_name.clone()));
                 matched_named = true;
@@ -500,13 +445,8 @@ fn walk_re_export_origins(
     origins
 }
 
-/// Copy access sets from each barrel `ExportKey` in `accessed_members` to
-/// every defining-site `ExportKey` reachable through re-export chains.
-///
-/// Without this, a cross-package consumer of an enum or class re-exported
-/// through a barrel file (e.g. `lib/index.ts` re-exporting `lib/types.ts`)
-/// has its `Foo.bar` accesses recorded at the barrel and never reaches the
-/// origin where `members` are populated. See issue #178.
+/// Copy access sets from barrel `ExportKey`s to every defining-site
+/// `ExportKey` reachable through re-export chains.
 fn propagate_accesses_through_re_exports(
     graph: &ModuleGraph,
     accessed_members: &mut FxHashMap<ExportKey, FxHashSet<String>>,
@@ -529,9 +469,7 @@ fn propagate_accesses_through_re_exports(
     }
 }
 
-/// Sibling of `propagate_accesses_through_re_exports` for the
-/// "whole-object-used" set (e.g. `Object.values(StatusCode)` on a re-exported
-/// enum should mark every member of the originating enum as used).
+/// Sibling of `propagate_accesses_through_re_exports` for whole-object use.
 fn propagate_whole_object_through_re_exports(
     graph: &ModuleGraph,
     whole_object_used_exports: &mut FxHashSet<ExportKey>,
@@ -949,9 +887,8 @@ fn propagate_accesses_through_typed_instance_bindings(
     }
 }
 
-/// Decode a `FACTORY_CALL_SENTINEL{callee_object}:{callee_method}` access object
-/// into its `(callee_object, callee_method)` components. Returns `None` when the
-/// object is not sentinel-prefixed or the embedded delimiter is missing.
+/// Decode a `FACTORY_CALL_SENTINEL{callee_object}:{callee_method}` access
+/// object into its components.
 fn parse_factory_call_sentinel(object: &str) -> Option<(&str, &str)> {
     object
         .strip_prefix(FACTORY_CALL_SENTINEL)
@@ -960,22 +897,6 @@ fn parse_factory_call_sentinel(object: &str) -> Option<(&str, &str)> {
 
 /// Credit member accesses produced by static-factory call bindings on the
 /// originating class export.
-///
-/// Each `const <local> = <ID>.<METHOD>()` site emitted (via the visitor's
-/// `resolve_factory_call_candidates` and `resolve_bound_member_accesses`)
-/// sentinel-encoded `MemberAccess { object: "{sentinel}{ID}:{METHOD}", member }`
-/// entries on the consumer module. This pass resolves `<ID>` through the
-/// consumer's `local_to_export_keys` (same map used for direct accesses, so it
-/// covers both same-file local classes and cross-file imports). The matched
-/// `ExportKey` is then walked through `walk_re_export_origins` to reach every
-/// defining-site export. For each origin whose `MemberInfo` array contains a
-/// member named `<METHOD>` with `is_instance_returning_static == true`, the
-/// consumed `member` is inserted into `accessed_members` at the origin key.
-///
-/// Origins lacking the matching flagged method are skipped silently: the
-/// sentinel was recorded speculatively at extract time, so this is the
-/// intended drop point for imports that turn out not to name a factory class.
-/// See issue #346.
 fn propagate_factory_call_accesses(
     graph: &ModuleGraph,
     resolved_modules: &[ResolvedModule],
@@ -1026,10 +947,7 @@ fn propagate_factory_call_accesses(
 }
 
 /// Decode a `FLUENT_CHAIN_SENTINEL{root}:{root_method}:{chain}` access object
-/// into its components. `chain` is a comma-separated list of intermediate
-/// method names walked since the root call (empty when the credited member is
-/// the first call after the root). Returns `None` when the object is not
-/// sentinel-prefixed or the structure is malformed. See issue #387.
+/// into its components.
 fn parse_fluent_chain_sentinel(object: &str) -> Option<(&str, &str, Vec<&str>)> {
     let payload = object.strip_prefix(FLUENT_CHAIN_SENTINEL)?;
     let (root, rest) = payload.split_once(':')?;
@@ -1042,10 +960,7 @@ fn parse_fluent_chain_sentinel(object: &str) -> Option<(&str, &str, Vec<&str>)> 
     Some((root, root_method, chain))
 }
 
-/// Validate a fluent chain against a single class export: the export must
-/// match the resolved origin name, declare `root_method` with
-/// `is_instance_returning_static`, and contain every `chain` step as a
-/// `is_self_returning` `ClassMethod`. See issue #387.
+/// Validate a fluent chain against a single class export.
 fn export_validates_fluent_chain(
     export: &crate::extract::ExportInfo,
     origin: &ExportKey,
@@ -1073,26 +988,6 @@ fn export_validates_fluent_chain(
 }
 
 /// Credit member accesses produced by fluent-builder chain calls.
-///
-/// At extract time, each call expression chained off a previous call emits a
-/// sentinel-encoded `MemberAccess` of shape `FLUENT_CHAIN_SENTINEL:<ID>:<root_method>:<chain_prefix>`
-/// with `member` set to the method being called now. This pass:
-///
-/// 1. Resolves `<ID>` through each consumer's `local_to_export_keys` (covering
-///    both same-file local classes and cross-file imports).
-/// 2. Walks the matched `ExportKey` through `walk_re_export_origins` to reach
-///    every defining-site class export.
-/// 3. Validates the origin's `<root_method>` carries `is_instance_returning_static`.
-/// 4. Walks each name in `<chain_prefix>`: every step must exist on the origin
-///    class with `is_self_returning`. If any step is absent or non-self-returning,
-///    the chain has left the class type and the credit is skipped (e.g., the
-///    `.toString()` after a `.build()` that returns a different type).
-/// 5. Credits the access's `member` on the origin class only when every check
-///    above passes.
-///
-/// Origins lacking the matching flagged root method are skipped silently: the
-/// sentinel was recorded speculatively at extract time, so non-class imports
-/// or imports of factory-less classes drop here. See issue #387.
 fn propagate_fluent_chain_accesses(
     graph: &ModuleGraph,
     resolved_modules: &[ResolvedModule],
@@ -1138,14 +1033,7 @@ fn propagate_fluent_chain_accesses(
 }
 
 /// Decode a `FLUENT_CHAIN_NEW_SENTINEL{class}:{chain}` access object into its
-/// `(class, chain)` components. `chain` is a comma-separated list of the
-/// intermediate method names walked between the constructor and the credited
-/// member. The visitor always emits at least the first instance method, so an
-/// empty chain is treated as malformed and returns `None`: crediting `member`
-/// on a constructor root with no validated self-returning step would be a
-/// vacuous over-credit (`chain.iter().all(...)` is `true` on an empty slice).
-/// Returns `None` when the object is not sentinel-prefixed or the structure is
-/// malformed. See issue #605.
+/// components.
 fn parse_fluent_chain_new_sentinel(object: &str) -> Option<(&str, Vec<&str>)> {
     let payload = object.strip_prefix(FLUENT_CHAIN_NEW_SENTINEL)?;
     let (class, chain_str) = payload.split_once(':')?;
@@ -1155,11 +1043,7 @@ fn parse_fluent_chain_new_sentinel(object: &str) -> Option<(&str, Vec<&str>)> {
     Some((class, chain_str.split(',').collect()))
 }
 
-/// Validate a constructor-rooted fluent chain against a single class export:
-/// the export must match the resolved origin name and contain every `chain`
-/// step as an `is_self_returning` `ClassMethod`. Unlike the static-factory
-/// chain, there is no root method to validate: `new <class>()` always returns a
-/// `<class>` instance. See issue #605.
+/// Validate a constructor-rooted fluent chain against a single class export.
 fn export_validates_fluent_chain_new(
     export: &crate::extract::ExportInfo,
     origin: &ExportKey,
@@ -1177,29 +1061,7 @@ fn export_validates_fluent_chain_new(
     })
 }
 
-/// Credit member accesses produced by fluent chains rooted at a `new`
-/// expression.
-///
-/// At extract time, each call expression chained off a `new <class>(...)`
-/// receiver emits a `FLUENT_CHAIN_NEW_SENTINEL:<class>:<chain>` access with
-/// `member` set to the method being called now. This pass:
-///
-/// 1. Resolves `<class>` through each consumer's `local_to_export_keys`
-///    (covering both same-file local classes and cross-file imports).
-/// 2. Walks the matched `ExportKey` through `walk_re_export_origins` to reach
-///    every defining-site class export.
-/// 3. Requires every `<chain>` step to exist on the origin class as an
-///    `is_self_returning` `ClassMethod`. If any step is absent or
-///    non-self-returning, the chain has left the class type and the credit is
-///    skipped (the same #387 safety check, minus the static-factory-method
-///    validation a constructor root does not need).
-/// 4. Credits the access's `member` on the origin class only when every check
-///    above passes.
-///
-/// The first method directly off the constructor is credited separately by the
-/// `static_member_object_name` `NewExpression` arm, so the empty-chain case
-/// never reaches this pass. Origins that turn out not to name a class with the
-/// chained self-returning methods drop here silently. See issue #605.
+/// Credit member accesses produced by fluent chains rooted at `new`.
 fn propagate_fluent_chain_new_accesses(
     graph: &ModuleGraph,
     resolved_modules: &[ResolvedModule],
@@ -1246,8 +1108,7 @@ fn propagate_fluent_chain_new_accesses(
 }
 
 /// Build `parent_export -> [child_export, ...]` from each exported class's
-/// `extends` clause (resolved through the importing module's
-/// `local_to_export_keys`). Output is deduplicated per-parent.
+/// `extends` clause.
 fn build_parent_to_children(
     graph: &ModuleGraph,
     resolved_modules: &[ResolvedModule],
@@ -1280,27 +1141,11 @@ fn build_parent_to_children(
 }
 
 /// Build the set of exported class `ExportKey`s whose heritage chain reaches a
-/// native JavaScript `Error` constructor, directly (`class X extends Error`) or
-/// transitively through a local/imported subclass (`class Y extends X` where
-/// `X extends Error`).
-///
-/// The transitive walk reuses `build_parent_to_children`, which resolves
-/// `extends` clauses through imports, local exports, and re-export origins, so
-/// this covers the same heritage shapes the rest of the member analysis does.
-/// Same-file NON-exported intermediate bases are not resolved (the same
-/// limitation `build_parent_to_children` carries), so a non-exported
-/// `class Base extends Error {}` does not propagate to an exported subclass.
-///
-/// Seeding is by direct super-class name, matching the existing
-/// `is_native_custom_element_lifecycle_method` built-in
-/// (`super_class == Some("HTMLElement")`): a local class shadowing a native
-/// error name is treated as a native error base, which is acceptable because
-/// shadowing a global error constructor is pathological in practice.
+/// native JavaScript `Error` constructor.
 fn build_error_subclass_export_keys(
     parent_to_children: &FxHashMap<ExportKey, Vec<ExportKey>>,
     class_heritage_by_export: &FxHashMap<ExportKey, (Option<String>, Vec<String>)>,
 ) -> FxHashSet<ExportKey> {
-    // Seed: classes that directly extend a native Error constructor.
     let mut error_keys: FxHashSet<ExportKey> = class_heritage_by_export
         .iter()
         .filter(|(_, (super_class, _))| {
@@ -1315,9 +1160,6 @@ fn build_error_subclass_export_keys(
         return error_keys;
     }
 
-    // Transitive: walk `extends` chains downward from each seed. The parent
-    // keys in `parent_to_children` are origin-resolved, matching the seed keys
-    // (each defining-site `ExportKey`).
     let mut stack: Vec<ExportKey> = error_keys.iter().cloned().collect();
     while let Some(parent_key) = stack.pop() {
         if let Some(children) = parent_to_children.get(&parent_key) {
@@ -1333,18 +1175,6 @@ fn build_error_subclass_export_keys(
 }
 
 /// Propagate member accesses through `extends` chains in both directions.
-///
-/// - Parent `this.*` accesses flow down to child files, so a base class method
-///   calling `this.getArea()` credits `Circle.getArea()` / `Rectangle.getArea()`.
-/// - Child `this.*` accesses (and Angular template refs bridged into
-///   `self_accessed_members`) flow UP to parent files, so a child component
-///   template referencing an inherited method credits the base class's method
-///   as used.
-/// - External accesses on a parent export flow down to every child export.
-/// - External accesses on any child export flow up to the parent export.
-///
-/// Self-access propagations are computed on a snapshot first and applied after
-/// the external-access loop so the mutable borrows stay disjoint.
 fn propagate_class_inheritance(
     parent_to_children: &FxHashMap<ExportKey, Vec<ExportKey>>,
     accessed_members: &mut FxHashMap<ExportKey, FxHashSet<String>>,
@@ -1457,14 +1287,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
     let allowlist = ClassMemberAllowlist::from_rules(user_class_member_allowlist);
     let ignore_decorators = IgnoreDecoratorSet::from_config(ignore_decorators);
 
-    // Pre-pass: mark every ignore-decorator entry as seen against every
-    // decorator name in the codebase, regardless of whether the decorated
-    // member ever reaches the skip predicate. Without this, the per-member
-    // path that calls `ignore_decorators.matches(...)` is short-circuited
-    // for members already credited as used (external access, this.* access,
-    // suppressed, etc.), so an entry whose decorator appears only on USED
-    // decorated members would falsely surface in the end-of-run
-    // `warn_unmatched` report.
     if !ignore_decorators.is_empty() {
         for module in &graph.modules {
             for export in &module.exports {
@@ -1524,18 +1346,11 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
         }
     }
 
-    // Map exported symbol identity -> set of member names that are accessed across all modules.
     let mut accessed_members: FxHashMap<ExportKey, FxHashSet<String>> = FxHashMap::default();
 
-    // Also build a per-file set of `this.member` accesses. These indicate internal usage
-    // within a class body — class members accessed via `this.foo` are used internally
-    // even if no external code accesses them via `ClassName.foo`.
     let mut self_accessed_members: FxHashMap<crate::discover::FileId, FxHashSet<String>> =
         FxHashMap::default();
 
-    // Build a set of exported symbols that are used as whole objects
-    // (Object.values, for..in, etc.). All members of these exports should be
-    // considered used.
     let mut whole_object_used_exports: FxHashSet<ExportKey> = FxHashSet::default();
 
     for resolved in resolved_modules {
@@ -1549,7 +1364,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
             {
                 continue;
             }
-            // Track `this.member` accesses per-file for internal class usage
             if access.object == "this" {
                 self_accessed_members
                     .entry(resolved.file_id)
@@ -1575,9 +1389,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
         }
     }
 
-    // Propagate accesses through re-export chains so cross-package consumers
-    // that import a barrel-re-exported enum/class credit the originating
-    // file's `members`. See issue #178.
     propagate_playwright_fixture_accesses(graph, resolved_modules, &mut accessed_members);
     propagate_factory_call_accesses(graph, resolved_modules, &mut accessed_members);
     propagate_fluent_chain_accesses(graph, resolved_modules, &mut accessed_members);
@@ -1619,18 +1430,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
         }
     }
 
-    // Bridge Angular template member refs to their owning components.
-    //
-    // Sentinel member accesses come from two sources:
-    // 1. External templates: HTML files scanned for Angular syntax, with sentinel
-    //    accesses stored on the HTML file's ModuleInfo. Bridged to the component
-    //    via the SideEffect import edge from @Component({ templateUrl }).
-    // 2. Inline templates/host/inputs/outputs: sentinel accesses stored directly
-    //    on the component's own ModuleInfo (same file as the class).
-    //
-    // Bridged BEFORE `propagate_class_inheritance` so child-template refs
-    // propagate up to base-class files, crediting inherited members used in a
-    // child component's external template.
     let angular_tpl_refs: FxHashMap<FileId, Vec<&str>> = resolved_modules
         .iter()
         .filter_map(|m| {
@@ -1648,9 +1447,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
         })
         .collect();
 
-    // Non-sentinel member-access chains from HTML template scanners
-    // (`dataService.getTotal` where `dataService` is an unresolved top-level
-    // identifier). Keyed by the HTML file's id.
     let angular_tpl_chain_accesses: FxHashMap<FileId, Vec<(&str, &str)>> = resolved_modules
         .iter()
         .filter_map(|m| {
@@ -1684,14 +1480,12 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
 
     if !angular_tpl_refs.is_empty() {
         for resolved in resolved_modules {
-            // Case 1: sentinel accesses on the same file (inline template, host, inputs/outputs)
             if let Some(refs) = angular_tpl_refs.get(&resolved.file_id) {
                 let entry = self_accessed_members.entry(resolved.file_id).or_default();
                 for &ref_name in refs {
                     entry.insert(ref_name.to_string());
                 }
             }
-            // Case 2: sentinel accesses on an imported file (external templateUrl)
             for import in resolved.all_resolved_imports() {
                 if let Some(target_id) = import.target.internal_file_id()
                     && let Some(refs) = angular_tpl_refs.get(&target_id)
@@ -1705,15 +1499,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
         }
     }
 
-    // Resolve HTML template chain accesses (`dataService.getTotal`) through
-    // the importing component's typed instance bindings to credit the target
-    // class's member as used.
-    //
-    // For inline templates, the chain accesses are stored on the component's
-    // own `member_accesses` and resolved via the visitor's
-    // `resolve_bound_member_accesses` at extract time -- so they flow through
-    // the regular member-access pipeline above and need no special handling
-    // here.
     if !angular_tpl_chain_accesses.is_empty() {
         for resolved in resolved_modules {
             let Some(class_heritage) = class_heritage_by_file.get(&resolved.file_id) else {
@@ -1759,8 +1544,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
         }
     }
 
-    // Resolve the `parent -> [child, ...]` extends map once and share it
-    // between inheritance propagation and the Error-subclass closure.
     let parent_to_children = build_parent_to_children(graph, resolved_modules);
 
     propagate_class_inheritance(
@@ -1771,8 +1554,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
 
     let entry_star_targets = entry_point_star_re_export_targets(graph, public_api_entry_points);
 
-    // Exported classes whose heritage reaches a native `Error` constructor, so
-    // their `name` member is credited as runtime-used (issue #620).
     let error_subclass_keys =
         build_error_subclass_export_keys(&parent_to_children, &class_heritage_by_export);
 
@@ -1792,10 +1573,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                     continue;
                 }
 
-                // If the export itself is unused, skip member analysis (whole export is dead).
-                // Side-effect-registered exports (Lit @customElement, customElements.define)
-                // are alive at runtime even with empty cross-file references; their members
-                // are runtime-invoked by the browser/Lit framework so member analysis must run.
                 if export.references.is_empty()
                     && !export.is_side_effect_used
                     && !graph.has_namespace_import(module.file_id)
@@ -1811,8 +1588,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                         (super_class.as_deref(), interfaces.as_slice())
                     });
 
-                // If this export is used as a whole object (Object.values, for..in, etc.),
-                // all members are considered used — skip individual member analysis.
                 if whole_object_used_exports.contains(&export_key) {
                     continue;
                 }
@@ -1825,14 +1600,9 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                     public_api_entry_points,
                 );
 
-                // Get `this.member` accesses from this file (internal class usage)
                 let file_self_accesses = self_accessed_members.get(&module.file_id);
 
                 for member in &export.members {
-                    // Per-member unused detection on TS namespaces is not yet
-                    // wired; the namespace as a whole is still tracked via the
-                    // unused-export detector, so a fully-unused namespace remains
-                    // reported and only the per-member granularity is missing.
                     if matches!(member.kind, MemberKind::NamespaceMember) {
                         continue;
                     }
@@ -1846,7 +1616,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                         continue;
                     }
 
-                    // Check if this member is accessed anywhere via external import
                     if accessed_members
                         .get(&export_key)
                         .is_some_and(|s| s.contains(&member.name))
@@ -1854,8 +1623,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                         continue;
                     }
 
-                    // Check if this member is accessed via `this.member` within the same file
-                    // (internal class usage — e.g., constructor sets this.label, methods use this.label)
                     if matches!(
                         member.kind,
                         MemberKind::ClassMethod | MemberKind::ClassProperty
@@ -1865,21 +1632,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                         continue;
                     }
 
-                    // Skip decorated class members. Decorators like @Column(),
-                    // @ApiProperty(), @Inject() indicate runtime usage by
-                    // frameworks (NestJS, TypeORM, class-validator,
-                    // class-transformer). These members are accessed
-                    // reflectively and should not be flagged as unused.
-                    //
-                    // Users can opt specific decorators out of this skip via
-                    // FallowConfig.ignore_decorators (issue #471). A member
-                    // whose every decorator path is in the ignore set is
-                    // checked normally; any non-ignored decorator restores
-                    // the conservative skip. Members where `has_decorator` is
-                    // true but `decorator_names` is empty (Angular signal
-                    // initializer properties, which set the boolean without
-                    // a literal decorator AST node) always skip; there is no
-                    // name to match against the ignore set.
                     if member.has_decorator
                         && (member.decorator_names.is_empty()
                             || ignore_decorators.is_empty()
@@ -1891,13 +1643,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                         continue;
                     }
 
-                    // Skip lifecycle methods called by runtimes or the browser, not user code:
-                    // React class component lifecycle, Angular lifecycle hooks, and native
-                    // Custom Elements lifecycle on direct HTMLElement subclasses. The `name`
-                    // member of native Error subclasses is runtime-used (logs, serializers,
-                    // `err.name === "..."` discrimination). The user allowlist extends these
-                    // built-ins with framework-invoked names contributed by plugins and
-                    // top-level config (ag-Grid's `agInit`, etc.).
                     if matches!(
                         member.kind,
                         MemberKind::ClassMethod | MemberKind::ClassProperty
@@ -1924,7 +1669,6 @@ pub(super) fn find_unused_members_with_public_api_entry_points(
                         member.span.start,
                     );
 
-                    // Check inline suppression
                     let issue_kind = match member.kind {
                         MemberKind::EnumMember => IssueKind::UnusedEnumMember,
                         MemberKind::ClassMethod | MemberKind::ClassProperty => {
@@ -2133,7 +1877,6 @@ mod tests {
             Some(0), // referenced from entry
         )];
 
-        // No member accesses at all — both should be unused
         let (enum_members, class_members) = find_unused_members(
             &graph,
             &[],
@@ -2166,7 +1909,6 @@ mod tests {
             Some(0),
         )];
 
-        // Consumer accesses Status.Active
         let resolved_modules = vec![ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/src/entry.ts"),
@@ -2198,19 +1940,12 @@ mod tests {
             &[],
             &[],
         );
-        // Only Inactive should be unused
         assert_eq!(enum_members.len(), 1);
         assert_eq!(enum_members[0].member_name, "Inactive");
     }
 
     #[test]
     fn accessed_enum_member_via_re_export_not_flagged() {
-        // Mirror of issue #178: enum defined in `types.ts`, re-exported by a
-        // barrel `index.ts`, consumed cross-package via the barrel. Without
-        // re-export chain propagation in `find_unused_members`, the access
-        // map keys at the barrel and the origin-keyed lookup at detection
-        // time misses every cross-barrel access, falsely flagging every
-        // member as unused.
         let mut graph = build_graph(&[
             ("/app/consumer.ts", true),
             ("/lib/index.ts", true),
@@ -2219,9 +1954,6 @@ mod tests {
         graph.modules[1].set_reachable(true);
         graph.modules[2].set_reachable(true);
 
-        // Phase 4 chain resolution synthesizes a stub `ExportSymbol` on the
-        // barrel for chained re-exports (so reference tracking can hang
-        // SymbolReferences off it). Replicate the shape here.
         graph.modules[1].exports = vec![make_export_with_members(
             "Status",
             vec![],
@@ -2242,8 +1974,6 @@ mod tests {
                 make_member("Inactive", MemberKind::EnumMember),
                 make_member("Archived", MemberKind::EnumMember),
             ],
-            // In production, Phase 4 chain resolution propagates the
-            // barrel's `references` back to the source. Simulate that here.
             Some(0),
         )];
 
@@ -2292,9 +2022,6 @@ mod tests {
 
     #[test]
     fn accessed_class_static_member_via_re_export_not_flagged() {
-        // Cross-package class static method case from the issue #178 comment:
-        // `ClassName.method()` cross-barrel must credit the originating
-        // class member.
         let mut graph = build_graph(&[
             ("/app/consumer.ts", true),
             ("/lib/index.ts", true),
@@ -2359,8 +2086,6 @@ mod tests {
 
     #[test]
     fn accessed_member_via_renamed_re_export_not_flagged() {
-        // `export { Original as Renamed } from './types'` chains must
-        // walk back to the original name on the source file.
         let mut graph = build_graph(&[
             ("/app/consumer.ts", true),
             ("/lib/index.ts", true),
@@ -2426,8 +2151,6 @@ mod tests {
 
     #[test]
     fn accessed_member_via_star_re_export_not_flagged() {
-        // `export * from './types'` must fan out to source file when no
-        // named edge matches.
         let mut graph = build_graph(&[
             ("/app/consumer.ts", true),
             ("/lib/index.ts", true),
@@ -2436,8 +2159,6 @@ mod tests {
         graph.modules[1].set_reachable(true);
         graph.modules[2].set_reachable(true);
 
-        // Star re-export: barrel has no synthesized stub for "Status"; just
-        // a `*` edge pointing at types.ts.
         graph.modules[1].re_exports = vec![crate::graph::ReExportEdge {
             source_file: FileId(2),
             imported_name: "*".to_string(),
@@ -2504,7 +2225,6 @@ mod tests {
             Some(0),
         )];
 
-        // Consumer uses Object.values(Status) — whole object use
         let resolved_modules = vec![ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/src/entry.ts"),
@@ -2569,10 +2289,6 @@ mod tests {
 
     #[test]
     fn ignore_decorator_set_record_seen_marks_entries() {
-        // Direct test of the pre-pass primitive. After `record_seen("step")`,
-        // the `@step` entry is considered matched even when no skip predicate
-        // has been evaluated yet, so the end-of-run `warn_unmatched` report
-        // does not falsely flag it. Caught 2026-05-20 by /fallow-review.
         let set = IgnoreDecoratorSet::from_config(&["@step".to_string()]);
         assert!(!set.entries[0].matched.load(Ordering::Relaxed));
         set.record_seen("step");
@@ -2584,10 +2300,6 @@ mod tests {
 
     #[test]
     fn ignore_decorator_set_dotted_record_seen_distinct_from_bare() {
-        // `record_seen("decorators.log")` marks a dotted entry but does NOT
-        // mark a sibling dotted entry `decorators.audit`. Pins the dual-match
-        // semantics for the pre-pass primitive. Caught 2026-05-20 by
-        // /fallow-review (extends the false-warn regression coverage).
         let set = IgnoreDecoratorSet::from_config(&[
             "decorators.log".to_string(),
             "decorators.audit".to_string(),
@@ -2626,7 +2338,6 @@ mod tests {
             &[],
             &[],
         );
-        // Only customMethod should be flagged
         assert_eq!(class_members.len(), 1);
         assert_eq!(class_members[0].member_name, "customMethod");
     }
@@ -2660,10 +2371,6 @@ mod tests {
 
     #[test]
     fn user_class_member_allowlist_not_flagged() {
-        // Third-party framework contract: library calls `agInit` and `refresh`
-        // on the consumer class. The user allowlist (from config or a plugin)
-        // extends the built-in Angular/React lifecycle check so these names are
-        // treated as always-used. See issue #98 (ag-Grid `AgFrameworkComponent`).
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/renderer.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -2752,8 +2459,6 @@ mod tests {
 
     #[test]
     fn user_class_member_allowlist_does_not_affect_enums() {
-        // The allowlist is scoped to class members; matching enum member names
-        // must still be flagged as unused.
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/status.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -2958,7 +2663,6 @@ mod tests {
                 "{base} should be a native error base"
             );
         }
-        // Not native error constructors.
         assert!(!is_native_error_base_name("Person"));
         assert!(!is_native_error_base_name("HttpException"));
         assert!(!is_native_error_base_name("error")); // case-sensitive
@@ -2967,8 +2671,6 @@ mod tests {
 
     #[test]
     fn error_subclass_name_member_not_flagged_but_other_members_are() {
-        // `class DomainError extends Error { name = "..."; unusedHelper() {} }`.
-        // `name` is runtime-used on error subclasses; `unusedHelper` is not.
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/errors.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -3003,9 +2705,6 @@ mod tests {
 
     #[test]
     fn ordinary_class_name_member_still_flagged() {
-        // `class Person { name = "x" }` has no Error heritage, so an unused
-        // `name` member must still report (issue #620 explicitly warns against
-        // globally suppressing every member named `name`).
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/person.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -3032,9 +2731,6 @@ mod tests {
 
     #[test]
     fn transitive_error_subclass_name_member_not_flagged() {
-        // `class DomainError extends Error {}` and
-        // `class ApiError extends DomainError {}` in the same file: ApiError's
-        // `name` is credited transitively through the resolved heritage chain.
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/errors.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![
@@ -3050,8 +2746,6 @@ mod tests {
             ),
         ];
 
-        // build_parent_to_children resolves `extends` clauses through the
-        // ResolvedModule exports (which carry super_class + local_name).
         let resolved_modules = vec![ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/src/errors.ts"),
@@ -3062,8 +2756,6 @@ mod tests {
             ..Default::default()
         }];
 
-        // class_heritage_by_export seeds the direct `extends Error` and resolves
-        // each export's super_class at the decision point.
         let mut errors_module =
             make_module_with_class_heritage(1, "DomainError", Some("Error"), &[]);
         errors_module.class_heritage.push(ClassHeritageInfo {
@@ -3103,7 +2795,6 @@ mod tests {
             Some(0),
         )];
 
-        // The service file itself accesses this.label
         let resolved_modules = vec![ResolvedModule {
             file_id: FileId(1), // same file as the service
             path: PathBuf::from("/src/service.ts"),
@@ -3123,7 +2814,6 @@ mod tests {
             &[],
             &[],
         );
-        // Only unused_prop should be flagged (label is accessed via this)
         assert_eq!(class_members.len(), 1);
         assert_eq!(class_members[0].member_name, "unused_prop");
     }
@@ -3132,7 +2822,6 @@ mod tests {
     fn unreferenced_export_skips_member_analysis() {
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/enums.ts", false)]);
         graph.modules[1].set_reachable(true);
-        // Export has members but NO references — whole export is dead, members skipped
         graph.modules[1].exports = vec![make_export_with_members(
             "Status",
             vec![make_member("Active", MemberKind::EnumMember)],
@@ -3148,14 +2837,12 @@ mod tests {
             &[],
             &[],
         );
-        // Member analysis skipped because export itself is unreferenced
         assert!(enum_members.is_empty());
     }
 
     #[test]
     fn unreachable_module_skips_member_analysis() {
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/dead.ts", false)]);
-        // Module 1 stays unreachable
         graph.modules[1].exports = vec![make_export_with_members(
             "DeadEnum",
             vec![make_member("X", MemberKind::EnumMember)],
@@ -3270,9 +2957,6 @@ mod tests {
             Some(0),
         )];
 
-        // Consumer imports MyService and accesses greet via instance.
-        // The visitor maps `svc.greet()` → `MyService.greet` at extraction time,
-        // so the analysis layer sees it as a direct member access on the export name.
         let resolved_modules = vec![ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/src/entry.ts"),
@@ -3289,7 +2973,6 @@ mod tests {
                 target: ResolveResult::InternalModule(FileId(1)),
             }],
             member_accesses: vec![MemberAccess {
-                // Already mapped by the visitor from `svc.greet()` → `MyService.greet`
                 object: "MyService".to_string(),
                 member: "greet".to_string(),
             }],
@@ -3305,15 +2988,12 @@ mod tests {
             &[],
             &[],
         );
-        // Only unusedMethod should be flagged; greet is used via instance access
         assert_eq!(class_members.len(), 1);
         assert_eq!(class_members[0].member_name, "unusedMethod");
     }
 
     #[test]
     fn this_access_does_not_skip_enum_members() {
-        // `this.member` accesses only suppress class members, not enum members.
-        // Enums don't have `this` — this test ensures the check is scoped to class kinds.
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/enums.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -3325,7 +3005,6 @@ mod tests {
             Some(0),
         )];
 
-        // File accesses this.Up — but for enum members, this should NOT suppress
         let resolved_modules = vec![ResolvedModule {
             file_id: FileId(1),
             path: PathBuf::from("/src/enums.ts"),
@@ -3345,7 +3024,6 @@ mod tests {
             &[],
             &[],
         );
-        // Both enum members should be flagged — `this` access doesn't apply to enums
         assert_eq!(enum_members.len(), 2);
     }
 
@@ -3383,8 +3061,6 @@ mod tests {
 
     #[test]
     fn local_name_mapped_to_imported_name() {
-        // import { Status as S } from './enums'
-        // S.Active → should map "S" back to "Status" for member access matching
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/enums.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -3427,14 +3103,12 @@ mod tests {
             &[],
             &[],
         );
-        // S.Active maps back to Status.Active, so only Inactive is unused
         assert_eq!(enum_members.len(), 1);
         assert_eq!(enum_members[0].member_name, "Inactive");
     }
 
     #[test]
     fn default_import_maps_to_default_export() {
-        // import MyEnum from './enums' → local "MyEnum", imported "default"
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/enums.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -3477,7 +3151,6 @@ mod tests {
             &[],
             &[],
         );
-        // MyEnum.X maps to default.X, so only Y is unused
         assert_eq!(enum_members.len(), 1);
         assert_eq!(enum_members[0].member_name, "Y");
     }
@@ -3494,7 +3167,6 @@ mod tests {
             Some(0),
         )];
 
-        // Suppress on line 1 (byte offset 10 => line 1 with no offsets)
         let supps = vec![Suppression {
             line: 1,
             comment_line: 0,
@@ -3557,8 +3229,6 @@ mod tests {
 
     #[test]
     fn whole_object_use_via_aliased_import() {
-        // import { Status as S } from './enums'
-        // Object.values(S) → should map S back to Status and suppress all members
         let mut graph = build_graph(&[("/src/entry.ts", true), ("/src/enums.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -3598,7 +3268,6 @@ mod tests {
             &[],
             &[],
         );
-        // Object.values(S) maps S→Status, so all members of Status should be considered used
         assert!(
             enum_members.is_empty(),
             "whole object use via alias should suppress all members"
@@ -3607,10 +3276,6 @@ mod tests {
 
     #[test]
     fn this_field_chained_access_not_flagged() {
-        // `this.service = new MyService()` then `this.service.doWork()`
-        // should recognize doWork as a used member of MyService.
-        // The visitor emits MemberAccess { object: "MyService", member: "doWork" }
-        // after resolving the `this.service` binding via binding_target_names.
         let mut graph = build_graph(&[("/src/main.ts", true), ("/src/service.ts", false)]);
         graph.modules[1].set_reachable(true);
         graph.modules[1].exports = vec![make_export_with_members(
@@ -3622,8 +3287,6 @@ mod tests {
             Some(0),
         )];
 
-        // Consumer imports MyService, stores in a field, and calls through it.
-        // The visitor resolves `this.service.doWork()` → `MyService.doWork`.
         let resolved_modules = vec![ResolvedModule {
             file_id: FileId(0),
             path: PathBuf::from("/src/main.ts"),
@@ -3640,7 +3303,6 @@ mod tests {
                 target: ResolveResult::InternalModule(FileId(1)),
             }],
             member_accesses: vec![MemberAccess {
-                // Already resolved by visitor from `this.service.doWork()` → `MyService.doWork`
                 object: "MyService".to_string(),
                 member: "doWork".to_string(),
             }],
@@ -3656,7 +3318,6 @@ mod tests {
             &[],
             &[],
         );
-        // Only unusedMethod should be flagged; doWork is used via this.service.doWork()
         assert_eq!(class_members.len(), 1);
         assert_eq!(class_members[0].member_name, "unusedMethod");
     }

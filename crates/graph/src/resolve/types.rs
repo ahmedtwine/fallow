@@ -337,7 +337,6 @@ mod tests {
         let canonical = dunce::canonicalize(&test_file).unwrap();
         assert_eq!(fallback.get(&canonical), Some(FileId(42)));
 
-        // Second call uses cached map (OnceLock)
         assert_eq!(fallback.get(&canonical), Some(FileId(42)));
 
         let _ = std::fs::remove_dir_all(&temp);

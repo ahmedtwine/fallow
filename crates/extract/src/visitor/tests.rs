@@ -1,4 +1,3 @@
-// Visitor tests invoke Oxc parser which is ~1000x slower under Miri.
 #![cfg(all(test, not(miri)))]
 
 use std::path::Path;
@@ -8,8 +7,6 @@ use crate::tests::parse_ts as parse;
 use crate::{ImportedName, MemberKind};
 use fallow_types::discover::FileId;
 use helpers::regex_pattern_to_suffix;
-
-// ── into_module_info transfers all fields ────────────────────
 
 #[test]
 fn into_module_info_transfers_exports() {
@@ -47,7 +44,6 @@ fn into_module_info_transfers_whole_object_uses() {
     let info = parse(
         "import { Status } from './types';\nObject.values(Status);\nconst y = { ...Status };",
     );
-    // Object.values + spread = 2 whole-object uses
     assert!(info.whole_object_uses.len() >= 2);
 }
 
@@ -67,14 +63,11 @@ fn into_module_info_transfers_cjs_flag() {
     assert!(info.has_cjs_exports);
 }
 
-// ── merge_into extends (not replaces) ────────────────────────
-
 #[test]
 fn merge_into_extends_imports() {
     let mut base = parse("import { a } from './a';");
     let _extra = parse("import { b } from './b';");
 
-    // Build a second extractor from parsing and merge
     let allocator = oxc_allocator::Allocator::default();
     let source_type = oxc_span::SourceType::from_path(Path::new("extra.ts")).unwrap_or_default();
     let parser_return =
@@ -104,8 +97,6 @@ fn merge_into_ors_cjs_flag() {
 
     assert!(base.has_cjs_exports, "merge_into should OR the cjs flag");
 }
-
-// ── Class member extraction ──────────────────────────────────
 
 #[test]
 fn extracts_public_class_methods_and_properties() {
@@ -262,8 +253,6 @@ fn local_class_export_specifier_keeps_members_and_heritage() {
     );
 }
 
-// ── Enum member extraction ───────────────────────────────────
-
 #[test]
 fn extracts_enum_members() {
     let info = parse(
@@ -287,8 +276,6 @@ fn extracts_enum_members() {
     assert!(members.iter().any(|m| m.name == "Up"));
     assert!(members.iter().any(|m| m.name == "Right"));
 }
-
-// ── Whole-object use patterns ────────────────────────────────
 
 #[test]
 fn object_values_marks_whole_use() {
@@ -326,8 +313,6 @@ fn dynamic_computed_access_marks_whole_use() {
     assert!(info.whole_object_uses.contains(&"E".to_string()));
 }
 
-// ── this.member tracking ─────────────────────────────────────
-
 #[test]
 fn this_member_access_tracked() {
     let info = parse(
@@ -364,8 +349,6 @@ fn this_assignment_tracked() {
     );
 }
 
-// ── Instance member access tracking ─────────────────────────
-
 #[test]
 fn instance_member_access_mapped_to_class() {
     let info = parse(
@@ -375,7 +358,6 @@ fn instance_member_access_mapped_to_class() {
             svc.greet();
             ",
     );
-    // svc.greet() should produce a MemberAccess for MyService.greet
     assert!(
         info.member_accesses
             .iter()
@@ -453,8 +435,6 @@ fn assigned_nested_object_member_access_mapped_to_class() {
     );
 }
 
-// ── Typed destructure binding member access (issue #752) ─────
-
 #[test]
 fn destructure_binding_typed_by_interface_mapped_to_class() {
     let info = parse(
@@ -476,7 +456,6 @@ fn destructure_binding_typed_by_interface_mapped_to_class() {
 
 #[test]
 fn destructure_binding_typed_by_interface_declared_after_use() {
-    // Interfaces hoist: the destructure precedes the interface declaration.
     let info = parse(
         r"
             import type { ResultState } from './state';
@@ -572,7 +551,6 @@ fn destructured_formal_parameter_typed_by_interface_mapped_to_class() {
 
 #[test]
 fn untyped_destructure_binding_does_not_map_to_class() {
-    // No type annotation: nothing should be re-emitted against a class name.
     let info = parse(
         r"
             const { resultState } = getProps();
@@ -613,7 +591,6 @@ fn non_instance_binding_not_mapped() {
             obj.greet();
             ",
     );
-    // obj is not a `new` binding, so no class mapping should exist.
     assert!(
         !info
             .member_accesses
@@ -632,7 +609,6 @@ fn instance_binding_with_no_access_produces_nothing() {
             const x = new Foo();
             ",
     );
-    // Binding exists but no x.method() calls — no synthetic accesses should be emitted.
     assert!(
         !info.member_accesses.iter().any(|a| a.object == "Foo"),
         "binding with no member access should not produce Foo entries, found: {:?}",
@@ -655,7 +631,6 @@ fn builtin_constructor_not_tracked() {
             m.get('key');
             ",
     );
-    // Built-in constructors should not create instance bindings
     assert!(
         !info.member_accesses.iter().any(|a| a.object == "URL"),
         "new URL() should not create instance binding, found: {:?}",
@@ -712,8 +687,6 @@ fn exported_instance_binding_is_recorded() {
         info.member_accesses
     );
 }
-
-// ── Factory initializer instance tracking ──────────────────
 
 #[test]
 fn array_destructured_factory_arrow_expression_body() {
@@ -809,7 +782,6 @@ fn non_array_destructured_call_not_tracked() {
             result.bar();
             ",
     );
-    // Without array destructuring, the factory pattern should not create a binding
     assert!(
         !info
             .member_accesses
@@ -829,7 +801,6 @@ fn array_destructured_no_factory_not_tracked() {
             x.bar();
             ",
     );
-    // No factory argument — should not create instance binding
     assert!(
         !info
             .member_accesses
@@ -839,8 +810,6 @@ fn array_destructured_no_factory_not_tracked() {
         info.member_accesses
     );
 }
-
-// ── Typed-binding nullable unions ─────
 
 #[test]
 fn type_annotation_nullable_union_undefined_binds_class() {
@@ -975,8 +944,6 @@ fn type_annotation_array_generic_not_unwrapped() {
 
 #[test]
 fn type_annotation_qualified_promise_not_unwrapped() {
-    // `Foo.Promise<Aggregate>` is not the global Promise; binding should fall back
-    // to the bare reference name (`Foo.Promise`), not unwrap to `Aggregate`.
     let info = parse(
         r"
             import { Aggregate, Foo } from './foo';
@@ -994,8 +961,6 @@ fn type_annotation_qualified_promise_not_unwrapped() {
     );
 }
 
-// ── this.field chained member access ────────────────────────
-
 #[test]
 fn this_field_new_assignment_enables_chained_access() {
     let info = parse(
@@ -1011,7 +976,6 @@ fn this_field_new_assignment_enables_chained_access() {
             }
             ",
     );
-    // this.service.doWork() should be mapped to MyService.doWork
     assert!(
         info.member_accesses
             .iter()
@@ -1032,8 +996,6 @@ fn this_field_chained_access_without_new_not_mapped() {
             }
             ",
     );
-    // No `this.config = new Config()` assignment, so no class mapping.
-    // The raw `this.config.getValue` access should exist but not be resolved to a class.
     assert!(
         info.member_accesses
             .iter()
@@ -1041,7 +1003,6 @@ fn this_field_chained_access_without_new_not_mapped() {
         "raw this.config.getValue access should be recorded, found: {:?}",
         info.member_accesses
     );
-    // No class-level mapping should exist
     assert!(
         !info
             .member_accesses
@@ -1661,15 +1622,12 @@ fn this_field_builtin_constructor_not_tracked() {
             }
             ",
     );
-    // Built-in constructors should not create this.field bindings
     assert!(
         !info.member_accesses.iter().any(|a| a.object == "Map"),
         "new Map() should not create this.field instance binding, found: {:?}",
         info.member_accesses
     );
 }
-
-// ── CJS export patterns ──────────────────────────────────────
 
 #[test]
 fn module_exports_object_extracts_keys() {
@@ -1697,8 +1655,6 @@ fn exports_dot_property() {
             .any(|e| { matches!(&e.name, ExportName::Named(n) if n == "myFunc") })
     );
 }
-
-// ── Destructured require/import ──────────────────────────────
 
 #[test]
 fn destructured_require_captures_names() {
@@ -1735,8 +1691,6 @@ fn namespace_await_import_has_local_name() {
     assert_eq!(info.dynamic_imports[0].local_name, Some("mod".to_string()));
 }
 
-// ── new URL pattern ──────────────────────────────────────────
-
 #[test]
 fn new_url_with_import_meta_url_tracked() {
     let info = parse("const w = new URL('./worker.js', import.meta.url);");
@@ -1747,8 +1701,6 @@ fn new_url_with_import_meta_url_tracked() {
         "new URL('./worker.js', import.meta.url) should be tracked as dynamic import"
     );
 }
-
-// ── import.meta.glob ─────────────────────────────────────────
 
 #[test]
 fn import_meta_glob_string_pattern() {
@@ -1762,8 +1714,6 @@ fn import_meta_glob_array_patterns() {
     let info = parse("const mods = import.meta.glob(['./a/*.ts', './b/*.ts']);");
     assert_eq!(info.dynamic_import_patterns.len(), 2);
 }
-
-// ── require.context ──────────────────────────────────────────
 
 #[test]
 fn require_context_non_recursive() {
@@ -1818,8 +1768,6 @@ fn require_context_no_regex_has_no_suffix() {
     assert!(info.dynamic_import_patterns[0].suffix.is_none());
 }
 
-// ── regex_pattern_to_suffix unit tests ──────────────────────
-
 #[test]
 fn regex_suffix_simple_ext() {
     assert_eq!(regex_pattern_to_suffix(r"\.vue$"), Some(".vue".to_string()));
@@ -1856,13 +1804,10 @@ fn regex_suffix_alternation() {
 
 #[test]
 fn regex_suffix_complex_returns_none() {
-    // Patterns too complex to convert
     assert_eq!(regex_pattern_to_suffix(r"\..*$"), None);
     assert_eq!(regex_pattern_to_suffix(r"\.[^.]+$"), None);
     assert_eq!(regex_pattern_to_suffix(r"test"), None);
 }
-
-// ── Whole-object-use edge cases ─────────────────────────────
 
 #[test]
 fn for_in_loop_marks_enum_as_whole_use() {
@@ -1895,21 +1840,17 @@ fn object_get_own_property_names_marks_whole_use() {
 #[test]
 fn nested_member_access_only_tracks_object() {
     let info = parse("import { obj } from './data';\nconst val = obj.nested.prop;");
-    // obj should be tracked as a member access, not as whole-object-use
     assert!(
         info.member_accesses
             .iter()
             .any(|a| a.object == "obj" && a.member == "nested"),
         "obj.nested should be tracked as a member access"
     );
-    // obj should NOT be in whole_object_uses (it's a specific member access)
     assert!(
         !info.whole_object_uses.contains(&"obj".to_string()),
         "nested member access should not mark obj as whole-object-use"
     );
 }
-
-// ── Export extraction ────────────────────────────────────────
 
 #[test]
 fn export_default_class_declaration() {
@@ -2053,8 +1994,6 @@ fn export_generator_function() {
     assert_eq!(info.exports[0].name, ExportName::Named("gen".to_string()));
 }
 
-// ── Type exports ─────────────────────────────────────────────
-
 #[test]
 fn export_type_alias() {
     let info = parse("export type ID = string | number;");
@@ -2103,8 +2042,6 @@ fn export_declare_namespace() {
     assert_eq!(info.exports[0].name, ExportName::Named("MyNS".to_string()));
     assert!(info.exports[0].is_type_only);
 }
-
-// ── Re-export extraction ─────────────────────────────────────
 
 #[test]
 fn re_export_named() {
@@ -2179,8 +2116,6 @@ fn re_export_star_type_only() {
     assert!(info.re_exports[0].is_type_only);
     assert_eq!(info.re_exports[0].imported_name, "*");
 }
-
-// ── Import extraction ────────────────────────────────────────
 
 #[test]
 fn import_named_single() {
@@ -2299,11 +2234,8 @@ fn import_type_default() {
 fn import_source_span_populated() {
     let info = parse("import { foo } from './bar';");
     assert_eq!(info.imports.len(), 1);
-    // source_span should cover the string literal './bar'
     assert!(info.imports[0].source_span.start < info.imports[0].source_span.end);
 }
-
-// ── Dynamic import extraction ────────────────────────────────
 
 #[test]
 fn dynamic_import_string_literal() {
@@ -2442,7 +2374,6 @@ fn dynamic_import_non_relative_concat_ignored() {
 
 #[test]
 fn dynamic_import_no_duplicate_when_assigned() {
-    // When assigned to a variable, the import should appear exactly once
     let info = parse("async function f() { const m = await import('./svc'); }");
     assert_eq!(
         info.dynamic_imports.len(),
@@ -2450,8 +2381,6 @@ fn dynamic_import_no_duplicate_when_assigned() {
         "assigned dynamic import should not produce duplicate entries"
     );
 }
-
-// ── Require call extraction ──────────────────────────────────
 
 #[test]
 fn require_call_simple() {
@@ -2512,8 +2441,6 @@ fn require_destructured_with_rest_returns_empty() {
     assert_eq!(info.require_calls.len(), 1);
     assert!(info.require_calls[0].destructured_names.is_empty());
 }
-
-// ── Member access extraction ─────────────────────────────────
 
 #[test]
 fn member_access_static() {
@@ -2604,8 +2531,6 @@ fn member_access_chained() {
     );
 }
 
-// ── Whole-object use patterns ────────────────────────────────
-
 #[test]
 fn whole_object_object_values() {
     let info = parse("Object.values(myObj);");
@@ -2653,8 +2578,6 @@ fn whole_object_spread_in_call_args() {
     let info = parse("fn(...myArr);");
     assert!(info.whole_object_uses.contains(&"myArr".to_string()));
 }
-
-// ── Type-level member access ────────────────────────────────
 
 #[test]
 fn type_qualified_name_tracks_member_access() {
@@ -2735,8 +2658,6 @@ fn record_with_non_identifier_key_no_whole_object_use() {
     );
 }
 
-// ── CommonJS exports ─────────────────────────────────────────
-
 #[test]
 fn cjs_module_exports_object_keys() {
     let info = parse("module.exports = { foo: 1, bar: 2, baz: 3 };");
@@ -2759,7 +2680,6 @@ fn cjs_exports_dot_property() {
 fn cjs_module_exports_non_object() {
     let info = parse("module.exports = someValue;");
     assert!(info.has_cjs_exports);
-    // Non-object RHS doesn't produce named exports
     assert!(info.exports.is_empty());
 }
 
@@ -2802,8 +2722,6 @@ fn cjs_module_exports_dot_property() {
             .any(|e| matches!(&e.name, ExportName::Named(n) if n == "baz"))
     );
 }
-
-// ── TypeScript enum extraction ───────────────────────────────
 
 #[test]
 fn ts_enum_members_extracted() {
@@ -2848,8 +2766,6 @@ fn ts_enum_string_member_name() {
     assert_eq!(info.exports[0].members.len(), 1);
     assert_eq!(info.exports[0].members[0].name, "some-key");
 }
-
-// ── Class member extraction ──────────────────────────────────
 
 #[test]
 fn class_public_methods_and_properties() {
@@ -2942,8 +2858,6 @@ fn class_member_decorator_tracked() {
     assert!(handler.has_decorator);
     assert!(!plain.has_decorator);
 }
-
-// ── Instance member access mapping ───────────────────────────
 
 #[test]
 fn instance_method_call_mapped() {
@@ -3057,7 +2971,6 @@ fn fluent_chain_emits_sentinel_member_access() {
         "#,
     );
 
-    // The first chained call (`.setProcessId`) records chain prefix "".
     assert!(
         info.member_accesses.iter().any(|a| a.object
             == format!("{}EventBuilder:create:", crate::FLUENT_CHAIN_SENTINEL)
@@ -3065,7 +2978,6 @@ fn fluent_chain_emits_sentinel_member_access() {
         "first chained call should emit sentinel with empty chain prefix, found: {:?}",
         info.member_accesses,
     );
-    // The second chained call (`.setSubject`) records chain prefix "setProcessId".
     assert!(
         info.member_accesses.iter().any(|a| a.object
             == format!(
@@ -3076,7 +2988,6 @@ fn fluent_chain_emits_sentinel_member_access() {
         "second chained call should encode intermediate method in chain prefix, found: {:?}",
         info.member_accesses,
     );
-    // The terminal `.build()` records chain prefix "setProcessId,setSubject".
     assert!(
         info.member_accesses.iter().any(|a| a.object
             == format!(
@@ -3091,9 +3002,6 @@ fn fluent_chain_emits_sentinel_member_access() {
 
 #[test]
 fn new_expression_direct_member_access_recorded() {
-    // Issue #605: a method reached through a freshly-constructed instance must
-    // credit the class. `new Repo(client).search(data)` resolves the receiver
-    // to the bare class name, so the member access is keyed on `Repo`.
     let info = parse(
         r"
         import { Repo } from './repo';
@@ -3112,10 +3020,6 @@ fn new_expression_direct_member_access_recorded() {
 
 #[test]
 fn new_expression_fluent_chain_emits_new_sentinel() {
-    // Issue #605: a fluent chain rooted at a constructor encodes a separate
-    // sentinel (no root method, since the constructor always returns an
-    // instance). The first method off the constructor is a plain class-keyed
-    // access; downstream methods carry the new sentinel with the prior chain.
     let info = parse(
         r"
         import { OptionBuilder } from './option-builder';
@@ -3123,7 +3027,6 @@ fn new_expression_fluent_chain_emits_new_sentinel() {
         ",
     );
 
-    // First method directly off the constructor: plain class-keyed access.
     assert!(
         info.member_accesses
             .iter()
@@ -3131,7 +3034,6 @@ fn new_expression_fluent_chain_emits_new_sentinel() {
         "first method off `new OptionBuilder()` should be a class-keyed access, found: {:?}",
         info.member_accesses,
     );
-    // Second method: new sentinel with chain prefix "addDefault".
     assert!(
         info.member_accesses.iter().any(|a| a.object
             == format!(
@@ -3142,7 +3044,6 @@ fn new_expression_fluent_chain_emits_new_sentinel() {
         "second chained call should encode the first method in the chain prefix, found: {:?}",
         info.member_accesses,
     );
-    // Terminal `.build()`: new sentinel with chain prefix "addDefault,addFromCli".
     assert!(
         info.member_accesses.iter().any(|a| a.object
             == format!(
@@ -3157,13 +3058,6 @@ fn new_expression_fluent_chain_emits_new_sentinel() {
 
 #[test]
 fn new_expression_records_bare_identifier_even_for_builtin_shaped_names() {
-    // Issue #605: extraction is name-agnostic. `new Map().set(k, v)` records a
-    // `Map`-keyed access UNCONDITIONALLY; disambiguating a global `Map` from a
-    // user `class Map {}` is the analyze layer's job (a global resolves to no
-    // user export and drops, a user class is credited). Guarding on
-    // `is_builtin_constructor` here would silently drop the access for a
-    // user-defined class named like a builtin, re-introducing the #605 false
-    // positive (caught by Codex's parallel review for `class URL`).
     let info = parse(
         r"
         new Map().set(k, v);
@@ -3408,8 +3302,6 @@ fn multiple_instances_same_class_mapped() {
     );
 }
 
-// ── Namespace destructuring ──────────────────────────────────
-
 #[test]
 fn namespace_import_destructuring() {
     let info = parse("import * as ns from './mod';\nconst { a, b } = ns;");
@@ -3480,8 +3372,6 @@ fn non_namespace_destructuring_not_tracked() {
     );
 }
 
-// ── new URL pattern ──────────────────────────────────────────
-
 #[test]
 fn new_url_import_meta_url_tracked() {
     let info = parse("new URL('./worker.js', import.meta.url);");
@@ -3504,8 +3394,6 @@ fn new_url_without_import_meta_url_not_tracked() {
     assert!(info.dynamic_imports.is_empty());
 }
 
-// Issue #399: `new URL('./', import.meta.url)` is the canonical __dirname
-// idiom and constructs a directory URL, not a module reference.
 #[test]
 fn new_url_dot_slash_not_tracked() {
     let info = parse("new URL('./', import.meta.url);");
@@ -3533,8 +3421,6 @@ fn new_url_subdir_trailing_slash_not_tracked() {
     );
 }
 
-// ── import.meta.glob ─────────────────────────────────────────
-
 #[test]
 fn import_meta_glob_string() {
     let info = parse("import.meta.glob('./components/*.tsx');");
@@ -3553,8 +3439,6 @@ fn import_meta_glob_non_relative_ignored() {
     let info = parse("import.meta.glob('node_modules/**/*.js');");
     assert!(info.dynamic_import_patterns.is_empty());
 }
-
-// ── require.context ──────────────────────────────────────────
 
 #[test]
 fn require_context_non_recursive_prefix() {
@@ -3586,8 +3470,6 @@ fn require_context_non_relative_ignored() {
     assert!(info.dynamic_import_patterns.is_empty());
 }
 
-// ── Function overload deduplication ──────────────────────────
-
 #[test]
 fn function_overloads_produce_single_export() {
     let info = parse(
@@ -3600,8 +3482,6 @@ fn function_overloads_produce_single_export() {
     assert_eq!(info.exports.len(), 1);
     assert_eq!(info.exports[0].name, ExportName::Named("parse".to_string()));
 }
-
-// ── Edge cases ───────────────────────────────────────────────
 
 #[test]
 fn empty_source_produces_no_results() {
@@ -3626,7 +3506,6 @@ fn no_module_syntax_produces_no_results() {
 #[test]
 fn namespace_import_adds_to_namespace_bindings() {
     let info = parse("import * as ns from './mod';\nns.foo();");
-    // ns should be tracked as a namespace binding and ns.foo as a member access
     assert!(
         info.member_accesses
             .iter()
@@ -3694,13 +3573,6 @@ fn import_and_re_export_same_source() {
     assert_eq!(info.imports[0].source, "./mod");
     assert_eq!(info.re_exports[0].source, "./mod");
 }
-
-// ── "Import then re-export" pattern detection ────────────────
-// Pattern: `import { X } from './a'; export { X };` is semantically
-// equivalent to `export { X } from './a';` and must be treated as a
-// re-export, not a local export. Without this, duplicate-export
-// detection fires and the re-export chain breaks.
-
 #[test]
 fn import_then_export_same_name_is_re_export() {
     let info = parse("import { Foo } from './types';\nexport { Foo };");
@@ -3743,9 +3615,6 @@ fn export_type_then_import_type_is_type_only_re_export() {
 
 #[test]
 fn value_import_then_type_export_is_type_only_re_export() {
-    // `import { MyEnum } from './a'; export type { MyEnum };`
-    // The `type` keyword on the export side erases the value reference,
-    // making this a type-only re-export even though the import is a value.
     let info = parse("import { MyEnum } from './a';\nexport type { MyEnum };");
     assert_eq!(info.re_exports.len(), 1);
     assert_eq!(info.exports.len(), 0);
@@ -3754,9 +3623,6 @@ fn value_import_then_type_export_is_type_only_re_export() {
 
 #[test]
 fn import_with_rename_then_export_is_re_export_with_original_name() {
-    // `import { X as Foo } from './a'; export { Foo };`
-    // The re-export must reference the ORIGINAL name on the remote side
-    // (`X`) even though the local binding is `Foo`.
     let info = parse("import { X as Foo } from './a';\nexport { Foo };");
     assert_eq!(info.re_exports.len(), 1);
     assert_eq!(info.exports.len(), 0);
@@ -3766,8 +3632,6 @@ fn import_with_rename_then_export_is_re_export_with_original_name() {
 
 #[test]
 fn import_then_export_with_rename_is_re_export_with_alias() {
-    // `import { X } from './a'; export { X as Y };`
-    // Re-export should carry both the original name and the alias.
     let info = parse("import { X } from './a';\nexport { X as Y };");
     assert_eq!(info.re_exports.len(), 1);
     assert_eq!(info.exports.len(), 0);
@@ -3786,7 +3650,6 @@ fn export_then_import_with_rename_is_re_export_with_alias() {
 
 #[test]
 fn default_import_then_export_is_re_export_of_default() {
-    // `import D from './a'; export { D };` re-exports the remote default.
     let info = parse("import D from './a';\nexport { D };");
     assert_eq!(info.re_exports.len(), 1);
     assert_eq!(info.exports.len(), 0);
@@ -3807,8 +3670,6 @@ fn default_export_then_import_is_re_export_of_default() {
 
 #[test]
 fn mixed_export_splits_into_local_and_re_export() {
-    // `import { X } from './a'; const Y = 1; export { X, Y };`
-    // X matches an import → re-export. Y is local → regular export.
     let info = parse("import { X } from './a';\nconst Y = 1;\nexport { X, Y };");
     assert_eq!(info.re_exports.len(), 1);
     assert_eq!(info.exports.len(), 1);
@@ -3835,7 +3696,6 @@ fn local_declaration_keeps_export_local_despite_later_import_collision() {
 
 #[test]
 fn local_export_without_matching_import_stays_local() {
-    // Regression guard: unrelated local exports must not be converted.
     let info = parse("const X = 1;\nexport { X };");
     assert_eq!(info.re_exports.len(), 0);
     assert_eq!(info.exports.len(), 1);
@@ -3844,8 +3704,6 @@ fn local_export_without_matching_import_stays_local() {
 
 #[test]
 fn namespace_import_then_export_stays_local() {
-    // `import * as ns from './a'; export { ns };` — namespace re-exports
-    // are an edge case and not converted by this heuristic.
     let info = parse("import * as ns from './a';\nexport { ns };");
     assert_eq!(info.re_exports.len(), 0);
     assert_eq!(info.exports.len(), 1);
@@ -3874,25 +3732,21 @@ mod proptests {
     }
 
     proptest! {
-        /// Parsing any valid JS/TS source never panics.
         #[test]
         fn parse_never_panics(source in "[a-zA-Z0-9 (){};=+\\-*/'\",.<>:\\n!?@#$%^&|~`_]{0,200}") {
             let _ = parse(&source);
         }
 
-        /// Star re-export sources should go into re_exports, not exports.
         #[test]
         fn star_reexport_does_not_pollute_exports(
             mod_name in "[a-z]{1,10}",
         ) {
             let source = format!("export * from './{mod_name}';");
             let info = parse(&source);
-            // Star re-exports should be in re_exports, not exports
             prop_assert!(
                 !info.re_exports.is_empty(),
                 "Star re-export should produce a re_export entry"
             );
-            // The export list should not contain the re-exported names
             for exp in &info.exports {
                 if let ExportName::Named(name) = &exp.name {
                     prop_assert_ne!(name, "*", "Star re-export should not appear in exports");
@@ -3900,7 +3754,6 @@ mod proptests {
             }
         }
 
-        /// All export names should be non-empty strings (for Named variants).
         #[test]
         fn export_names_are_non_empty(source in arb_valid_js_source()) {
             let info = parse(&source);
@@ -3911,7 +3764,6 @@ mod proptests {
             }
         }
 
-        /// All import sources should be non-empty strings.
         #[test]
         fn import_sources_are_non_empty(source in arb_valid_js_source()) {
             let info = parse(&source);
@@ -3924,8 +3776,6 @@ mod proptests {
         }
     }
 }
-
-// ── Angular @Component decorator detection ───────────────────
 
 #[test]
 fn angular_component_template_url_emits_side_effect_import() {
@@ -4012,9 +3862,6 @@ fn angular_component_style_urls_array_emits_multiple_imports() {
 
 #[test]
 fn angular_component_template_url_without_dot_slash_normalized() {
-    // Angular resolves `'app.component.html'` the same as `'./app.component.html'`.
-    // Fallow must normalize the bare form so downstream resolution doesn't
-    // misclassify it as an unlisted npm package. Regression test for #99.
     let info = parse(
         r"
         import { Component } from '@angular/core';
@@ -4036,7 +3883,6 @@ fn angular_component_template_url_without_dot_slash_normalized() {
 
 #[test]
 fn angular_component_style_url_without_dot_slash_normalized() {
-    // Regression test for #99: bare `styleUrl` values must be normalized.
     let info = parse(
         r"
         import { Component } from '@angular/core';
@@ -4061,8 +3907,6 @@ fn angular_component_style_url_without_dot_slash_normalized() {
 
 #[test]
 fn angular_component_style_urls_array_without_dot_slash_normalized() {
-    // Regression test for #99: bare entries in a `styleUrls` array must be
-    // normalized individually, and a mixed array must preserve relative entries.
     let info = parse(
         r"
         import { Component } from '@angular/core';
@@ -4084,7 +3928,6 @@ fn angular_component_style_urls_array_without_dot_slash_normalized() {
     assert!(sources.contains(&"./app.component.html"));
     assert!(sources.contains(&"./app.component.scss"));
     assert!(sources.contains(&"./theme.scss"));
-    // The already-relative entry must not be double-prefixed.
     assert!(!sources.contains(&".//theme.scss"));
     assert!(!sources.contains(&"././theme.scss"));
 }
@@ -4127,8 +3970,6 @@ fn non_component_decorator_ignored() {
         .count();
     assert_eq!(side_effect_count, 0);
 }
-
-// ── Angular inline template scanning ──────────────────────────
 
 #[test]
 fn angular_inline_template_emits_sentinel_member_accesses() {
@@ -4205,10 +4046,6 @@ fn angular_inline_template_no_side_effect_imports() {
 
 #[test]
 fn angular_inline_template_complexity_anchored_at_decorator() {
-    // Inline `template: \`...\`` literals with non-trivial control-flow density
-    // emit a synthetic `<template>` finding on the host `.ts` file. The
-    // finding's line/col anchors at the `@Component` decorator so existing
-    // line-level suppression and jump-to-source land usefully.
     let source = "import { Component } from '@angular/core';\n\
 @Component({\n\
   selector: 'host-game',\n\
@@ -4239,15 +4076,12 @@ export class HostGameComponent {}\n";
         template.cognitive >= 4,
         "nested control-flow contributes to cognitive: {template:?}"
     );
-    // The decorator starts on line 2 (after the import on line 1).
     assert_eq!(template.line, 2, "anchored at @Component line");
     assert_eq!(template.col, 0, "anchored at @ column");
 }
 
 #[test]
 fn angular_inline_template_with_simple_template_emits_no_finding() {
-    // Trivial templates without control-flow should not produce a finding,
-    // matching the existing external-template behaviour.
     let info = crate::tests::parse_ts_with_complexity(
         "import { Component } from '@angular/core';\n\
 @Component({ selector: 'a', template: '<p>hi</p>' })\n\
@@ -4261,8 +4095,6 @@ export class A {}\n",
 
 #[test]
 fn angular_template_with_interpolation_expressions_is_skipped() {
-    // Template literals with `${...}` expressions are skipped
-    // (variable-substituted templates are out of scope for the first cut).
     let info = crate::tests::parse_ts_with_complexity(
         "import { Component } from '@angular/core';\n\
 const HEADER = 'h1';\n\
@@ -4274,8 +4106,6 @@ export class A {}\n",
         "interpolated templates are skipped"
     );
 }
-
-// ── Angular host binding detection ────────────────────────────
 
 #[test]
 fn angular_host_bindings_emit_sentinel_accesses() {
@@ -4332,7 +4162,6 @@ fn angular_host_binding_skips_keywords() {
         ",
     );
     let sentinel = crate::sfc_template::angular::ANGULAR_TPL_SENTINEL;
-    // "true" and "undefined" are keywords and should be skipped
     assert!(
         info.member_accesses
             .iter()
@@ -4342,8 +4171,6 @@ fn angular_host_binding_skips_keywords() {
             .is_none()
     );
 }
-
-// ── Angular inputs/outputs metadata arrays ────────────────────
 
 #[test]
 fn angular_inputs_outputs_metadata_emit_sentinel_accesses() {
@@ -4371,7 +4198,6 @@ fn angular_inputs_outputs_metadata_emit_sentinel_accesses() {
         .filter(|a| a.object == sentinel)
         .map(|a| a.member.as_str())
         .collect();
-    // 'bankName' from inputs, 'id' from 'id: account-id', 'clicked' from outputs
     assert!(refs.contains(&"bankName"));
     assert!(refs.contains(&"id"));
     assert!(refs.contains(&"clicked"));
@@ -4407,8 +4233,6 @@ fn angular_queries_metadata_emit_sentinel_accesses() {
     assert!(refs.contains(&"header"));
     assert!(refs.contains(&"footer"));
 }
-
-// ── Angular signal API detection ──────────────────────────────
 
 #[test]
 fn angular_signal_input_marks_member_as_decorated() {
@@ -4570,11 +4394,6 @@ fn angular_output_from_observable_marks_as_decorated() {
     );
 }
 
-// ── Angular signal/plural query call-graph tracing (issue #274) ──
-
-/// All eight Angular query patterns (4 signal + 4 decorator) should produce
-/// `MemberAccess { object: "ChildComponent", member: <method> }` entries so
-/// the analyzer's call-graph traces methods on the queried child.
 #[test]
 fn angular_signal_and_plural_queries_trace_child_method_calls() {
     let info = parse(
@@ -4646,8 +4465,6 @@ fn angular_signal_and_plural_queries_trace_child_method_calls() {
     }
 }
 
-// ── Angular combined metadata extraction ──────────────────────
-
 #[test]
 fn angular_component_all_metadata_combined() {
     let info = parse(
@@ -4675,14 +4492,12 @@ fn angular_component_all_metadata_combined() {
         }
         ",
     );
-    // templateUrl creates side-effect import
     let has_html_import = info
         .imports
         .iter()
         .any(|i| i.source == "./app.html" && matches!(i.imported_name, ImportedName::SideEffect));
     assert!(has_html_import);
 
-    // Sentinel accesses from inline template + host + inputs/outputs
     let sentinel = crate::sfc_template::angular::ANGULAR_TPL_SENTINEL;
     let refs: Vec<&str> = info
         .member_accesses
@@ -4690,12 +4505,11 @@ fn angular_component_all_metadata_combined() {
         .filter(|a| a.object == sentinel)
         .map(|a| a.member.as_str())
         .collect();
-    assert!(refs.contains(&"greeting")); // from inline template
-    assert!(refs.contains(&"handleClick")); // from host
-    assert!(refs.contains(&"externalInput")); // from inputs
-    assert!(refs.contains(&"externalOutput")); // from outputs
+    assert!(refs.contains(&"greeting"));
+    assert!(refs.contains(&"handleClick"));
+    assert!(refs.contains(&"externalInput"));
+    assert!(refs.contains(&"externalOutput"));
 
-    // Signal APIs mark members as decorated
     let app_export = info
         .exports
         .iter()
@@ -4714,14 +4528,6 @@ fn angular_component_all_metadata_combined() {
     assert!(name_member.has_decorator);
     assert!(saved_member.has_decorator);
 }
-
-// ── TSImportType (typeof import('./x').Foo) ──────────────────
-//
-// `unplugin-auto-import` (#396) and `unplugin-vue-components` (#397) embed
-// `typeof import('./path').X` references inside `declare global { ... }` and
-// `declare module 'vue' { ... }` ambient declarations. The visitor must trace
-// each reference as a type-only import so the target file stays reachable.
-
 #[test]
 fn ts_import_type_with_identifier_qualifier_named() {
     let info = parse("type T = typeof import('./composables/useCounter').useCounter;");
@@ -4754,8 +4560,6 @@ fn ts_import_type_with_qualified_name_credits_root() {
 
 #[test]
 fn ts_import_type_without_qualifier_is_side_effect() {
-    // `typeof import('./MyButton.vue')['default']` parses with no qualifier;
-    // the `['default']` is a TSIndexedAccessType wrapping the TSImportType.
     let info = parse("type T = typeof import('./MyButton.vue')['default'];");
     let entry = info
         .imports
@@ -4768,7 +4572,6 @@ fn ts_import_type_without_qualifier_is_side_effect() {
 
 #[test]
 fn ts_import_type_inside_declare_global() {
-    // Mirrors auto-imports.d.ts (issue #396).
     let info = parse(
         "export {};\n\
          declare global {\n\
@@ -4789,8 +4592,6 @@ fn ts_import_type_inside_declare_global() {
 
 #[test]
 fn ts_import_type_inside_actual_dts_file() {
-    // Parse with the actual `.d.ts` filename to confirm SourceType + visitor
-    // behavior matches the integration scenario.
     use crate::parse::parse_source_to_module;
     use fallow_types::discover::FileId;
     use std::path::Path;
@@ -4825,7 +4626,6 @@ fn ts_import_type_inside_actual_dts_file() {
 
 #[test]
 fn ts_import_type_inside_declare_module_augmentation() {
-    // Mirrors components.d.ts (issue #397).
     let info = parse(
         "export {};\n\
          declare module 'vue' {\n\
@@ -4840,6 +4640,5 @@ fn ts_import_type_inside_declare_module_augmentation() {
         .find(|i| i.source == "./src/components/MyButton.vue")
         .expect("typeof import() inside `declare module` must produce an import");
     assert!(entry.is_type_only);
-    // No qualifier (the `['default']` is indexed-access wrapping), so SideEffect.
     assert!(matches!(entry.imported_name, ImportedName::SideEffect));
 }

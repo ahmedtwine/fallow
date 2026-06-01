@@ -27,7 +27,6 @@ pub struct ModuleNode {
     pub(crate) flags: u8,
 }
 
-// Bit positions for packed boolean flags in `ModuleNode::flags`.
 const FLAG_ENTRY_POINT: u8 = 1 << 0;
 const FLAG_REACHABLE: u8 = 1 << 1;
 const FLAG_RUNTIME_REACHABLE: u8 = 1 << 2;
@@ -205,25 +204,18 @@ pub enum ReferenceKind {
     SideEffectImport,
 }
 
-// Size assertions for types defined in this module.
-// `ExportSymbol` and `SymbolReference` are stored in Vecs per module node.
-// `ReExportEdge` is stored in a Vec per module for re-export chain resolution.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<ExportSymbol>() == 88);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<SymbolReference>() == 16);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<ReExportEdge>() == 64);
-// `ModuleNode` is stored in a Vec — one per discovered file.
-// PathBuf has different sizes on Unix vs Windows, so restrict to Unix.
 #[cfg(all(target_pointer_width = "64", unix))]
 const _: () = assert!(std::mem::size_of::<ModuleNode>() == 96);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── ReferenceKind ───────────────────────────────────────────
 
     #[test]
     fn reference_kind_equality() {
@@ -266,8 +258,6 @@ mod tests {
         assert_eq!(debug_str, "DynamicImport");
     }
 
-    // ── SymbolReference ─────────────────────────────────────────
-
     #[test]
     fn symbol_reference_construction() {
         let reference = SymbolReference {
@@ -289,14 +279,11 @@ mod tests {
             import_span: oxc_span::Span::new(5, 25),
         };
         let copied = reference;
-        // Verify the copy matches the original
         assert_eq!(copied.from_file, reference.from_file);
         assert_eq!(copied.kind, reference.kind);
         assert_eq!(copied.import_span.start, reference.import_span.start);
         assert_eq!(copied.import_span.end, reference.import_span.end);
     }
-
-    // ── ReExportEdge ────────────────────────────────────────────
 
     #[test]
     fn re_export_edge_construction() {
@@ -338,8 +325,6 @@ mod tests {
         assert_eq!(edge.imported_name, "internal");
         assert_eq!(edge.exported_name, "public");
     }
-
-    // ── ExportSymbol ────────────────────────────────────────────
 
     #[test]
     fn export_symbol_named() {
@@ -425,8 +410,6 @@ mod tests {
         assert_eq!(sym.references[0].from_file, FileId(1));
         assert_eq!(sym.references[1].kind, ReferenceKind::ReExport);
     }
-
-    // ── ModuleNode ──────────────────────────────────────────────
 
     #[test]
     fn module_node_construction() {

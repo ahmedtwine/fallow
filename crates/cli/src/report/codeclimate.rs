@@ -93,10 +93,6 @@ fn push_dep_cc_issues<'a, I>(
 ) where
     I: IntoIterator<Item = &'a fallow_core::results::UnusedDependency>,
 {
-    // Map severity lazily: in production mode, rules can resolve to
-    // `Severity::Off` and arrive here paired with empty (or filtered-down)
-    // dep slices; `severity_to_codeclimate` panics on `Off`, so the call must
-    // only fire once we have a finding to emit.
     for dep in deps {
         let level = severity_to_codeclimate(severity);
         let path = cc_path(&dep.path, root);
@@ -169,7 +165,6 @@ fn push_unused_export_issues<'a, I>(
 ) where
     I: IntoIterator<Item = &'a fallow_core::results::UnusedExport>,
 {
-    // Map severity lazily; see `push_dep_cc_issues` for rationale.
     for export in exports {
         let level = severity_to_codeclimate(severity);
         let path = cc_path(&export.path, root);
@@ -305,7 +300,6 @@ fn push_unused_member_issues<'a, I>(
 ) where
     I: IntoIterator<Item = &'a fallow_core::results::UnusedMember>,
 {
-    // Map severity lazily; see `push_dep_cc_issues` for rationale.
     for member in members {
         let level = severity_to_codeclimate(severity);
         let path = cc_path(&member.path, root);
@@ -505,9 +499,6 @@ fn push_re_export_cycle_issues(
             fallow_core::results::ReExportCycleKind::SelfLoop => " (self-loop)",
             fallow_core::results::ReExportCycleKind::MultiNode => "",
         };
-        // Include `kind_token` in the fingerprint so self-loops cannot
-        // keyspace-collide with future single-file multi-node shapes (the
-        // same rationale as the baseline `re_export_cycle_key`).
         let fp = fingerprint_hash(&["fallow/re-export-cycle", kind_token, &chain_str]);
         issues.push(cc_issue(
             "fallow/re-export-cycle",
@@ -1068,7 +1059,6 @@ pub fn build_health_codeclimate(report: &HealthReport, root: &Path) -> Vec<CodeC
             | ExceededThreshold::CognitiveCrap
             | ExceededThreshold::All => "fallow/high-crap-score",
         };
-        // Map finding severity to CodeClimate severity levels
         let severity = match finding.severity {
             crate::health_types::FindingSeverity::Critical => CodeClimateSeverity::Critical,
             crate::health_types::FindingSeverity::High => CodeClimateSeverity::Major,
@@ -1087,13 +1077,6 @@ pub fn build_health_codeclimate(report: &HealthReport, root: &Path) -> Vec<CodeC
         ));
     }
 
-    // Note: `production.hot_paths` and `production.signals` are
-    // intentionally omitted from CodeClimate output. CodeClimate / GitLab
-    // Code Quality issues are actionable findings; the
-    // `hot-path-touched` signal is a PR-review heads-up and the
-    // `signals[]` array is a programmatic decomposition of the verdict.
-    // JSON consumers that need the full surface read those fields
-    // directly from the JSON output.
     if let Some(ref production) = report.runtime_coverage {
         for finding in &production.findings {
             let path = cc_path(&finding.path, root);
@@ -1123,10 +1106,6 @@ pub fn build_health_codeclimate(report: &HealthReport, root: &Path) -> Vec<CodeC
                 finding.verdict.human_label(),
                 invocations_hint,
             );
-            // GitLab Code Quality renders MR inline annotations only for
-            // blocker/critical/major/minor. Any non-cold verdict collapses to
-            // "minor" — "info" is schema-valid but silently dropped from MR
-            // annotations.
             let severity = match finding.verdict {
                 crate::health_types::RuntimeCoverageVerdict::SafeToDelete => {
                     CodeClimateSeverity::Critical
@@ -1146,11 +1125,6 @@ pub fn build_health_codeclimate(report: &HealthReport, root: &Path) -> Vec<CodeC
                 check_name,
                 &description,
                 severity,
-                // CodeClimate/GitLab Code Quality allows a fixed category set:
-                // Bug Risk | Clarity | Compatibility | Complexity | Duplication
-                // | Performance | Security | Style. Production-coverage
-                // findings are a dead-code signal, so use "Bug Risk" — same
-                // category used by static dead-code issues elsewhere.
                 "Bug Risk",
                 &path,
                 Some(finding.line),
@@ -1306,8 +1280,6 @@ pub fn build_duplication_codeclimate(
     let mut issues = Vec::new();
 
     for (i, group) in report.clone_groups.iter().enumerate() {
-        // Content-based fingerprint: hash token_count + line_count + first 64 chars of fragment
-        // This is stable across runs regardless of group ordering.
         let token_str = group.token_count.to_string();
         let line_count_str = group.line_count.to_string();
         let fragment_prefix: String = group
@@ -1370,8 +1342,6 @@ pub(super) fn print_grouped_duplication_codeclimate(
     let issues = build_duplication_codeclimate(report, root);
     let mut value = issues_to_value(&issues);
 
-    // Build a flat lookup from each instance path -> primary owner. Every
-    // instance of a clone group inherits the group's largest-owner key.
     use rustc_hash::FxHashMap;
     let mut path_to_owner: FxHashMap<String, String> = FxHashMap::default();
     for group in &report.clone_groups {
@@ -1445,7 +1415,6 @@ mod tests {
         let output = issues_to_value(&build_codeclimate(&results, &root, &rules));
         assert!(output.is_array());
         let arr = output.as_array().unwrap();
-        // Should have at least one issue per type
         assert!(!arr.is_empty());
     }
 
@@ -1483,12 +1452,10 @@ mod tests {
                 path: root.join("src/dead.ts"),
             }));
 
-        // Error severity -> major
         let rules = RulesConfig::default();
         let output = issues_to_value(&build_codeclimate(&results, &root, &rules));
         assert_eq!(output[0]["severity"], "major");
 
-        // Warn severity -> minor
         let rules = RulesConfig {
             unused_files: Severity::Warn,
             ..RulesConfig::default()
@@ -1734,11 +1701,8 @@ mod tests {
             }));
         let rules = RulesConfig::default();
         let output = issues_to_value(&build_codeclimate(&results, &root, &rules));
-        // Line 0 -> begin defaults to 1
         assert_eq!(output[0]["location"]["lines"]["begin"], 1);
     }
-
-    // ── fingerprint_hash tests ─────────────────────────────────────
 
     #[test]
     fn fingerprint_hash_different_inputs_differ() {
@@ -1756,7 +1720,6 @@ mod tests {
 
     #[test]
     fn fingerprint_hash_separator_prevents_collision() {
-        // "ab" + "c" should differ from "a" + "bc"
         let h1 = fingerprint_hash(&["ab", "c"]);
         let h2 = fingerprint_hash(&["a", "bc"]);
         assert_ne!(h1, h2);
@@ -1768,8 +1731,6 @@ mod tests {
         assert_eq!(h.len(), 16);
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
     }
-
-    // ── severity_to_codeclimate ─────────────────────────────────────
 
     #[test]
     fn severity_error_maps_to_major() {
@@ -1818,13 +1779,9 @@ mod tests {
             unused_class_members: Severity::Off,
             ..RulesConfig::default()
         };
-        // Must not panic: empty iterators must short-circuit before the
-        // severity mapping runs.
         let issues = build_codeclimate(&results, &root, &rules);
         assert!(issues.is_empty());
     }
-
-    // ── health_severity ─────────────────────────────────────────────
 
     #[test]
     fn health_severity_zero_threshold_returns_minor() {
