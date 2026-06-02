@@ -84,7 +84,7 @@ For cleanup-specific findings:
 npx fallow dead-code
 ```
 
-117 framework plugins. No Node.js runtime required for static analysis. No config needed for the first run.
+118 framework plugins. No Node.js runtime required for static analysis. No config needed for the first run.
 
 ## What is Fallow?
 
