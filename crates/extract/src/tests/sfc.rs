@@ -64,6 +64,28 @@ export const value = helper();
 }
 
 #[test]
+fn vue_script_security_sink_spans_are_original_source_offsets() {
+    let source = r#"<template><div /></template>
+
+<script setup lang="ts">
+const load = async (url: string) => {
+  await fetch(url);
+};
+</script>
+"#;
+    let info = parse_sfc(source, "App.vue");
+    assert_eq!(info.security_sinks.len(), 1);
+    let sink = &info.security_sinks[0];
+    let (line, _) =
+        fallow_types::extract::byte_offset_to_line_col(&info.line_offsets, sink.span_start);
+    assert_eq!(line, 5);
+    assert!(
+        source[sink.span_start as usize..].starts_with("fetch(url)"),
+        "sink span should point at fetch call in original SFC source",
+    );
+}
+
+#[test]
 fn extracts_vue_script_setup_imports() {
     let info = parse_sfc(
         r#"

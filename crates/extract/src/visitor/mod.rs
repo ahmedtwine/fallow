@@ -230,6 +230,11 @@ impl ModuleInfoExtractor {
             finding.decorator_start =
                 remap(Span::new(finding.decorator_start, finding.decorator_start)).start;
         }
+        for sink in &mut self.security_sinks {
+            let span = remap(Span::new(sink.span_start, sink.span_end));
+            sink.span_start = span.start;
+            sink.span_end = span.end;
+        }
     }
 
     pub(crate) fn resolve_pending_local_export_specifiers(&mut self) {
