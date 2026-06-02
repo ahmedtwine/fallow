@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use rustc_hash::FxHashMap;
 
-use fallow_types::extract::ModuleInfo;
+use fallow_types::extract::{ModuleInfo, SinkSite, TaintedBinding};
 use fallow_types::output::{IssueAction, SuppressFileAction, SuppressFileKind};
 use fallow_types::results::{SecurityFinding, SecurityFindingKind, TraceHop, TraceHopRole};
 use fallow_types::suppress::IssueKind;
@@ -150,6 +150,36 @@ fn is_low_value_anchor(path: &std::path::Path) -> bool {
         || crate::analyze::predicates::is_config_file(path)
 }
 
+/// Map each local binding name that was sourced from a known untrusted source
+/// path (issue #859) to that source's human title. Computed by matching each
+/// captured `tainted_binding.source_path` against the catalogue's `[[source]]`
+/// patterns. A sink whose argument references one of these names is
+/// "source-backed", and the matched source title names the input class.
+fn source_tainted_locals(bindings: &[TaintedBinding]) -> FxHashMap<&str, &'static str> {
+    let cat = catalogue();
+    let mut out: FxHashMap<&str, &'static str> = FxHashMap::default();
+    for b in bindings {
+        // `matching_source` borrows from the `'static` catalogue, so the title
+        // outlives the per-module computation.
+        if let Some((_, title)) = cat.matching_source(&b.source_path) {
+            out.entry(b.local.as_str()).or_insert(title);
+        }
+    }
+    out
+}
+
+/// The matched source title if any of a sink's captured argument identifiers
+/// trace to a source-tainted local binding, else `None`. The intra-module,
+/// name-based back-trace from issue #859.
+fn sink_source_title<'t>(sink: &SinkSite, tainted: &FxHashMap<&str, &'t str>) -> Option<&'t str> {
+    if tainted.is_empty() {
+        return None;
+    }
+    sink.arg_idents
+        .iter()
+        .find_map(|name| tainted.get(name.as_str()).copied())
+}
+
 /// Run the catalogue-driven tainted-sink detector. Returns the findings plus the
 /// in-band blind-spot stats. Callers gate this on the `security_sink` rule
 /// severity; it never runs under bare `fallow` or the `audit` gate.
@@ -211,6 +241,10 @@ pub fn find_tainted_sinks(
             continue;
         }
 
+        // Source-tainted local names for this module (issue #859). Computed once
+        // per module; empty for modules with no source-shaped bindings.
+        let tainted_locals = source_tainted_locals(&module.tainted_bindings);
+
         for sink in &module.security_sinks {
             let Some(matcher) = active.iter().copied().find(|m| {
                 m.sink_shape == sink.sink_shape
@@ -238,10 +272,23 @@ pub fn find_tainted_sinks(
                 clippy::literal_string_with_formatting_args,
                 reason = "catalogue evidence placeholders, not format args"
             )]
-            let evidence = matcher
+            let base_evidence = matcher
                 .evidence_template
                 .replace("{callee}", &sink.callee_path)
                 .replace("{pattern}", pattern);
+
+            let source_title = sink_source_title(sink, &tainted_locals);
+            let source_backed = source_title.is_some();
+            // Annotate the evidence when source-backed so the ranking signal is
+            // visible in every output format (the boolean drives ordering; the
+            // prefix names the matched untrusted-input class as the rationale).
+            let evidence = match source_title {
+                Some(title) => format!(
+                    "Untrusted source reaches this sink (an argument traces to {}). {base_evidence}",
+                    title.to_ascii_lowercase()
+                ),
+                None => base_evidence,
+            };
 
             let path = node.path.clone();
             findings.push(SecurityFinding {
@@ -252,6 +299,7 @@ pub fn find_tainted_sinks(
                 line,
                 col,
                 evidence,
+                source_backed,
                 trace: vec![TraceHop {
                     path,
                     line,
@@ -264,9 +312,13 @@ pub fn find_tainted_sinks(
         }
     }
 
+    // Rank source-backed candidates first (issue #859): a sink whose argument
+    // traces to a known untrusted source is the higher-precision lead. Ties fall
+    // back to the stable path/line/col/category order so output is deterministic.
     findings.sort_by(|a, b| {
-        a.path
-            .cmp(&b.path)
+        b.source_backed
+            .cmp(&a.source_backed)
+            .then(a.path.cmp(&b.path))
             .then(a.line.cmp(&b.line))
             .then(a.col.cmp(&b.col))
             .then(a.category.cmp(&b.category))
@@ -304,6 +356,63 @@ mod tests {
         assert!(import_source_matches("node:child_process", "child_process"));
         assert!(import_source_matches("child_process", "node:child_process"));
         assert!(!import_source_matches("child_process", "node:vm"));
+    }
+
+    fn binding(local: &str, source_path: &str) -> TaintedBinding {
+        TaintedBinding {
+            local: local.to_string(),
+            source_path: source_path.to_string(),
+        }
+    }
+
+    fn sink_with_idents(idents: &[&str]) -> SinkSite {
+        SinkSite {
+            sink_shape: fallow_types::extract::SinkShape::Call,
+            callee_path: "eval".to_string(),
+            arg_index: 0,
+            arg_is_non_literal: true,
+            arg_kind: fallow_types::extract::SinkArgKind::Other,
+            arg_idents: idents.iter().map(|s| (*s).to_string()).collect(),
+            span_start: 0,
+            span_end: 1,
+        }
+    }
+
+    #[test]
+    fn source_tainted_locals_match_catalogue_sources() {
+        // `const id = req.query.id` is source-tainted; `const cfg = config.value`
+        // is not (config.value is not an untrusted-source path).
+        let bindings = vec![binding("id", "req.query"), binding("cfg", "config.value")];
+        let tainted = source_tainted_locals(&bindings);
+        assert!(tainted.contains_key("id"));
+        assert!(!tainted.contains_key("cfg"));
+        // The matched local carries the source's human title.
+        assert_eq!(tainted.get("id"), Some(&"HTTP request input"));
+    }
+
+    #[test]
+    fn sink_is_source_backed_when_arg_traces_to_source() {
+        let bindings = vec![binding("id", "req.query")];
+        let tainted = source_tainted_locals(&bindings);
+        // `eval(id)` traces to the source-tainted `id`.
+        assert_eq!(
+            sink_source_title(&sink_with_idents(&["id"]), &tainted),
+            Some("HTTP request input")
+        );
+        // `eval(other)` does not.
+        assert_eq!(
+            sink_source_title(&sink_with_idents(&["other"]), &tainted),
+            None
+        );
+    }
+
+    #[test]
+    fn sink_not_source_backed_with_no_tainted_locals() {
+        let tainted = source_tainted_locals(&[]);
+        assert_eq!(
+            sink_source_title(&sink_with_idents(&["id"]), &tainted),
+            None
+        );
     }
 
     #[test]

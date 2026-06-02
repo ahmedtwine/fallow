@@ -15,7 +15,7 @@ use crate::{
     MemberAccess, MemberInfo, MemberKind, ModuleInfo, ReExportInfo, RequireCallInfo, VisibilityTag,
 };
 use fallow_types::extract::{
-    ClassHeritageInfo, LocalTypeDeclaration, PublicSignatureTypeReference, SinkSite,
+    ClassHeritageInfo, LocalTypeDeclaration, PublicSignatureTypeReference, SinkSite, TaintedBinding,
 };
 use helpers::LitCustomElementDecorator;
 
@@ -138,6 +138,10 @@ pub(crate) struct ModuleInfoExtractor {
     /// Count of sink-shaped nodes whose callee could not be flattened to a
     /// static path (dynamic dispatch, computed members, aliased bindings).
     pub(crate) security_sinks_skipped: u32,
+    /// Local bindings tied to the member-access path they were sourced from
+    /// (e.g. `const id = req.query.id`). Feeds the security `tainted_sink`
+    /// source-to-sink association in the analyze layer.
+    pub(crate) tainted_bindings: Vec<TaintedBinding>,
 }
 
 impl ModuleInfoExtractor {
@@ -729,6 +733,7 @@ impl ModuleInfoExtractor {
             directives: self.directives,
             security_sinks: self.security_sinks,
             security_sinks_skipped: self.security_sinks_skipped,
+            tainted_bindings: self.tainted_bindings,
         }
     }
 
@@ -772,10 +777,11 @@ impl ModuleInfoExtractor {
         info.directives.extend(self.directives);
         info.security_sinks.extend(self.security_sinks);
         info.security_sinks_skipped += self.security_sinks_skipped;
+        info.tainted_bindings.extend(self.tainted_bindings);
     }
 }
 
-fn extract_destructured_names(obj_pat: &ObjectPattern<'_>) -> Vec<String> {
+pub(super) fn extract_destructured_names(obj_pat: &ObjectPattern<'_>) -> Vec<String> {
     if obj_pat.rest.is_some() {
         return Vec::new();
     }

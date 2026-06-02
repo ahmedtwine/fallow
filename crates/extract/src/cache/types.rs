@@ -138,7 +138,15 @@ use crate::MemberKind;
 /// calls on it emit member accesses crediting the class. This changes the
 /// persisted `member_accesses` for files using the useMemo factory shape;
 /// pre-fix entries miss the credit and surface as false `unused-class-member`.
-pub(super) const CACHE_VERSION: u32 = 110;
+///
+/// Bumped to 111 for issue #859 (untrusted-source modeling): `SinkSite` now
+/// carries `arg_idents` (identifiers referenced in the sink argument) and
+/// `ModuleInfo`/`CachedModule` carry `tainted_bindings` (local bindings tied to
+/// the member-access path they were sourced from), so the security
+/// `tainted_sink` detector can back-trace a sink argument to a known untrusted
+/// source. Pre-111 entries lack both, so source-to-sink association is unset
+/// until the file is re-extracted.
+pub(super) const CACHE_VERSION: u32 = 111;
 
 /// Duplication token cache version. Bump when duplicate tokenization,
 /// normalization, or the on-disk token cache schema changes.
@@ -181,7 +189,7 @@ macro_rules! assert_cached_type_size {
     };
 }
 
-assert_cached_type_size!(CachedModule, 616);
+assert_cached_type_size!(CachedModule, 640);
 assert_cached_type_size!(CachedNamespaceObjectAlias, 72);
 assert_cached_type_size!(CachedLocalTypeDeclaration, 32);
 assert_cached_type_size!(CachedPublicSignatureTypeReference, 56);
@@ -195,7 +203,7 @@ assert_cached_type_size!(CachedReExport, 88);
 assert_cached_type_size!(CachedMember, 64);
 assert_cached_type_size!(CachedDynamicImportPattern, 56);
 assert_cached_type_size!(crate::MemberAccess, 48);
-assert_cached_type_size!(fallow_types::extract::SinkSite, 40);
+assert_cached_type_size!(fallow_types::extract::SinkSite, 64);
 assert_cached_type_size!(fallow_types::extract::FunctionComplexity, 72);
 assert_cached_type_size!(fallow_types::extract::FlagUse, 80);
 assert_cached_type_size!(fallow_types::extract::ClassHeritageInfo, 96);
@@ -282,6 +290,10 @@ pub struct CachedModule {
     /// Count of sink-shaped nodes whose callee could not be flattened to a
     /// static path. Round-trips so the in-band blind-spot count is stable.
     pub security_sinks_skipped: u32,
+    /// Local bindings tied to the member-access path they were sourced from.
+    /// Round-trips so the security `tainted_sink` source-to-sink association
+    /// sees source-tainted bindings on warm-cache loads.
+    pub tainted_bindings: Vec<fallow_types::extract::TaintedBinding>,
 }
 
 /// Cached namespace-object alias.

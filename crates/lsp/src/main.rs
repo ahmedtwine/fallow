@@ -1959,6 +1959,7 @@ mod tests {
                 line: 1,
                 col: 0,
                 evidence: "transitively reaches DATABASE_URL".to_string(),
+                source_backed: false,
                 trace: vec![],
                 actions: vec![],
                 reachability: None,

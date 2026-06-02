@@ -15,7 +15,7 @@ use crate::{
 };
 use fallow_types::extract::{
     ClassHeritageInfo, LocalTypeDeclaration, PublicSignatureTypeReference, SinkArgKind, SinkShape,
-    SinkSite,
+    SinkSite, TaintedBinding,
 };
 
 use crate::asset_url::normalize_asset_url;
@@ -1154,6 +1154,47 @@ impl ModuleInfoExtractor {
         }
     }
 
+    /// Record a tainted-source binding for `const <name> = <object>.<prop>`,
+    /// where the initializer is a member-access chain. The recorded
+    /// `source_path` is the flattened OBJECT path (the chain with its final
+    /// property dropped), so `const id = req.query.id` records
+    /// `{ local: "id", source_path: "req.query" }` and the analyze layer can
+    /// match it against a `req.query` source pattern. The init may be wrapped in
+    /// `await` / parens (`const id = await req.json()`-style chains resolve to
+    /// the member object). A non-member init records nothing. Captured at any
+    /// scope (no `is_module_scope` gate): a sink inside a route handler reading a
+    /// function-local `const id = req.query.id` is exactly the target case.
+    fn record_tainted_source_binding(&mut self, name: &str, expr: &Expression<'_>) {
+        if let Some(source_path) = tainted_source_path(expr) {
+            self.tainted_bindings.push(TaintedBinding {
+                local: name.to_string(),
+                source_path,
+            });
+        }
+    }
+
+    /// Record tainted-source bindings for `const { a, b } = <object>.<prop>`,
+    /// where the destructured initializer is a member-access chain (or bare
+    /// identifier root). Each bound local maps to the FULL flattened init path:
+    /// `const { id } = req.query` records `{ local: "id", source_path:
+    /// "req.query" }`. Rest patterns are skipped (whole-object capture is out of
+    /// the cheap scope). Nested patterns are not destructured.
+    fn record_tainted_destructure_bindings(
+        &mut self,
+        obj_pat: &ObjectPattern<'_>,
+        expr: &Expression<'_>,
+    ) {
+        let Some(source_path) = destructure_source_path(expr) else {
+            return;
+        };
+        for local in super::extract_destructured_names(obj_pat) {
+            self.tainted_bindings.push(TaintedBinding {
+                local,
+                source_path: source_path.clone(),
+            });
+        }
+    }
+
     fn record_child_process_fork_target_binding(&mut self, name: &str, expr: &Expression<'_>) {
         if !self.is_module_scope() {
             return;
@@ -2018,6 +2059,11 @@ impl<'a> Visit<'a> for ModuleInfoExtractor {
                 }
                 self.record_current_module_file_path_binding(id.name.as_str(), init);
                 self.record_child_process_fork_target_binding(id.name.as_str(), init);
+                self.record_tainted_source_binding(id.name.as_str(), init);
+            }
+
+            if let BindingPattern::ObjectPattern(obj_pat) = &declarator.id {
+                self.record_tainted_destructure_bindings(obj_pat, init);
             }
 
             if let BindingPattern::BindingIdentifier(id) = &declarator.id
@@ -2710,6 +2756,44 @@ fn flatten_callee_path(expr: &Expression<'_>) -> Option<String> {
     }
 }
 
+/// Flatten an expression to a dotted member path, unwrapping `await` and parens.
+/// Returns `None` for anything that is not an identifier-rooted static-member
+/// chain (call results, computed members, etc. are not flattened: a conservative
+/// miss, never a wrong source link).
+fn flatten_member_path(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => flatten_member_path(&paren.expression),
+        Expression::AwaitExpression(await_expr) => flatten_member_path(&await_expr.argument),
+        Expression::Identifier(ident) => Some(ident.name.to_string()),
+        Expression::StaticMemberExpression(member) => Some(format!(
+            "{}.{}",
+            flatten_member_path(&member.object)?,
+            member.property.name
+        )),
+        _ => None,
+    }
+}
+
+/// The source path for a DIRECT binding (`const id = req.query.id`): the OBJECT
+/// path of the member-access init, i.e. the chain with its final property
+/// dropped (`req.query`). A bare-identifier init (`const x = req`) has no object
+/// to drop and is not a source binding on its own (`None`).
+fn tainted_source_path(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => tainted_source_path(&paren.expression),
+        Expression::AwaitExpression(await_expr) => tainted_source_path(&await_expr.argument),
+        Expression::StaticMemberExpression(member) => flatten_member_path(&member.object),
+        _ => None,
+    }
+}
+
+/// The source path for a DESTRUCTURE binding (`const { id } = req.query`): the
+/// FULL flattened init path (`req.query`), since the destructured keys are the
+/// leaves. A bare-identifier init (`const { id } = req`) yields `req`.
+fn destructure_source_path(expr: &Expression<'_>) -> Option<String> {
+    flatten_member_path(expr)
+}
+
 /// Whether an expression is a non-literal argument (a conservative trigger for
 /// sink capture). A fully-literal argument is never captured.
 fn is_non_literal_arg(expr: &Expression<'_>) -> bool {
@@ -2742,6 +2826,77 @@ fn classify_arg_kind(expr: &Expression<'_>) -> SinkArgKind {
         Expression::ObjectExpression(_) => SinkArgKind::Object,
         Expression::CallExpression(_) => SinkArgKind::Call,
         _ => SinkArgKind::Other,
+    }
+}
+
+/// Collect the bare identifier names referenced anywhere inside a sink argument
+/// expression, deduped in source order. Used by the analyze layer to back-trace
+/// the argument to a source-tainted local binding. This is a bounded, shallow
+/// structural walk over the common taint-carrying shapes (member roots, binary /
+/// template / call / paren / conditional / sequence / await / unary), NOT a full
+/// expression evaluator: an identifier that never surfaces in these shapes is
+/// simply not collected (a conservative miss, never a false source link).
+fn collect_arg_idents(expr: &Expression<'_>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    collect_idents_into(expr, &mut out);
+    out
+}
+
+fn push_ident(name: &str, out: &mut Vec<String>) {
+    if !out.iter().any(|n| n == name) {
+        out.push(name.to_string());
+    }
+}
+
+fn collect_idents_into(expr: &Expression<'_>, out: &mut Vec<String>) {
+    match expr {
+        Expression::Identifier(ident) => push_ident(&ident.name, out),
+        Expression::ParenthesizedExpression(paren) => collect_idents_into(&paren.expression, out),
+        Expression::StaticMemberExpression(member) => {
+            // The leading object root carries the taint (`id` in `id.value`,
+            // `req` in `req.query.id`); the property name is a static key.
+            collect_idents_into(&member.object, out);
+        }
+        Expression::ComputedMemberExpression(member) => {
+            collect_idents_into(&member.object, out);
+            collect_idents_into(&member.expression, out);
+        }
+        Expression::BinaryExpression(bin) => {
+            collect_idents_into(&bin.left, out);
+            collect_idents_into(&bin.right, out);
+        }
+        Expression::LogicalExpression(logical) => {
+            collect_idents_into(&logical.left, out);
+            collect_idents_into(&logical.right, out);
+        }
+        Expression::ConditionalExpression(cond) => {
+            collect_idents_into(&cond.test, out);
+            collect_idents_into(&cond.consequent, out);
+            collect_idents_into(&cond.alternate, out);
+        }
+        Expression::SequenceExpression(seq) => {
+            for e in &seq.expressions {
+                collect_idents_into(e, out);
+            }
+        }
+        Expression::TemplateLiteral(tpl) => {
+            for e in &tpl.expressions {
+                collect_idents_into(e, out);
+            }
+        }
+        Expression::AwaitExpression(await_expr) => collect_idents_into(&await_expr.argument, out),
+        Expression::UnaryExpression(unary) => collect_idents_into(&unary.argument, out),
+        Expression::CallExpression(call) => {
+            // The callee can carry the taint (`getId().trim()` -> getId), as can
+            // each argument (`escape(id)` -> id). Bounded one level by recursion.
+            collect_idents_into(&call.callee, out);
+            for arg in &call.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    collect_idents_into(arg_expr, out);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2836,6 +2991,7 @@ impl ModuleInfoExtractor {
                 arg_index,
                 arg_is_non_literal: true,
                 arg_kind: classify_arg_kind(arg_expr),
+                arg_idents: collect_arg_idents(arg_expr),
                 span_start: expr.span.start,
                 span_end: expr.span.end,
             });
@@ -2862,6 +3018,7 @@ impl ModuleInfoExtractor {
             arg_index: 0,
             arg_is_non_literal: true,
             arg_kind: classify_arg_kind(&expr.right),
+            arg_idents: collect_arg_idents(&expr.right),
             span_start: expr.span.start,
             span_end: expr.span.end,
         });
@@ -2876,6 +3033,10 @@ impl ModuleInfoExtractor {
         let Some(callee_path) = flatten_callee_path(&expr.tag) else {
             return;
         };
+        let mut arg_idents: Vec<String> = Vec::new();
+        for substitution in &expr.quasi.expressions {
+            collect_idents_into(substitution, &mut arg_idents);
+        }
         self.security_sinks.push(SinkSite {
             sink_shape: SinkShape::TaggedTemplate,
             callee_path,
@@ -2884,6 +3045,7 @@ impl ModuleInfoExtractor {
             // A tagged template is captured only with substitutions, so the
             // argument is always a template-with-substitution.
             arg_kind: SinkArgKind::TemplateWithSubst,
+            arg_idents,
             span_start: expr.span.start,
             span_end: expr.span.end,
         });
@@ -2912,6 +3074,7 @@ impl ModuleInfoExtractor {
             arg_index: 0,
             arg_is_non_literal: true,
             arg_kind: classify_arg_kind(value_expr),
+            arg_idents: collect_arg_idents(value_expr),
             span_start: attr.span.start,
             span_end: attr.span.end,
         });

@@ -9850,6 +9850,10 @@
           "type": "string",
           "description": "Agent/human-readable evidence (e.g. the named env var the chain reaches)."
         },
+        "source_backed": {
+          "type": "boolean",
+          "description": "Whether the sink argument was associated with a known untrusted source by\nthe intra-module source-to-sink back-trace (issue #859): a local binding\nreferenced in the argument was sourced from a catalogue source path\n(`req.query`, `process.argv`, message-event `data`, etc.). `true` ranks\nthe candidate higher and annotates the evidence; `false` does NOT\nsuppress the finding (the association is conservative, never a proof, and\nfallow prefers false-negatives over false-positives). Always `false` for\n`ClientServerLeak`. Skipped from JSON when `false` for output stability."
+        },
         "trace": {
           "type": "array",
           "items": {

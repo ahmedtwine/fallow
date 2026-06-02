@@ -197,6 +197,7 @@ pub(crate) fn parse_html_to_module_with_complexity(
         directives: Vec::new(),
         security_sinks: Vec::new(),
         security_sinks_skipped: 0,
+        tainted_bindings: Vec::new(),
     }
 }
 

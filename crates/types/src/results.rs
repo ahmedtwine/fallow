@@ -919,6 +919,16 @@ pub struct SecurityFinding {
     pub col: u32,
     /// Agent/human-readable evidence (e.g. the named env var the chain reaches).
     pub evidence: String,
+    /// Whether the sink argument was associated with a known untrusted source by
+    /// the intra-module source-to-sink back-trace (issue #859): a local binding
+    /// referenced in the argument was sourced from a catalogue source path
+    /// (`req.query`, `process.argv`, message-event `data`, etc.). `true` ranks
+    /// the candidate higher and annotates the evidence; `false` does NOT
+    /// suppress the finding (the association is conservative, never a proof, and
+    /// fallow prefers false-negatives over false-positives). Always `false` for
+    /// `ClientServerLeak`. Skipped from JSON when `false` for output stability.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_backed: bool,
     /// Structural import-hop trace from the client boundary to the secret source.
     /// The hop count is the uncalibrated signal; fallow does not prove the path
     /// is exploitable.

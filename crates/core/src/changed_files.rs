@@ -742,6 +742,7 @@ mod tests {
             line: 2,
             col: 0,
             evidence: "candidate".into(),
+            source_backed: false,
             trace: vec![
                 TraceHop {
                     path: "/project/src/client.tsx".into(),

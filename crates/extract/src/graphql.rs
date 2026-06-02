@@ -103,6 +103,7 @@ pub(crate) fn parse_graphql_to_module(
         directives: Vec::new(),
         security_sinks: Vec::new(),
         security_sinks_skipped: 0,
+        tainted_bindings: Vec::new(),
     }
 }
 

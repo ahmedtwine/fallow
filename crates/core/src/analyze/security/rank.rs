@@ -218,6 +218,7 @@ mod tests {
             }],
             actions: Vec::<IssueAction>::new(),
             reachability: None,
+            source_backed: false,
         }
     }
 

@@ -547,6 +547,7 @@ mod tests {
             line: 12,
             col: 3,
             evidence: "reaches process.env.SECRET_KEY".to_owned(),
+            source_backed: false,
             trace: vec![
                 TraceHop {
                     path: root.join("src/app.tsx"),

@@ -336,3 +336,50 @@ callee_patterns = ["*.sendFile"]
 arg_index = 0
 enabler = "hono"
 evidence_template = "Non-literal path passed to {callee}(). Candidate for verification: confirm the served path cannot escape the intended directory (reject `..`)."
+
+# ── Untrusted SOURCES (issue #859) ───────────────────────────────────────────
+# A [[source]] row names a member-access path that carries attacker-controlled
+# input. The analyze layer matches each captured tainted-binding's source_path
+# (the object path of `const id = req.query.id`, or the full path of
+# `const { id } = req.query`) against these patterns; a matching binding marks
+# its local name as source-tainted. A tainted-sink finding whose argument
+# references a source-tainted local is ranked higher and annotated as
+# source-backed. This RAISES precision (ranking), it does NOT gate findings out:
+# a sink whose argument does not trace to a known source is still emitted
+# (prefer false-negatives over false-positives; the association is intra-module
+# and name-based, never a taint proof).
+#
+# path_patterns are segment-aware (the same engine as callee_patterns): a
+# leading `*.` matches any object prefix, so `*.query` matches `req.query`,
+# `ctx.req.query` (Hono), and `request.query` (Fastify). Bare paths match
+# exactly. This is OUT of scope: inter-procedural flow, fetch()/response-body
+# call results (a call result is not a member-access binding), and aliasing.
+
+[[source]]
+id = "http-request-input"
+title = "HTTP request input"
+# Express / Connect / Koa / Fastify / Hono request accessors. `*.query`,
+# `*.params`, `*.body` cover `req.query`, `ctx.req.query`, `request.body`, etc.
+# `*.searchParams` covers `new URL(...).searchParams`-style bindings.
+path_patterns = ["*.query", "*.params", "*.body", "*.searchParams"]
+
+[[source]]
+id = "process-argv"
+title = "Process arguments"
+# `process.argv` and `process.env`-adjacent CLI input. Bare `process.argv`
+# (the global) plus `*.argv` for a destructured/aliased process object.
+path_patterns = ["process.argv", "*.argv"]
+
+[[source]]
+id = "message-event-data"
+title = "Message-event data"
+# `postMessage` / WebSocket / worker `message` event payloads: `event.data`,
+# `e.data`, `message.data`. Wildcard object so any event binding name matches.
+path_patterns = ["*.data"]
+
+[[source]]
+id = "location-input"
+title = "Browser location input"
+# `location.search`, `location.hash`, `window.location.href`,
+# `document.location.search`. Attacker-influenceable URL surface in the browser.
+path_patterns = ["*.search", "*.hash", "location.href", "*.location.href"]

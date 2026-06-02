@@ -246,6 +246,7 @@ pub fn cached_to_module_opts(
         directives: cached.directives.clone(),
         security_sinks: cached.security_sinks.clone(),
         security_sinks_skipped: cached.security_sinks_skipped,
+        tainted_bindings: cached.tainted_bindings.clone(),
     }
 }
 
@@ -434,5 +435,6 @@ pub fn module_to_cached(
         directives: module.directives.clone(),
         security_sinks: module.security_sinks.clone(),
         security_sinks_skipped: module.security_sinks_skipped,
+        tainted_bindings: module.tainted_bindings.clone(),
     }
 }

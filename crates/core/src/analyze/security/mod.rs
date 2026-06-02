@@ -318,6 +318,9 @@ fn build_leak_finding(
         line: anchor.line,
         col: anchor.col,
         evidence,
+        // The client-server-leak rule is graph-structural, not source-to-sink;
+        // source-backing is a tainted-sink concept (issue #859).
+        source_backed: false,
         trace,
         actions: build_actions(),
         reachability: None,
@@ -350,6 +353,7 @@ fn build_direct_finding(
         line: 1,
         col: 0,
         evidence,
+        source_backed: false,
         trace: vec![TraceHop {
             path,
             line: 1,

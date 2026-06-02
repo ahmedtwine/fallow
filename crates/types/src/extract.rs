@@ -82,6 +82,30 @@ pub struct ModuleInfo {
     /// Surfaced in-band so an empty catalogue result with a non-zero count is
     /// not a clean bill.
     pub security_sinks_skipped: u32,
+    /// Local bindings whose initializer (or destructured object) is a flattened
+    /// member-access path. Used by the security `tainted_sink` detector to
+    /// back-trace a sink argument to a known untrusted source: the analyze layer
+    /// matches each binding's `source_path` against the data-driven source
+    /// catalogue (`security_matchers.toml` `[[source]]` rows) and treats the
+    /// matching `local` names as source-tainted. Intra-module and name-based
+    /// (no scope analysis); a conservative association, never a taint proof.
+    pub tainted_bindings: Vec<TaintedBinding>,
+}
+
+/// A local binding tied to the flattened member-access path it was initialized
+/// from. The analyze layer matches `source_path` against the data-driven source
+/// catalogue; when it matches, `local` is treated as carrying untrusted input.
+///
+/// Captured for two shapes: a direct assignment (`const id = req.query.id` ->
+/// `{ local: "id", source_path: "req.query" }`, the literal-key tail dropped so
+/// the path matches a catalogue prefix) and an object destructure
+/// (`const { id } = req.query` -> `{ local: "id", source_path: "req.query" }`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bitcode::Encode, bitcode::Decode)]
+pub struct TaintedBinding {
+    /// The local binding name introduced by the declarator.
+    pub local: String,
+    /// The flattened object member-access path the binding was sourced from.
+    pub source_path: String,
 }
 
 /// The syntactic shape of a captured security sink site. Category-blind: the
@@ -163,6 +187,14 @@ pub struct SinkSite {
     /// exclude safe ones (object literal, the parameterized form). See
     /// [`SinkArgKind`].
     pub arg_kind: SinkArgKind,
+    /// Identifier names referenced anywhere inside the captured non-literal sink
+    /// argument (deduped, source order). Used by the analyze layer to back-trace
+    /// the sink argument to a known untrusted source: a sink is "source-backed"
+    /// when one of these names was bound from a source-shaped expression (see
+    /// `ModuleInfo::tainted_bindings`). Intra-module, name-based, conservative;
+    /// it is never a taint proof. Empty when the argument references no bare
+    /// identifiers (e.g. a pure member-call result).
+    pub arg_idents: Vec<String>,
     /// Byte offset of the sink span start. Stored as `u32` (not `Span`) so the
     /// struct is bitcode-encodable and can be persisted directly in the cache.
     pub span_start: u32,
@@ -548,9 +580,9 @@ const _: () = assert!(std::mem::size_of::<ImportedName>() == 24);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<MemberAccess>() == 48);
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<SinkSite>() == 40);
+const _: () = assert!(std::mem::size_of::<SinkSite>() == 64);
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<ModuleInfo>() == 600);
+const _: () = assert!(std::mem::size_of::<ModuleInfo>() == 624);
 
 /// A re-export declaration.
 #[derive(Debug, Clone)]
@@ -657,6 +689,7 @@ mod tests {
             arg_index: 0,
             arg_is_non_literal: true,
             arg_kind: SinkArgKind::Other,
+            arg_idents: vec!["userInput".to_string()],
             span_start: 10,
             span_end: 20,
         };
@@ -667,6 +700,7 @@ mod tests {
         assert_eq!(decoded.arg_index, site.arg_index);
         assert_eq!(decoded.arg_is_non_literal, site.arg_is_non_literal);
         assert_eq!(decoded.arg_kind, site.arg_kind);
+        assert_eq!(decoded.arg_idents, site.arg_idents);
         assert_eq!(decoded.span(), site.span());
     }
 

@@ -23,6 +23,18 @@ const CATALOGUE_TOML: &str = include_str!("../../../data/security_matchers.toml"
 struct RawCatalogue {
     #[serde(default)]
     matcher: Vec<RawMatcher>,
+    #[serde(default)]
+    source: Vec<RawSource>,
+}
+
+/// A raw untrusted-source row (issue #859). Names member-access paths that carry
+/// attacker-controlled input; the analyze layer matches captured tainted-binding
+/// source paths against these to mark source-tainted locals.
+#[derive(serde::Deserialize)]
+struct RawSource {
+    id: String,
+    title: String,
+    path_patterns: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -156,11 +168,33 @@ pub struct Matcher {
     pub arg_kinds: Option<Vec<SinkArgKind>>,
 }
 
-/// The parsed catalogue: an ordered list of matchers. Order is preserved from
-/// the TOML so the detector can break on the first match deterministically.
+/// A parsed, validated untrusted-source matcher (issue #859). Its
+/// `path_patterns` reuse the segment-aware [`CalleePattern`] engine: a leading
+/// `*.` matches any object prefix (`*.query` matches `req.query` and
+/// `ctx.req.query`); a bare path matches exactly.
+#[derive(Debug, Clone)]
+pub struct SourceMatcher {
+    pub id: String,
+    pub title: String,
+    pub path_patterns: Vec<CalleePattern>,
+}
+
+impl SourceMatcher {
+    /// Whether any of this source's path patterns match the given flattened
+    /// member-access path (a captured tainted-binding `source_path`).
+    #[must_use]
+    pub fn matches(&self, source_path: &str) -> bool {
+        self.path_patterns.iter().any(|p| p.matches(source_path))
+    }
+}
+
+/// The parsed catalogue: an ordered list of sink matchers plus untrusted-source
+/// matchers. Order is preserved from the TOML so the detector can break on the
+/// first match deterministically.
 #[derive(Debug)]
 pub struct Catalogue {
     matchers: Vec<Matcher>,
+    sources: Vec<SourceMatcher>,
 }
 
 impl Matcher {
@@ -208,6 +242,31 @@ impl Catalogue {
     #[must_use]
     pub fn matchers(&self) -> &[Matcher] {
         &self.matchers
+    }
+
+    /// All untrusted-source matchers in declaration order. Test-only inspection.
+    #[cfg(test)]
+    #[must_use]
+    pub fn sources(&self) -> &[SourceMatcher] {
+        &self.sources
+    }
+
+    /// The id + human title of the first untrusted-source matcher whose pattern
+    /// matches the given flattened member-access path, if any (issue #859).
+    #[must_use]
+    pub fn matching_source(&self, source_path: &str) -> Option<(&str, &str)> {
+        self.sources
+            .iter()
+            .find(|s| s.matches(source_path))
+            .map(|s| (s.id.as_str(), s.title.as_str()))
+    }
+
+    /// Whether the given flattened member-access path matches any untrusted
+    /// source pattern (issue #859). Test-only convenience over `matching_source`.
+    #[cfg(test)]
+    #[must_use]
+    pub fn is_source_path(&self, source_path: &str) -> bool {
+        self.matching_source(source_path).is_some()
     }
 
     /// The human-readable title for a category id, if any matcher declares it.
@@ -347,7 +406,35 @@ fn parse_catalogue(src: &str) -> Result<Catalogue, String> {
         return Err("security_matchers.toml has no [[matcher]] entries".to_string());
     }
 
-    Ok(Catalogue { matchers })
+    let mut sources = Vec::with_capacity(raw.source.len());
+    for entry in raw.source {
+        if entry.id.trim().is_empty() {
+            return Err("source id must be non-empty / non-whitespace".to_string());
+        }
+        if entry.path_patterns.is_empty() {
+            return Err(format!(
+                "source {:?} has no path_patterns; at least one is required",
+                entry.id
+            ));
+        }
+        let mut path_patterns = Vec::with_capacity(entry.path_patterns.len());
+        for pat in &entry.path_patterns {
+            let parsed = parse_callee_pattern(pat).ok_or_else(|| {
+                format!(
+                    "source {:?} has an empty / whitespace path_pattern {pat:?}",
+                    entry.id
+                )
+            })?;
+            path_patterns.push(parsed);
+        }
+        sources.push(SourceMatcher {
+            id: entry.id,
+            title: entry.title,
+            path_patterns,
+        });
+    }
+
+    Ok(Catalogue { matchers, sources })
 }
 
 /// Parse and cache the embedded catalogue once. Unwraps the parse `Result`; in
@@ -757,6 +844,70 @@ evidence_template = "x"
 "#;
         let err = parse_catalogue(toml).unwrap_err();
         assert!(err.contains("empty / whitespace enabler"), "got: {err}");
+    }
+
+    #[test]
+    fn catalogue_has_untrusted_sources() {
+        // Issue #859: the embedded catalogue ships at least one [[source]] row,
+        // each with a non-empty id, title, and path_patterns.
+        let cat = catalogue();
+        assert!(
+            !cat.sources().is_empty(),
+            "catalogue must ship untrusted-source rows"
+        );
+        for s in cat.sources() {
+            assert!(!s.id.trim().is_empty(), "source id non-empty");
+            assert!(!s.title.trim().is_empty(), "source title non-empty");
+            assert!(!s.path_patterns.is_empty(), "source has path patterns");
+        }
+    }
+
+    #[test]
+    fn source_paths_match_expected_request_inputs() {
+        let cat = catalogue();
+        // Wildcard object prefix matches common framework request accessors.
+        assert!(cat.is_source_path("req.query"));
+        assert!(cat.is_source_path("ctx.req.query"));
+        assert!(cat.is_source_path("request.body"));
+        assert!(cat.is_source_path("req.params"));
+        assert!(cat.is_source_path("process.argv"));
+        assert!(cat.is_source_path("event.data"));
+        // A plain object path that is not an untrusted source does not match.
+        assert!(!cat.is_source_path("config.value"));
+        assert!(!cat.is_source_path("user.name"));
+    }
+
+    #[test]
+    fn source_matcher_matches_helper() {
+        let cat = catalogue();
+        let http = cat
+            .sources()
+            .iter()
+            .find(|s| s.id == "http-request-input")
+            .expect("http-request-input source present");
+        assert!(http.matches("req.query"));
+        assert!(!http.matches("process.argv"));
+    }
+
+    #[test]
+    fn parse_rejects_source_without_patterns() {
+        let toml = r#"
+[[matcher]]
+id = "x"
+cwe = 79
+title = "x"
+sink_shape = "member-assign"
+callee_patterns = ["*.innerHTML"]
+arg_index = 0
+evidence_template = "x"
+
+[[source]]
+id = "bad"
+title = "bad"
+path_patterns = []
+"#;
+        let err = parse_catalogue(toml).unwrap_err();
+        assert!(err.contains("path_patterns"), "got: {err}");
     }
 
     #[test]
