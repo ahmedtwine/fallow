@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Angular Material Sass entrypoints no longer report as unresolved or unused.** External Sass package entrypoints such as `@use "@angular/material" as mat;` can resolve through the package `sass` export and then follow package-local relative `@use` / `@forward` imports with Sass partial, extension, and index lookup. Thanks [@rbalet](https://github.com/rbalet) for the report. (Closes [#871](https://github.com/fallow-rs/fallow/issues/871).)
 
+- **The VS Code sidebar now switches from a search icon to a reload icon after analysis has loaded.** The initial sidebar action still uses the search icon for first-run analysis, but once results exist the title action becomes `Fallow: Reload Analysis` with the refresh icon, making it clearer that the button reruns the analysis instead of searching within findings. Thanks [@rbalet](https://github.com/rbalet) for the report. (Closes [#869](https://github.com/fallow-rs/fallow/issues/869).)
+
 ## [2.86.0] - 2026-06-02
 
 ### Added
