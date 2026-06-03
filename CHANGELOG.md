@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.88.1] - 2026-06-03
+
 ### Fixed
 
 - **Angular external templates now credit members reached through `inject(InjectionToken<Interface>)` fields.** A component field `readonly greeter = inject(GREETER)`, where `GREETER` is a `new InjectionToken<Greeter>(...)` and a project class `implements Greeter`, previously left that class's methods reported as unused when their only reference was a template call like `{{ greeter.greet() }}`. The previous fix only covered injecting a concrete class. Fallow now records the token's interface type argument and credits the accessed member on every class implementing that interface, covering both the untyped (`inject(GREETER)`) and interface-typed (`greeter: Greeter = inject(GREETER)`) field forms. The extraction cache version is bumped so warm caches re-extract affected files once. Thanks [@OmerGronich](https://github.com/OmerGronich) for the report. (Closes [#920](https://github.com/fallow-rs/fallow/issues/920).)
+- **The VS Code extension no longer fails its analysis against an older resolved `fallow` CLI.** The extension and the CLI it runs are versioned and resolved independently (PATH, `node_modules/.bin`, the managed download, or a deliberately pinned binary), so a freshly updated extension could drive an older CLI. The sidebar passed `--dupes-min-occurrences` unconditionally, which only exists in CLI v2.88.0+, so an older binary aborted the whole run with an "unexpected argument" error. The extension default for that setting (`2`) is also the CLI default, so it was a no-op that broke older binaries for no benefit. The extension now omits the flag at the default, probes the resolved CLI version once and drops version-gated flags an older CLI cannot accept, and as a backstop strips a rejected known flag and retries instead of failing. A single warning per session (shared with the existing language-server version-mismatch notice) points at the skew, with per-run detail in the Fallow output channel. Thanks [@melroy89](https://github.com/melroy89) for the report. (Regression from [#894](https://github.com/fallow-rs/fallow/issues/894).)
 
 ## [2.88.0] - 2026-06-03
 
@@ -2764,7 +2767,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--changed-since` and `--fail-on-issues` for CI
 - Cross-workspace resolution for npm/yarn/pnpm workspaces
 
-[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.88.0...HEAD
+[Unreleased]: https://github.com/fallow-rs/fallow/compare/v2.88.1...HEAD
+[2.88.1]: https://github.com/fallow-rs/fallow/compare/v2.88.0...v2.88.1
 [2.88.0]: https://github.com/fallow-rs/fallow/compare/v2.87.0...v2.88.0
 [2.87.0]: https://github.com/fallow-rs/fallow/compare/v2.86.0...v2.87.0
 [2.86.0]: https://github.com/fallow-rs/fallow/compare/v2.85.0...v2.86.0
