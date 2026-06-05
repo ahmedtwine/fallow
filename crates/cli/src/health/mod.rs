@@ -132,6 +132,10 @@ pub struct HealthOptions<'a> {
     pub report_only: bool,
     /// Paid runtime coverage sidecar input.
     pub runtime_coverage: Option<RuntimeCoverageOptions>,
+    /// Import churn from a `fallow-churn/v1` JSON file (`--churn-file`) instead
+    /// of `git log`, for hotspots / ownership on non-git VCS. Resolved relative
+    /// to `root`. When set, the git churn path is bypassed entirely.
+    pub churn_file: Option<&'a std::path::Path>,
 }
 
 struct HealthPipelineTimings {
@@ -152,6 +156,28 @@ struct HealthPipelineInput {
     pre_computed_analysis: Option<fallow_core::AnalysisOutput>,
 }
 
+/// Validate an explicit `--churn-file` up front so a malformed import is a loud
+/// hard error (exit 2) rather than a silent hotspot skip. Runs before the
+/// pipeline, and only when churn would actually be consumed (`--hotspots` /
+/// `--targets`; `--ownership` is subsumed because the dispatch layer sets
+/// `hotspots = hotspots || ownership` before building `HealthOptions`), so an
+/// inert `--churn-file` on a non-churn run is not penalized. The gate condition
+/// mirrors `hotspots::fetch_churn_data`'s `needs_churn` exactly, keeping the
+/// validate-iff-consume invariant. Failing here (instead of inside the parallel
+/// hotspot pass) keeps combined `--format json` to a single error document. The
+/// file is re-read in `fetch_churn_data`; the duplicate read is negligible for
+/// realistic churn files and bounded by `MAX_CHURN_EVENTS`.
+fn validate_churn_file(opts: &HealthOptions<'_>) -> Result<(), ExitCode> {
+    if let Some(churn_file) = opts.churn_file
+        && (opts.hotspots || opts.targets)
+    {
+        let resolved = scoring::resolve_relative_to_root(churn_file, Some(opts.root));
+        fallow_core::churn::analyze_churn_from_file(&resolved, opts.root)
+            .map_err(|e| emit_error(&e, 2, opts.output))?;
+    }
+    Ok(())
+}
+
 /// Run health analysis using pre-parsed modules from the dead-code pipeline.
 ///
 /// Skips file discovery and parsing (saves ~1.9s on 21K-file projects).
@@ -161,6 +187,7 @@ pub fn execute_health_with_shared_parse(
 ) -> Result<HealthResult, ExitCode> {
     scoring::validate_coverage_root_absolute(opts.coverage_root)
         .map_err(|e| emit_error(&e, 2, opts.output))?;
+    validate_churn_file(opts)?;
     let t = Instant::now();
     let config = crate::load_config_for_analysis(
         opts.root,
@@ -195,6 +222,7 @@ pub fn execute_health_with_shared_parse(
 pub fn execute_health(opts: &HealthOptions<'_>) -> Result<HealthResult, ExitCode> {
     scoring::validate_coverage_root_absolute(opts.coverage_root)
         .map_err(|e| emit_error(&e, 2, opts.output))?;
+    validate_churn_file(opts)?;
     let t = Instant::now();
     let config = crate::load_config_for_analysis(
         opts.root,
