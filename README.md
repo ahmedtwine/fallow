@@ -16,7 +16,6 @@
 <p align="center">
   <a href="https://github.com/fallow-rs/fallow/actions/workflows/ci.yml"><img src="https://github.com/fallow-rs/fallow/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/fallow-rs/fallow/actions/workflows/coverage.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/fallow-rs/fallow/badges/coverage.json" alt="Coverage"></a>
-  <a href="https://github.com/fallow-rs/fallow/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/self--analyzed-fallow-brightgreen" alt="Self analyzed"></a>
   <a href="https://github.com/fallow-rs/fallow/stargazers"><img src="https://img.shields.io/github/stars/fallow-rs/fallow.svg" alt="GitHub stars"></a>
   <a href="https://crates.io/crates/fallow-cli"><img src="https://img.shields.io/crates/v/fallow-cli.svg" alt="crates.io"></a>
   <a href="https://www.npmjs.com/package/fallow"><img src="https://img.shields.io/npm/v/fallow.svg" alt="npm"></a>
