@@ -531,6 +531,8 @@ pub fn compute_health(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn error_reason<T>(result: napi::Result<T>) -> String {
@@ -538,6 +540,93 @@ mod tests {
             Ok(_) => panic!("option validation should fail"),
             Err(error) => error.reason.clone(),
         }
+    }
+
+    #[test]
+    fn dead_code_options_map_common_fields_filters_and_files() {
+        let options = programmatic::DeadCodeOptions::try_from(DeadCodeOptions {
+            root: Some("/repo".to_string()),
+            config_path: Some("/repo/fallow.toml".to_string()),
+            no_cache: Some(true),
+            threads: Some(4),
+            diff_file: Some("/tmp/diff.patch".to_string()),
+            production: Some(true),
+            changed_since: Some("origin/main".to_string()),
+            workspace: Some(vec!["apps/web".to_string()]),
+            changed_workspaces: None,
+            explain: Some(true),
+            legacy_envelope: Some(true),
+            unused_files: Some(true),
+            unused_exports: Some(true),
+            unused_deps: Some(true),
+            unused_types: Some(true),
+            private_type_leaks: Some(true),
+            unused_enum_members: Some(true),
+            unused_class_members: Some(true),
+            unresolved_imports: Some(true),
+            unlisted_deps: Some(true),
+            duplicate_exports: Some(true),
+            circular_deps: Some(true),
+            re_export_cycles: Some(true),
+            boundary_violations: Some(true),
+            stale_suppressions: Some(true),
+            unused_catalog_entries: Some(true),
+            empty_catalog_groups: Some(true),
+            unresolved_catalog_references: Some(true),
+            unused_dependency_overrides: Some(true),
+            misconfigured_dependency_overrides: Some(true),
+            files: Some(vec!["src/app.ts".to_string(), "src/lib.ts".to_string()]),
+            include_entry_exports: Some(true),
+        })
+        .expect("options should map");
+
+        assert_eq!(options.analysis.root.as_deref(), Some(Path::new("/repo")));
+        assert_eq!(
+            options.analysis.config_path.as_deref(),
+            Some(Path::new("/repo/fallow.toml"))
+        );
+        assert!(options.analysis.no_cache);
+        assert_eq!(options.analysis.threads, Some(4));
+        assert_eq!(
+            options.analysis.diff_file.as_deref(),
+            Some(Path::new("/tmp/diff.patch"))
+        );
+        assert!(options.analysis.production);
+        assert_eq!(options.analysis.production_override, Some(true));
+        assert_eq!(
+            options.analysis.changed_since.as_deref(),
+            Some("origin/main")
+        );
+        assert_eq!(
+            options.analysis.workspace,
+            Some(vec!["apps/web".to_string()])
+        );
+        assert!(options.analysis.explain);
+        assert!(options.analysis.legacy_envelope);
+        assert!(options.filters.unused_files);
+        assert!(options.filters.unused_exports);
+        assert!(options.filters.unused_deps);
+        assert!(options.filters.unused_types);
+        assert!(options.filters.private_type_leaks);
+        assert!(options.filters.unused_enum_members);
+        assert!(options.filters.unused_class_members);
+        assert!(options.filters.unresolved_imports);
+        assert!(options.filters.unlisted_deps);
+        assert!(options.filters.duplicate_exports);
+        assert!(options.filters.circular_deps);
+        assert!(options.filters.re_export_cycles);
+        assert!(options.filters.boundary_violations);
+        assert!(options.filters.stale_suppressions);
+        assert!(options.filters.unused_catalog_entries);
+        assert!(options.filters.empty_catalog_groups);
+        assert!(options.filters.unresolved_catalog_references);
+        assert!(options.filters.unused_dependency_overrides);
+        assert!(options.filters.misconfigured_dependency_overrides);
+        assert_eq!(
+            options.files,
+            vec![Path::new("src/app.ts"), Path::new("src/lib.ts")]
+        );
+        assert!(options.include_entry_exports);
     }
 
     #[test]
@@ -558,7 +647,6 @@ mod tests {
 
         assert_eq!(options.analysis.production_override, Some(false));
     }
-
     #[test]
     fn detect_duplication_accepts_normalized_mode() {
         let task = detect_duplication(Some(DuplicationOptions {
@@ -651,5 +739,195 @@ mod tests {
         })));
 
         assert_eq!(reason, "`maxCyclomatic` must be between 0 and 65535");
+    }
+
+    #[test]
+    fn duplication_options_map_modes_thresholds_and_flags() {
+        let options = programmatic::DuplicationOptions::try_from(DuplicationOptions {
+            mode: Some(" SEMANTIC ".to_string()),
+            min_tokens: Some(30),
+            min_lines: Some(4),
+            min_occurrences: Some(3),
+            threshold: Some(2.5),
+            skip_local: Some(true),
+            cross_language: Some(true),
+            ignore_imports: Some(true),
+            top: Some(7),
+            ..DuplicationOptions::default()
+        })
+        .expect("options should map");
+
+        assert!(matches!(
+            options.mode,
+            programmatic::DuplicationMode::Semantic
+        ));
+        assert_eq!(options.min_tokens, 30);
+        assert_eq!(options.min_lines, 4);
+        assert_eq!(options.min_occurrences, 3);
+        assert!((options.threshold - 2.5).abs() < f64::EPSILON);
+        assert!(options.skip_local);
+        assert!(options.cross_language);
+        assert!(options.ignore_imports);
+        assert_eq!(options.top, Some(7));
+    }
+
+    #[test]
+    fn duplication_options_reject_invalid_mode_and_min_occurrences() {
+        let invalid_mode = programmatic::DuplicationOptions::try_from(DuplicationOptions {
+            mode: Some("exact".to_string()),
+            ..DuplicationOptions::default()
+        })
+        .expect_err("invalid mode should fail");
+
+        assert_eq!(invalid_mode.status, Status::InvalidArg);
+        assert!(invalid_mode.reason.contains("invalid `mode` value `exact`"));
+
+        let too_few_occurrences = programmatic::DuplicationOptions::try_from(DuplicationOptions {
+            min_occurrences: Some(1),
+            ..DuplicationOptions::default()
+        })
+        .expect_err("single occurrence should fail");
+
+        assert!(
+            too_few_occurrences
+                .reason
+                .contains("min_occurrences must be at least 2")
+        );
+    }
+
+    #[test]
+    fn complexity_options_map_sections_sort_ownership_effort_and_coverage() {
+        let options = programmatic::ComplexityOptions::try_from(ComplexityOptions {
+            max_cyclomatic: Some(42),
+            max_cognitive: Some(21),
+            max_crap: Some(18.5),
+            top: Some(5),
+            sort: Some(" Severity ".to_string()),
+            complexity: Some(true),
+            file_scores: Some(true),
+            coverage_gaps: Some(true),
+            hotspots: Some(true),
+            ownership: Some(true),
+            ownership_emails: Some("hash".to_string()),
+            targets: Some(true),
+            effort: Some("HIGH".to_string()),
+            score: Some(true),
+            since: Some("90d".to_string()),
+            min_commits: Some(3),
+            coverage: Some("coverage/coverage-final.json".to_string()),
+            coverage_root: Some("/ci/workspace".to_string()),
+            ..ComplexityOptions::default()
+        })
+        .expect("options should map");
+
+        assert_eq!(options.max_cyclomatic, Some(42));
+        assert_eq!(options.max_cognitive, Some(21));
+        assert_eq!(options.max_crap, Some(18.5));
+        assert_eq!(options.top, Some(5));
+        assert!(matches!(
+            options.sort,
+            programmatic::ComplexitySort::Severity
+        ));
+        assert!(options.complexity);
+        assert!(options.file_scores);
+        assert!(options.coverage_gaps);
+        assert!(options.hotspots);
+        assert!(options.ownership);
+        assert!(matches!(
+            options.ownership_emails,
+            Some(programmatic::OwnershipEmailMode::Hash)
+        ));
+        assert!(options.targets);
+        assert!(matches!(
+            options.effort,
+            Some(programmatic::TargetEffort::High)
+        ));
+        assert!(options.score);
+        assert_eq!(options.since.as_deref(), Some("90d"));
+        assert_eq!(options.min_commits, Some(3));
+        assert_eq!(
+            options.coverage.as_deref(),
+            Some(Path::new("coverage/coverage-final.json"))
+        );
+        assert_eq!(
+            options.coverage_root.as_deref(),
+            Some(Path::new("/ci/workspace"))
+        );
+    }
+
+    #[test]
+    fn complexity_options_reject_invalid_values_and_out_of_range_thresholds() {
+        let invalid_sort = programmatic::ComplexityOptions::try_from(ComplexityOptions {
+            sort: Some("weighted".to_string()),
+            ..ComplexityOptions::default()
+        })
+        .expect_err("invalid sort should fail");
+
+        assert_eq!(invalid_sort.status, Status::InvalidArg);
+        assert!(
+            invalid_sort
+                .reason
+                .contains("invalid `sort` value `weighted`")
+        );
+
+        let invalid_ownership = programmatic::ComplexityOptions::try_from(ComplexityOptions {
+            ownership_emails: Some("cleartext".to_string()),
+            ..ComplexityOptions::default()
+        })
+        .expect_err("invalid ownership email mode should fail");
+
+        assert!(
+            invalid_ownership
+                .reason
+                .contains("invalid `ownershipEmails` value `cleartext`")
+        );
+
+        let invalid_effort = programmatic::ComplexityOptions::try_from(ComplexityOptions {
+            effort: Some("tiny".to_string()),
+            ..ComplexityOptions::default()
+        })
+        .expect_err("invalid effort should fail");
+
+        assert!(
+            invalid_effort
+                .reason
+                .contains("invalid `effort` value `tiny`")
+        );
+
+        let invalid_threshold = programmatic::ComplexityOptions::try_from(ComplexityOptions {
+            max_cyclomatic: Some(u32::from(u16::MAX) + 1),
+            ..ComplexityOptions::default()
+        })
+        .expect_err("threshold above u16 should fail");
+
+        assert!(
+            invalid_threshold
+                .reason
+                .contains("`maxCyclomatic` must be between 0")
+        );
+    }
+
+    #[test]
+    fn programmatic_task_runs_once_and_preserves_compute_errors() {
+        let mut task = ProgrammaticTask::new(|| Ok(serde_json::json!({ "ok": true })));
+
+        let output = task.compute().expect("task should succeed");
+        assert_eq!(output["ok"], true);
+
+        let consumed = task.compute().expect_err("task should only run once");
+        assert!(consumed.reason.contains("already consumed"));
+
+        let mut failing_task = ProgrammaticTask::new(|| {
+            Err(programmatic::ProgrammaticError::new("analysis failed", 2)
+                .with_code("FALLOW_TEST_FAILURE"))
+        });
+
+        let error = failing_task.compute().expect_err("task should fail");
+        assert_eq!(error.reason, "analysis failed");
+        let stored = failing_task
+            .error
+            .as_ref()
+            .expect("programmatic error should be retained for reject");
+        assert_eq!(stored.code.as_deref(), Some("FALLOW_TEST_FAILURE"));
     }
 }
