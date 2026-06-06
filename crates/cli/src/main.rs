@@ -2900,66 +2900,7 @@ fn dispatch_subcommand(command: Command, dispatch: &DispatchContext<'_>) -> Exit
                 gate_marker,
             },
         ),
-        Command::Impact { subcommand } => match subcommand {
-            Some(ImpactCli::Enable) => {
-                let newly = impact::enable(root);
-                if !quiet {
-                    if newly {
-                        println!(
-                            "Fallow Impact enabled. Each `fallow audit` / pre-commit gate run is \
-                             recorded locally in .fallow/impact.json (gitignored, never uploaded)."
-                        );
-                        println!(
-                            "Tip: run `fallow init --hooks` (or add `--gate-marker pre-commit` to \
-                             your existing hook's `fallow audit` line) so blocked-then-fixed \
-                             commits are recorded as contained."
-                        );
-                    } else {
-                        println!("Fallow Impact is already enabled.");
-                    }
-                }
-                ExitCode::SUCCESS
-            }
-            Some(ImpactCli::Disable) => {
-                let was_enabled = impact::disable(root);
-                if !quiet {
-                    println!(
-                        "{}",
-                        if was_enabled {
-                            "Fallow Impact disabled. Existing history is retained."
-                        } else {
-                            "Fallow Impact was already disabled."
-                        }
-                    );
-                }
-                ExitCode::SUCCESS
-            }
-            Some(ImpactCli::Status) | None => {
-                let store = impact::load(root);
-                let report = impact::build_report(&store);
-                let rendered = match output {
-                    fallow_config::OutputFormat::Json => impact::render_json(&report),
-                    fallow_config::OutputFormat::Markdown => impact::render_markdown(&report),
-                    fallow_config::OutputFormat::Human => impact::render_human(&report),
-                    fallow_config::OutputFormat::Sarif
-                    | fallow_config::OutputFormat::Compact
-                    | fallow_config::OutputFormat::CodeClimate
-                    | fallow_config::OutputFormat::PrCommentGithub
-                    | fallow_config::OutputFormat::PrCommentGitlab
-                    | fallow_config::OutputFormat::ReviewGithub
-                    | fallow_config::OutputFormat::ReviewGitlab
-                    | fallow_config::OutputFormat::Badge => {
-                        return crate::error::emit_error(
-                            "impact supports human, json, and markdown output",
-                            2,
-                            output,
-                        );
-                    }
-                };
-                println!("{rendered}");
-                ExitCode::SUCCESS
-            }
-        },
+        Command::Impact { subcommand } => dispatch_impact(root, quiet, output, subcommand),
         Command::Security { file } => {
             let (output, quiet, fail_on_issues) = dispatch.ci_defaults();
             security::run(&security::SecurityOptions {
@@ -3019,6 +2960,76 @@ fn dispatch_subcommand(command: Command, dispatch: &DispatchContext<'_>) -> Exit
             uninstall,
         }),
     }
+}
+
+fn dispatch_impact(
+    root: &std::path::Path,
+    quiet: bool,
+    output: fallow_config::OutputFormat,
+    subcommand: Option<ImpactCli>,
+) -> ExitCode {
+    match subcommand {
+        Some(ImpactCli::Enable) => {
+            let newly = impact::enable(root);
+            if !quiet {
+                if newly {
+                    println!(
+                        "Fallow Impact enabled. Each `fallow audit` / pre-commit gate run is \
+                         recorded locally in .fallow/impact.json (gitignored, never uploaded)."
+                    );
+                    println!(
+                        "Tip: run `fallow init --hooks` (or add `--gate-marker pre-commit` to \
+                         your existing hook's `fallow audit` line) so blocked-then-fixed \
+                         commits are recorded as contained."
+                    );
+                } else {
+                    println!("Fallow Impact is already enabled.");
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Some(ImpactCli::Disable) => {
+            let was_enabled = impact::disable(root);
+            if !quiet {
+                println!(
+                    "{}",
+                    if was_enabled {
+                        "Fallow Impact disabled. Existing history is retained."
+                    } else {
+                        "Fallow Impact was already disabled."
+                    }
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Some(ImpactCli::Status) | None => render_impact_status(root, output),
+    }
+}
+
+fn render_impact_status(root: &std::path::Path, output: fallow_config::OutputFormat) -> ExitCode {
+    let store = impact::load(root);
+    let report = impact::build_report(&store);
+    let rendered = match output {
+        fallow_config::OutputFormat::Json => impact::render_json(&report),
+        fallow_config::OutputFormat::Markdown => impact::render_markdown(&report),
+        fallow_config::OutputFormat::Human => impact::render_human(&report),
+        fallow_config::OutputFormat::Sarif
+        | fallow_config::OutputFormat::Compact
+        | fallow_config::OutputFormat::CodeClimate
+        | fallow_config::OutputFormat::PrCommentGithub
+        | fallow_config::OutputFormat::PrCommentGitlab
+        | fallow_config::OutputFormat::ReviewGithub
+        | fallow_config::OutputFormat::ReviewGitlab
+        | fallow_config::OutputFormat::Badge => {
+            return crate::error::emit_error(
+                "impact supports human, json, and markdown output",
+                2,
+                output,
+            );
+        }
+    };
+    println!("{rendered}");
+    ExitCode::SUCCESS
 }
 
 fn telemetry_workflow_for_command(
