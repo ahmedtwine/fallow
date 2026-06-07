@@ -288,16 +288,16 @@ pub fn run_fix(opts: &FixOptions<'_>) -> ExitCode {
             }
         }
     } else if !opts.quiet {
-        emit_human_summary(
-            opts.dry_run,
-            &fixes,
+        emit_human_summary(&HumanSummaryInput {
+            dry_run: opts.dry_run,
+            fixes: &fixes,
             catalog_applied,
             catalog_skipped,
             catalog_comment_lines_removed,
             content_changed_count,
             mixed_line_endings_count,
             low_confidence_count,
-        );
+        });
     }
 
     if had_write_error {
@@ -399,20 +399,26 @@ fn strip_target_sidechannel(fixes: &mut [serde_json::Value]) {
 /// residual-work warnings. Skipped-entry counts come last because they
 /// describe work the user opted out of rather than work they need to
 /// do right now.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each count drives an independent stderr line; grouping into a struct would just move the same scalars behind a name with no readability gain at the single call site"
-)]
-fn emit_human_summary(
+struct HumanSummaryInput<'a> {
     dry_run: bool,
-    fixes: &[serde_json::Value],
+    fixes: &'a [serde_json::Value],
     catalog_applied: usize,
     catalog_skipped: usize,
     catalog_comment_lines_removed: usize,
     content_changed_count: usize,
     mixed_line_endings_count: usize,
     low_confidence_count: usize,
-) {
+}
+
+fn emit_human_summary(input: &HumanSummaryInput<'_>) {
+    let dry_run = input.dry_run;
+    let fixes = input.fixes;
+    let catalog_applied = input.catalog_applied;
+    let catalog_skipped = input.catalog_skipped;
+    let catalog_comment_lines_removed = input.catalog_comment_lines_removed;
+    let content_changed_count = input.content_changed_count;
+    let mixed_line_endings_count = input.mixed_line_endings_count;
+    let low_confidence_count = input.low_confidence_count;
     if dry_run {
         eprintln!("Dry run complete. No files were modified.");
     } else {
