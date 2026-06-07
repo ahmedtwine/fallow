@@ -530,19 +530,16 @@ fn execute_health_inner(
         total_files_scoped,
     );
 
-    let large_function_input = LargeFunctionInput {
-        vital_signs: &vital_signs,
-        modules: &modules,
-        file_paths: &file_paths,
-        config_root: &config.root,
-        ignore_set: &ignore_set,
-        changed_files: changed_files.as_ref(),
-        ws_roots: ws_roots.as_deref(),
-    };
-    let mut large_functions = collect_large_functions(&large_function_input);
-    if let Some(diff_index) = diff_index {
-        filter_large_functions_by_diff(&mut large_functions, diff_index, &config.root);
-    }
+    let large_functions = collect_filtered_large_functions(
+        &vital_signs,
+        &modules,
+        &file_paths,
+        &config,
+        &ignore_set,
+        changed_files.as_ref(),
+        ws_roots.as_deref(),
+        diff_index,
+    );
 
     let active_coverage_model = if istanbul_coverage.is_some() {
         Some(crate::health_types::CoverageModel::Istanbul)
@@ -1039,6 +1036,36 @@ fn compute_health_score_metrics(
         .score
         .then(|| vital_signs::compute_health_score(vital_signs, total_files_scoped));
     (health_score, duplication_ms)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "large-function filtering needs vital signs plus the active health scope"
+)]
+fn collect_filtered_large_functions(
+    vital_signs: &crate::health_types::VitalSigns,
+    modules: &[fallow_core::extract::ModuleInfo],
+    file_paths: &rustc_hash::FxHashMap<fallow_core::discover::FileId, &std::path::PathBuf>,
+    config: &ResolvedConfig,
+    ignore_set: &globset::GlobSet,
+    changed_files: Option<&rustc_hash::FxHashSet<std::path::PathBuf>>,
+    ws_roots: Option<&[std::path::PathBuf]>,
+    diff_index: Option<&crate::report::ci::diff_filter::DiffIndex>,
+) -> Vec<crate::health_types::LargeFunctionEntry> {
+    let input = LargeFunctionInput {
+        vital_signs,
+        modules,
+        file_paths,
+        config_root: &config.root,
+        ignore_set,
+        changed_files,
+        ws_roots,
+    };
+    let mut large_functions = collect_large_functions(&input);
+    if let Some(diff_index) = diff_index {
+        filter_large_functions_by_diff(&mut large_functions, diff_index, &config.root);
+    }
+    large_functions
 }
 
 /// Drop complexity findings whose function body span does NOT overlap any
