@@ -459,6 +459,14 @@ fn load_explicit_diff_file(path: &Path, root: &Path) -> ProgrammaticResult<Loade
 
 fn insert_meta(output: &mut serde_json::Value, meta: serde_json::Value) {
     if let serde_json::Value::Object(map) = output {
+        let telemetry = map
+            .get("_meta")
+            .and_then(|existing| existing.get("telemetry"))
+            .cloned();
+        let mut meta = meta;
+        if let (Some(telemetry), Some(meta_map)) = (telemetry, meta.as_object_mut()) {
+            meta_map.insert("telemetry".to_string(), telemetry);
+        }
         map.insert("_meta".to_string(), meta);
     }
 }

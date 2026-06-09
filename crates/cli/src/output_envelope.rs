@@ -3,12 +3,13 @@
 //! This module is the schema-side source of truth for fallow's top-level JSON
 //! envelopes.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fallow_core::results::AnalysisResults;
 use fallow_types::envelope::{
     BaselineDeltas, BaselineMatch, CheckSummary, ElapsedMs, EntryPoints, Meta, RegressionResult,
-    SchemaVersion, ToolVersion,
+    SchemaVersion, TelemetryMeta, ToolVersion,
 };
 use serde::Serialize;
 
@@ -18,6 +19,7 @@ use crate::output_dupes::DupesReportPayload;
 use crate::report::dupes_grouping::DuplicationGroup;
 
 static LEGACY_ENVELOPE: AtomicBool = AtomicBool::new(false);
+static TELEMETRY_ANALYSIS_RUN_ID: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvelopeMode {
@@ -40,6 +42,19 @@ pub fn set_legacy_envelope(enabled: bool) {
     LEGACY_ENVELOPE.store(enabled, Ordering::Relaxed);
 }
 
+pub fn set_telemetry_analysis_run_id(run_id: Option<String>) {
+    if let Ok(mut current) = TELEMETRY_ANALYSIS_RUN_ID.lock() {
+        *current = run_id;
+    }
+}
+
+fn telemetry_analysis_run_id() -> Option<String> {
+    TELEMETRY_ANALYSIS_RUN_ID
+        .lock()
+        .ok()
+        .and_then(|id| id.clone())
+}
+
 pub fn serialize_root_output(output: FallowOutput) -> Result<serde_json::Value, serde_json::Error> {
     serialize_root_output_with_mode(output, EnvelopeMode::current())
 }
@@ -52,7 +67,29 @@ pub fn serialize_root_output_with_mode(
     if mode == EnvelopeMode::Legacy {
         remove_root_kind(&mut value);
     }
+    attach_telemetry_meta(&mut value);
     Ok(value)
+}
+
+pub fn attach_telemetry_meta(value: &mut serde_json::Value) {
+    let Some(run_id) = telemetry_analysis_run_id() else {
+        return;
+    };
+    let serde_json::Value::Object(map) = value else {
+        return;
+    };
+    let meta = map
+        .entry("_meta".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if !meta.is_object() {
+        *meta = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(meta_map) = meta {
+        meta_map.insert(
+            "telemetry".to_string(),
+            serde_json::json!({ "analysis_run_id": run_id }),
+        );
+    }
 }
 
 /// Remove only the document-root discriminator for the one-cycle
@@ -189,6 +226,8 @@ pub struct AuditOutput {
     pub base_snapshot_skipped: Option<bool>,
     pub summary: AuditSummary,
     pub attribution: AuditAttribution,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dead_code: Option<CheckOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,6 +274,8 @@ pub struct CombinedMeta {
     pub dupes: Option<Meta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Meta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<TelemetryMeta>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1006,6 +1047,28 @@ mod tests {
 
     use super::*;
 
+    static TEST_TELEMETRY_RUN_ID_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct TelemetryRunIdGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl TelemetryRunIdGuard {
+        fn set(run_id: Option<&str>) -> Self {
+            let lock = TEST_TELEMETRY_RUN_ID_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            set_telemetry_analysis_run_id(run_id.map(str::to_owned));
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for TelemetryRunIdGuard {
+        fn drop(&mut self) {
+            set_telemetry_analysis_run_id(None);
+        }
+    }
+
     fn combined_output() -> CombinedOutput {
         CombinedOutput {
             schema_version: SchemaVersion(crate::report::SCHEMA_VERSION),
@@ -1020,6 +1083,7 @@ mod tests {
 
     #[test]
     fn root_output_serializes_kind_by_default() {
+        let _guard = TelemetryRunIdGuard::set(None);
         let value = serialize_root_output_with_mode(
             FallowOutput::Combined(combined_output()),
             EnvelopeMode::Tagged,
@@ -1032,6 +1096,7 @@ mod tests {
 
     #[test]
     fn legacy_mode_removes_only_root_kind() {
+        let _guard = TelemetryRunIdGuard::set(None);
         let value = serialize_root_output_with_mode(
             FallowOutput::Combined(combined_output()),
             EnvelopeMode::Legacy,
@@ -1049,5 +1114,48 @@ mod tests {
         remove_root_kind(&mut nested);
         assert!(nested.get("kind").is_none());
         assert_eq!(nested["action"]["kind"], "suppress");
+    }
+
+    #[test]
+    fn root_output_attaches_telemetry_meta() {
+        let _guard = TelemetryRunIdGuard::set(Some("run_test123"));
+        let value = serialize_root_output_with_mode(
+            FallowOutput::Combined(combined_output()),
+            EnvelopeMode::Tagged,
+        )
+        .expect("combined root should serialize");
+
+        assert_eq!(
+            value["_meta"]["telemetry"]["analysis_run_id"].as_str(),
+            Some("run_test123")
+        );
+    }
+
+    #[test]
+    fn telemetry_meta_preserves_existing_meta_sections() {
+        let mut output = combined_output();
+        output.meta = Some(CombinedMeta {
+            check: Some(Meta {
+                docs: Some("https://example.com/check".to_string()),
+                ..Meta::default()
+            }),
+            dupes: None,
+            health: None,
+            telemetry: None,
+        });
+
+        let _guard = TelemetryRunIdGuard::set(Some("run_test123"));
+        let value =
+            serialize_root_output_with_mode(FallowOutput::Combined(output), EnvelopeMode::Tagged)
+                .expect("combined root should serialize");
+
+        assert_eq!(
+            value["_meta"]["check"]["docs"].as_str(),
+            Some("https://example.com/check")
+        );
+        assert_eq!(
+            value["_meta"]["telemetry"]["analysis_run_id"].as_str(),
+            Some("run_test123")
+        );
     }
 }

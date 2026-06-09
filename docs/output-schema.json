@@ -114,6 +114,16 @@
         "attribution": {
           "$ref": "#/definitions/AuditAttribution"
         },
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Meta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "dead_code": {
           "anyOf": [
             {
@@ -5009,6 +5019,17 @@
           ],
           "description": "URL to the documentation page for this command."
         },
+        "telemetry": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TelemetryMeta"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local telemetry correlation metadata for agent follow-up runs."
+        },
         "field_definitions": {
           "type": "object",
           "additionalProperties": {
@@ -9324,6 +9345,16 @@
               "type": "null"
             }
           ]
+        },
+        "telemetry": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TelemetryMeta"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -9668,6 +9699,16 @@
         "record_count": {
           "type": "integer"
         },
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Meta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "first_recorded": {
           "type": [
             "string",
@@ -9887,6 +9928,17 @@
             "$ref": "#/definitions/SecurityFinding"
           },
           "description": "Security candidates. Paths are project-root-relative, forward-slash."
+        },
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Meta"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional metadata for JSON consumers."
         },
         "attack_surface": {
           "type": [
@@ -10953,6 +11005,19 @@
         }
       ],
       "description": "Verification-priority tier for a security candidate. This is ranking, not an\nexploitability verdict."
+    },
+    "TelemetryMeta": {
+      "type": "object",
+      "properties": {
+        "analysis_run_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Ephemeral local token that may be passed to the hidden `--parent-run`\nflag on a later command. It is not derived from repository, path, user,\nmachine, project, or cloud data."
+        }
+      },
+      "description": "Privacy-safe local run metadata emitted for JSON consumers."
     }
   }
 }

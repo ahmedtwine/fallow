@@ -21,6 +21,7 @@ use fallow_core::results::{
     SecurityFindingKind, TraceHop, TraceHopRole,
 };
 use fallow_types::discover::DiscoveredFile;
+use fallow_types::envelope::Meta;
 use fallow_types::extract::ModuleInfo;
 use fallow_types::results::{SecurityRuntimeContext, SecurityRuntimeState, SecuritySeverity};
 use rustc_hash::FxHashSet;
@@ -108,6 +109,9 @@ pub struct SecurityOutput {
     pub gate: Option<SecurityGate>,
     /// Security candidates. Paths are project-root-relative, forward-slash.
     pub security_findings: Vec<SecurityFinding>,
+    /// Optional metadata for JSON consumers.
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// Opt-in attack-surface inventory from untrusted entry points to reachable
     /// sinks. Present only when `--surface` was requested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +285,7 @@ pub fn run(opts: &SecurityOptions<'_>) -> ExitCode {
         schema_version: SecuritySchemaVersion::V2,
         gate,
         security_findings: findings,
+        meta: None,
         attack_surface,
         unresolved_edge_files,
         unresolved_callee_sites,
@@ -1905,6 +1910,7 @@ mod tests {
             schema_version: SecuritySchemaVersion::V2,
             gate: None,
             security_findings: findings,
+            meta: None,
             attack_surface: None,
             unresolved_edge_files,
             unresolved_callee_sites: 0,
@@ -1920,6 +1926,7 @@ mod tests {
                 new_count,
             }),
             security_findings: vec![],
+            meta: None,
             attack_surface: None,
             unresolved_edge_files: 0,
             unresolved_callee_sites: 0,

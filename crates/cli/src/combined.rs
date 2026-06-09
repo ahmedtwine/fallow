@@ -733,6 +733,7 @@ fn print_combined_json(
         );
     }
     report::harmonize_multi_kind_suppress_line_actions(&mut output);
+    crate::output_envelope::attach_telemetry_meta(&mut output);
 
     match serde_json::to_string_pretty(&output) {
         Ok(json) => {

@@ -785,6 +785,7 @@ fn print_flags_json(
             }
         });
     }
+    crate::output_envelope::attach_telemetry_meta(&mut output);
 
     println!(
         "{}",

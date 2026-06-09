@@ -689,6 +689,7 @@ elapsed_ms: ElapsedMs
 base_snapshot_skipped?: (boolean | null)
 summary: AuditSummary
 attribution: AuditAttribution
+_meta?: (Meta | null)
 dead_code?: (CheckOutput | null)
 duplication?: (DupesReportPayload | null)
 complexity?: (HealthReport | null)
@@ -714,6 +715,88 @@ complexity_introduced: number
 complexity_inherited: number
 duplication_introduced: number
 duplication_inherited: number
+}
+/**
+ * Metric and rule definitions emitted under `_meta` when `--explain` is
+ * passed (always present in MCP responses). Helps AI agents and CI systems
+ * interpret metric values without re-reading the docs site.
+ */
+export interface Meta {
+/**
+ * URL to the documentation page for this command.
+ */
+docs?: (string | null)
+/**
+ * Local telemetry correlation metadata for agent follow-up runs.
+ */
+telemetry?: (TelemetryMeta | null)
+/**
+ * Per-field definitions for envelope fields and action payload fields.
+ */
+field_definitions?: {
+[k: string]: string
+}
+/**
+ * Per-metric definitions: name, description, range, interpretation.
+ */
+metrics?: {
+[k: string]: MetaMetric
+}
+/**
+ * Per-rule definitions for check command output.
+ */
+rules?: {
+[k: string]: MetaRule
+}
+}
+/**
+ * Privacy-safe local run metadata emitted for JSON consumers.
+ */
+export interface TelemetryMeta {
+/**
+ * Ephemeral local token that may be passed to the hidden `--parent-run`
+ * flag on a later command. It is not derived from repository, path, user,
+ * machine, project, or cloud data.
+ */
+analysis_run_id?: (string | null)
+}
+/**
+ * Single-metric definition inside [`Meta::metrics`].
+ */
+export interface MetaMetric {
+/**
+ * Human-readable metric name.
+ */
+name?: (string | null)
+/**
+ * What this metric measures and how it is computed.
+ */
+description?: (string | null)
+/**
+ * Valid value range (e.g., `"[0, 100]"`).
+ */
+range?: (string | null)
+/**
+ * How to read the value (e.g., `"lower is better"`).
+ */
+interpretation?: (string | null)
+}
+/**
+ * Single-rule definition inside [`Meta::rules`].
+ */
+export interface MetaRule {
+/**
+ * Human-readable rule name.
+ */
+name?: (string | null)
+/**
+ * What this rule detects.
+ */
+description?: (string | null)
+/**
+ * URL to the rule documentation.
+ */
+docs?: (string | null)
 }
 /**
  * Envelope emitted by `fallow dead-code --format json` (plus the `check`
@@ -2174,73 +2257,6 @@ exceeded: boolean
  * Only present when status is `skipped`.
  */
 reason?: (string | null)
-}
-/**
- * Metric and rule definitions emitted under `_meta` when `--explain` is
- * passed (always present in MCP responses). Helps AI agents and CI systems
- * interpret metric values without re-reading the docs site.
- */
-export interface Meta {
-/**
- * URL to the documentation page for this command.
- */
-docs?: (string | null)
-/**
- * Per-field definitions for envelope fields and action payload fields.
- */
-field_definitions?: {
-[k: string]: string
-}
-/**
- * Per-metric definitions: name, description, range, interpretation.
- */
-metrics?: {
-[k: string]: MetaMetric
-}
-/**
- * Per-rule definitions for check command output.
- */
-rules?: {
-[k: string]: MetaRule
-}
-}
-/**
- * Single-metric definition inside [`Meta::metrics`].
- */
-export interface MetaMetric {
-/**
- * Human-readable metric name.
- */
-name?: (string | null)
-/**
- * What this metric measures and how it is computed.
- */
-description?: (string | null)
-/**
- * Valid value range (e.g., `"[0, 100]"`).
- */
-range?: (string | null)
-/**
- * How to read the value (e.g., `"lower is better"`).
- */
-interpretation?: (string | null)
-}
-/**
- * Single-rule definition inside [`Meta::rules`].
- */
-export interface MetaRule {
-/**
- * Human-readable rule name.
- */
-name?: (string | null)
-/**
- * What this rule detects.
- */
-description?: (string | null)
-/**
- * URL to the rule documentation.
- */
-docs?: (string | null)
 }
 /**
  * Wire-shape payload for `fallow dupes --format json` (the body that
@@ -4787,6 +4803,7 @@ export interface ImpactReport {
 schema_version: ImpactReportSchemaVersion
 enabled: boolean
 record_count: number
+_meta?: (Meta | null)
 first_recorded?: (string | null)
 /**
  * Git SHA of the most recent recorded run, so a consumer can tell which
@@ -4898,6 +4915,10 @@ gate?: (SecurityGate | null)
  * Security candidates. Paths are project-root-relative, forward-slash.
  */
 security_findings: SecurityFinding[]
+/**
+ * Optional metadata for JSON consumers.
+ */
+_meta?: (Meta | null)
 /**
  * Opt-in attack-surface inventory from untrusted entry points to reachable
  * sinks. Present only when `--surface` was requested.
@@ -5398,6 +5419,7 @@ export interface CombinedMeta {
 check?: (Meta | null)
 dupes?: (Meta | null)
 health?: (Meta | null)
+telemetry?: (TelemetryMeta | null)
 }
 /**
  * Single CodeClimate-compatible issue inside [`CodeClimateOutput`].

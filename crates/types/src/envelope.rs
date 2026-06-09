@@ -237,6 +237,9 @@ pub struct Meta {
     /// URL to the documentation page for this command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<String>,
+    /// Local telemetry correlation metadata for agent follow-up runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<TelemetryMeta>,
     /// Per-field definitions for envelope fields and action payload fields.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub field_definitions: BTreeMap<String, String>,
@@ -246,6 +249,17 @@ pub struct Meta {
     /// Per-rule definitions for check command output.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rules: BTreeMap<String, MetaRule>,
+}
+
+/// Privacy-safe local run metadata emitted for JSON consumers.
+#[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TelemetryMeta {
+    /// Ephemeral local token that may be passed to the hidden `--parent-run`
+    /// flag on a later command. It is not derived from repository, path, user,
+    /// machine, project, or cloud data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_run_id: Option<String>,
 }
 
 /// Single-metric definition inside [`Meta::metrics`].

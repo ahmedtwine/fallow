@@ -456,6 +456,14 @@ pub fn build_baseline_deltas_json<'a>(
 /// Insert a `_meta` key into a JSON object value.
 fn insert_meta(output: &mut serde_json::Value, meta: serde_json::Value) {
     if let serde_json::Value::Object(map) = output {
+        let telemetry = map
+            .get("_meta")
+            .and_then(|existing| existing.get("telemetry"))
+            .cloned();
+        let mut meta = meta;
+        if let (Some(telemetry), Some(meta_map)) = (telemetry, meta.as_object_mut()) {
+            meta_map.insert("telemetry".to_string(), telemetry);
+        }
         map.insert("_meta".to_string(), meta);
     }
 }
@@ -1774,6 +1782,30 @@ mod tests {
         let meta = serde_json::json!({ "new": true });
         insert_meta(&mut output, meta.clone());
         assert_eq!(output["_meta"], meta);
+    }
+
+    #[test]
+    fn insert_meta_preserves_existing_telemetry_meta() {
+        let mut output = serde_json::json!({
+            "_meta": {
+                "telemetry": {
+                    "analysis_run_id": "run_test123"
+                }
+            }
+        });
+        insert_meta(
+            &mut output,
+            serde_json::json!({ "docs": "https://example.com" }),
+        );
+
+        assert_eq!(
+            output["_meta"]["docs"].as_str(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            output["_meta"]["telemetry"]["analysis_run_id"].as_str(),
+            Some("run_test123")
+        );
     }
 
     #[test]

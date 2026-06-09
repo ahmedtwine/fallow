@@ -70,7 +70,7 @@ use fallow_core::duplicates::{
 use fallow_types::envelope::{
     AuditIntroduced, BaselineCategoryDelta, BaselineDeltas, BaselineMatch, CheckSummary, ElapsedMs,
     EntryPoints, Meta, MetaMetric, MetaRule, RegressionResult, RegressionStatus,
-    RegressionToleranceKind, SchemaVersion, ToolVersion,
+    RegressionToleranceKind, SchemaVersion, TelemetryMeta, ToolVersion,
 };
 use fallow_types::extract::{MemberKind, SecurityControlKind};
 use fallow_types::output::{
@@ -532,6 +532,7 @@ fn derived_definitions() -> Map<String, Value> {
     let _ = generator.subschema_for::<Meta>();
     let _ = generator.subschema_for::<MetaMetric>();
     let _ = generator.subschema_for::<MetaRule>();
+    let _ = generator.subschema_for::<TelemetryMeta>();
 
     register_per_command_envelope_definitions(&mut generator);
 

@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use fallow_types::envelope::Meta;
 use fallow_types::results::{ActiveSuppression, AnalysisResults};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -956,6 +957,8 @@ pub struct ImpactReport {
     pub schema_version: ImpactReportSchemaVersion,
     pub enabled: bool,
     pub record_count: usize,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_recorded: Option<String>,
     /// Git SHA of the most recent recorded run, so a consumer can tell which
@@ -1059,6 +1062,7 @@ pub fn build_report(store: &ImpactStore) -> ImpactReport {
         schema_version: ImpactReportSchemaVersion::V1,
         enabled: store.enabled,
         record_count: store.records.len(),
+        meta: None,
         first_recorded: store.first_recorded.clone(),
         latest_git_sha,
         surfacing,
@@ -2114,6 +2118,7 @@ mod tests {
             schema_version: ImpactReportSchemaVersion::V1,
             enabled: true,
             record_count: 2,
+            meta: None,
             first_recorded: Some("2026-05-29T10:00:00Z".into()),
             latest_git_sha: None,
             surfacing: Some(ImpactCounts::default()),
@@ -2304,6 +2309,7 @@ mod tests {
             schema_version: ImpactReportSchemaVersion::V1,
             enabled: true,
             record_count,
+            meta: None,
             first_recorded: first_recorded.map(ToOwned::to_owned),
             latest_git_sha: None,
             surfacing,

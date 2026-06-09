@@ -407,6 +407,7 @@ fn print_audit_json(result: &AuditResult) -> ExitCode {
     let mut output = serde_json::Value::Object(obj);
     crate::output_envelope::apply_root_kind(&mut output, "audit");
     report::harmonize_multi_kind_suppress_line_actions(&mut output);
+    crate::output_envelope::attach_telemetry_meta(&mut output);
     report::emit_json(&output, "audit")
 }
 

@@ -267,6 +267,13 @@ fn audit_parallel_output_is_deterministic() {
             serde_json::Value::Object(map) => {
                 map.remove("elapsed_ms");
                 map.remove("head_sha");
+                if let Some(telemetry) = map
+                    .get_mut("_meta")
+                    .and_then(|meta| meta.get_mut("telemetry"))
+                    .and_then(|telemetry| telemetry.as_object_mut())
+                {
+                    telemetry.remove("analysis_run_id");
+                }
                 for v in map.values_mut() {
                     normalize(v);
                 }

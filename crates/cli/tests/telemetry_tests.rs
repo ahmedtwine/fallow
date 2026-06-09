@@ -245,6 +245,59 @@ fn inspect_event(root: &Path, args: &[&str], extra_env: &[(&str, &str)]) -> serd
     inspect_event_output(root, args, extra_env).0
 }
 
+#[test]
+fn json_output_analysis_run_id_can_drive_followup_telemetry() {
+    let dir = tempfile::tempdir().expect("temp project");
+    init_audit_repo(dir.path());
+
+    let (root_event, root_output) =
+        inspect_event_output(dir.path(), &["--format", "json", "--quiet"], &[]);
+
+    assert_eq!(
+        root_output.code, 0,
+        "root analysis should exit 0: {}",
+        root_output.stderr
+    );
+    assert_eq!(root_event["workflow"].as_str(), Some("code_quality_review"));
+    let root_json = parse_json(&root_output);
+    let run_id = root_json["_meta"]["telemetry"]["analysis_run_id"]
+        .as_str()
+        .expect("json output should include telemetry analysis_run_id")
+        .to_owned();
+    assert!(run_id.starts_with("run_"));
+    assert_eq!(run_id.len(), 20);
+    assert!(
+        run_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    );
+
+    let (followup_event, followup_output) = inspect_event_output(
+        dir.path(),
+        &[
+            "--parent-run",
+            &run_id,
+            "audit",
+            "--base",
+            "HEAD",
+            "--format",
+            "json",
+            "--quiet",
+        ],
+        &[],
+    );
+
+    assert_eq!(
+        followup_output.code, 0,
+        "followup audit should exit 0: {}",
+        followup_output.stderr
+    );
+    assert_eq!(followup_event.get("parent_run"), None);
+    assert_eq!(followup_event["has_parent_run"].as_bool(), Some(true));
+    assert_eq!(followup_event["run_role"].as_str(), Some("followup"));
+    assert_eq!(followup_event["followup_kind"].as_str(), Some("audit"));
+}
+
 /// Minimal project with a function duplicated across two files, sized to clear
 /// the default duplication thresholds (min_tokens 50, min_lines 5,
 /// min_occurrences 2).

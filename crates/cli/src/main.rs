@@ -2479,6 +2479,10 @@ fn main() -> ExitCode {
         start: std::time::Instant::now(),
         context: telemetry_context_for_command(&cli, cli.command.as_ref(), fmt.output),
     };
+    output_envelope::set_telemetry_analysis_run_id(
+        matches!(fmt.output, fallow_config::OutputFormat::Json)
+            .then(telemetry::new_analysis_run_id),
+    );
 
     // Deliver any telemetry events the previous run spooled at exit. Detached and
     // gated on telemetry being enabled, so it overlaps the analysis work below and

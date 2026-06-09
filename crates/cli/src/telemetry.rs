@@ -8,11 +8,12 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU64, Ordering};
 use std::time::Duration;
 
 use fallow_config::OutputFormat;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::api::{api_url, try_api_agent_with_timeout};
 
@@ -22,6 +23,7 @@ const CONNECT_TIMEOUT_SECS: u64 = 1;
 const TOTAL_TIMEOUT_SECS: u64 = 1;
 const TELEMETRY_PATH: &str = "/v1/telemetry/events";
 const PARENT_RUN_HEADER: &str = "X-Fallow-Parent-Run";
+static ANALYSIS_RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Maximum number of events retained in the spool. The spool grows one line per
 /// telemetry-enabled run and is drained on the next run. Two paths keep it to the
@@ -939,6 +941,31 @@ pub fn record_workflow(record: &WorkflowRecord<'_>) {
         EffectiveMode::Inspect => print_event_to_stderr(&event),
         EffectiveMode::On => spool_event(&event, parent_run.token.as_deref()),
     }
+}
+
+/// Generate a short, privacy-safe run token for local JSON output.
+///
+/// The token carries no repository, path, user, machine, or project data. It is
+/// only an ephemeral handle that an agent may pass to a later hidden
+/// `--parent-run` flag so opt-in telemetry can classify the later run as a
+/// follow-up.
+#[must_use]
+pub fn new_analysis_run_id() -> String {
+    let counter = ANALYSIS_RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let mut hasher = Sha256::new();
+    hasher.update(now_nanos.to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    hasher.update(counter.to_le_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(16);
+    for byte in &digest[..8] {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    format!("run_{hex}")
 }
 
 /// Print the one-time telemetry opt-in note if this is the first eligible run.
@@ -2350,6 +2377,18 @@ mod tests {
         assert_eq!(sanitize_parent_run("../repo/main"), None);
         assert_eq!(sanitize_parent_run("customer project"), None);
         assert_eq!(sanitize_parent_run("x"), None);
+    }
+
+    #[test]
+    fn analysis_run_id_is_parent_run_safe() {
+        let run_id = new_analysis_run_id();
+
+        assert!(run_id.starts_with("run_"));
+        assert_eq!(run_id.len(), 20);
+        assert_eq!(
+            sanitize_parent_run(&run_id).as_deref(),
+            Some(run_id.as_str())
+        );
     }
 
     #[test]

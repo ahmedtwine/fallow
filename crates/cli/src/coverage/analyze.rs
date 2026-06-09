@@ -1071,6 +1071,7 @@ fn print_runtime_json(
     if explain && let Some(map) = output.as_object_mut() {
         map.insert("_meta".to_owned(), crate::explain::coverage_analyze_meta());
     }
+    crate::output_envelope::attach_telemetry_meta(&mut output);
     crate::report::emit_json(&output, "runtime coverage JSON")
 }
 
