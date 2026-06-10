@@ -418,11 +418,16 @@ impl AnalysisResults {
     /// insertion order, so the same project can produce different orderings
     /// across runs. This method canonicalises every result list by sorting on
     /// (path, line, col, name) so that JSON/SARIF/human output is stable.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one short sort_by per result array; splitting would add indirection without clarity"
-    )]
     pub fn sort(&mut self) {
+        self.sort_core_findings();
+        self.sort_dependency_findings();
+        self.sort_graph_findings();
+        self.sort_catalog_findings();
+        self.sort_metadata_findings();
+        self.sort_export_usages();
+    }
+
+    fn sort_core_findings(&mut self) {
         self.unused_files
             .sort_by(|a, b| a.file.path.cmp(&b.file.path));
 
@@ -501,7 +506,9 @@ impl AnalysisResults {
                 .then(a.import.col.cmp(&b.import.col))
                 .then(a.import.specifier.cmp(&b.import.specifier))
         });
+    }
 
+    fn sort_dependency_findings(&mut self) {
         self.unlisted_dependencies
             .sort_by(|a, b| a.dep.package_name.cmp(&b.dep.package_name));
         for dep in &mut self.unlisted_dependencies {
@@ -533,7 +540,9 @@ impl AnalysisResults {
                 .then(a.dep.line.cmp(&b.dep.line))
                 .then(a.dep.package_name.cmp(&b.dep.package_name))
         });
+    }
 
+    fn sort_graph_findings(&mut self) {
         self.circular_dependencies.sort_by(|a, b| {
             a.cycle
                 .files
@@ -578,7 +587,9 @@ impl AnalysisResults {
                 .then(a.violation.col.cmp(&b.violation.col))
                 .then(a.violation.rule_id.cmp(&b.violation.rule_id))
         });
+    }
 
+    fn sort_catalog_findings(&mut self) {
         self.stale_suppressions.sort_by(|a, b| {
             a.path
                 .cmp(&b.path)
@@ -638,7 +649,9 @@ impl AnalysisResults {
                 .then(a.entry.line.cmp(&b.entry.line))
                 .then(a.entry.raw_key.cmp(&b.entry.raw_key))
         });
+    }
 
+    fn sort_metadata_findings(&mut self) {
         self.misconfigured_dependency_overrides.sort_by(|a, b| {
             a.entry
                 .path
@@ -662,7 +675,9 @@ impl AnalysisResults {
                 .then(a.reason.cmp(&b.reason))
                 .then(a.expression_kind.cmp(&b.expression_kind))
         });
+    }
 
+    fn sort_export_usages(&mut self) {
         for usage in &mut self.export_usages {
             usage.reference_locations.sort_by(|a, b| {
                 a.path
