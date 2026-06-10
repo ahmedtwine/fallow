@@ -1059,3 +1059,192 @@ pub(super) fn dupe_group_key(group: &fallow_core::duplicates::CloneGroup, root: 
         hasher.finish()
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use fallow_core::results::{
+        AnalysisResults, DependencyLocation, DuplicateExport, DuplicateExportFinding,
+        DuplicateLocation, ImportSite, UnlistedDependency, UnlistedDependencyFinding,
+        UnresolvedImport, UnresolvedImportFinding, UnusedDependency, UnusedDependencyFinding,
+        UnusedExport, UnusedExportFinding, UnusedFile, UnusedFileFinding,
+    };
+    use rustc_hash::FxHashSet;
+    use serde_json::json;
+
+    use super::{
+        annotate_dead_code_json, dead_code_keys, relative_key_path, retain_introduced_dead_code,
+    };
+
+    fn root() -> PathBuf {
+        PathBuf::from("/repo")
+    }
+
+    fn export(path: &Path, name: &str) -> UnusedExportFinding {
+        UnusedExportFinding::with_actions(UnusedExport {
+            path: path.to_path_buf(),
+            export_name: name.to_string(),
+            is_type_only: false,
+            line: 1,
+            col: 0,
+            span_start: 0,
+            is_re_export: false,
+        })
+    }
+
+    fn unused_file(path: &Path) -> UnusedFileFinding {
+        UnusedFileFinding::with_actions(UnusedFile {
+            path: path.to_path_buf(),
+        })
+    }
+
+    fn dependency(path: &Path, package_name: &str) -> UnusedDependencyFinding {
+        UnusedDependencyFinding::with_actions(UnusedDependency {
+            package_name: package_name.to_string(),
+            location: DependencyLocation::Dependencies,
+            path: path.to_path_buf(),
+            line: 4,
+            used_in_workspaces: Vec::new(),
+        })
+    }
+
+    fn unresolved(path: &Path, specifier: &str) -> UnresolvedImportFinding {
+        UnresolvedImportFinding::with_actions(UnresolvedImport {
+            path: path.to_path_buf(),
+            specifier: specifier.to_string(),
+            line: 2,
+            col: 1,
+            specifier_col: 8,
+        })
+    }
+
+    fn unlisted(path: &Path, package_name: &str) -> UnlistedDependencyFinding {
+        UnlistedDependencyFinding::with_actions(UnlistedDependency {
+            package_name: package_name.to_string(),
+            imported_from: vec![
+                ImportSite {
+                    path: path.to_path_buf(),
+                    line: 9,
+                    col: 2,
+                },
+                ImportSite {
+                    path: path.to_path_buf(),
+                    line: 9,
+                    col: 2,
+                },
+            ],
+        })
+    }
+
+    fn duplicate_export(root: &Path) -> DuplicateExportFinding {
+        DuplicateExportFinding::with_actions(DuplicateExport {
+            export_name: "Button".to_string(),
+            locations: vec![
+                DuplicateLocation {
+                    path: root.join("src/b.ts"),
+                    line: 1,
+                    col: 0,
+                },
+                DuplicateLocation {
+                    path: root.join("src/a.ts"),
+                    line: 1,
+                    col: 0,
+                },
+                DuplicateLocation {
+                    path: root.join("src/a.ts"),
+                    line: 2,
+                    col: 0,
+                },
+            ],
+        })
+    }
+
+    fn sample_results(root: &Path) -> AnalysisResults {
+        let source = root.join("src/page.ts");
+        let package_json = root.join("package.json");
+        let mut results = AnalysisResults::default();
+        results
+            .unused_files
+            .push(unused_file(&root.join("src/dead.ts")));
+        results.unused_exports.push(export(&source, "loader"));
+        results
+            .unused_dependencies
+            .push(dependency(&package_json, "left-pad"));
+        results
+            .unresolved_imports
+            .push(unresolved(&source, "./missing"));
+        results.unlisted_dependencies.push(unlisted(&source, "zod"));
+        results.duplicate_exports.push(duplicate_export(root));
+        results
+    }
+
+    #[test]
+    fn relative_key_path_strips_root_and_normalizes_separators() {
+        let path = Path::new("/repo/src\\feature\\index.ts");
+        assert_eq!(
+            relative_key_path(path, Path::new("/repo")),
+            "src/feature/index.ts"
+        );
+    }
+
+    #[test]
+    fn dead_code_keys_are_stable_for_unsorted_and_duplicate_locations() {
+        let root = root();
+        let keys = dead_code_keys(&sample_results(&root), &root);
+
+        assert!(keys.contains("unused-file:src/dead.ts"));
+        assert!(keys.contains("unused-export:src/page.ts:loader"));
+        assert!(keys.contains("unused-dependency:package.json:left-pad"));
+        assert!(keys.contains("unresolved-import:src/page.ts:./missing"));
+        assert!(keys.contains("unlisted-dependency:zod:src/page.ts:9:2"));
+        assert!(keys.contains("duplicate-export:Button:src/a.ts|src/b.ts"));
+    }
+
+    #[test]
+    fn retain_introduced_dead_code_keeps_only_findings_absent_from_base() {
+        let root = root();
+        let mut results = sample_results(&root);
+        let base = FxHashSet::from_iter([
+            "unused-file:src/dead.ts".to_string(),
+            "unused-dependency:package.json:left-pad".to_string(),
+            "unresolved-import:src/page.ts:./missing".to_string(),
+        ]);
+
+        retain_introduced_dead_code(&mut results, &root, Some(&base));
+
+        assert!(results.unused_files.is_empty());
+        assert!(results.unused_dependencies.is_empty());
+        assert!(results.unresolved_imports.is_empty());
+        assert_eq!(results.unused_exports.len(), 1);
+        assert_eq!(results.unlisted_dependencies.len(), 1);
+        assert_eq!(results.duplicate_exports.len(), 1);
+    }
+
+    #[test]
+    fn annotate_dead_code_json_marks_introduced_status_by_matching_key_order() {
+        let root = root();
+        let results = sample_results(&root);
+        let base = FxHashSet::from_iter([
+            "unused-file:src/dead.ts".to_string(),
+            "unlisted-dependency:zod:src/page.ts:9:2".to_string(),
+        ]);
+        let mut json = json!({
+            "unused_files": [{}],
+            "unused_exports": [{}],
+            "unused_dependencies": [{}],
+            "unresolved_imports": [{}],
+            "unlisted_dependencies": [{}],
+            "duplicate_exports": [{}],
+        });
+
+        annotate_dead_code_json(&mut json, &results, &root, &base);
+
+        assert_eq!(json["unused_files"][0]["introduced"], false);
+        assert_eq!(json["unused_exports"][0]["introduced"], true);
+        assert_eq!(json["unused_dependencies"][0]["introduced"], true);
+        assert_eq!(json["unresolved_imports"][0]["introduced"], true);
+        assert_eq!(json["unlisted_dependencies"][0]["introduced"], false);
+        assert_eq!(json["duplicate_exports"][0]["introduced"], true);
+    }
+}
