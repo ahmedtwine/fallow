@@ -1637,6 +1637,39 @@ mod tests {
     }
 
     #[test]
+    fn cloud_capture_quality_reports_untracked_ratio_only_when_data_exists() {
+        let mut snapshot = CloudRuntimeContext {
+            repo: "acme/web".to_owned(),
+            window: crate::coverage::cloud_client::CloudRuntimeWindow { period_days: 7 },
+            summary: crate::coverage::cloud_client::CloudRuntimeSummary {
+                trace_count: 0,
+                deployments_seen: 0,
+                functions_tracked: 0,
+                functions_hit: 0,
+                functions_unhit: 0,
+                functions_untracked: 0,
+                coverage_percent: 0.0,
+                last_received_at: None,
+            },
+            blast_radius: vec![],
+            importance: vec![],
+            functions: vec![],
+            warnings: vec![],
+        };
+        assert!(cloud_capture_quality(&snapshot).is_none());
+
+        snapshot.summary.functions_tracked = 1;
+        snapshot.summary.functions_untracked = 3;
+        snapshot.summary.deployments_seen = 2;
+        let quality = cloud_capture_quality(&snapshot).expect("data should emit quality");
+
+        assert_eq!(quality.window_seconds, 604_800);
+        assert_eq!(quality.instances_observed, 2);
+        assert!((quality.untracked_ratio_percent - 75.0).abs() < f64::EPSILON);
+        assert!(quality.lazy_parse_warning);
+    }
+
+    #[test]
     fn validate_output_format_accepts_json_and_human() {
         assert!(validate_output_format(OutputFormat::Json).is_ok());
         assert!(validate_output_format(OutputFormat::Human).is_ok());
