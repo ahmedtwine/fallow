@@ -707,6 +707,23 @@ fn push_sarif_duplicate_exports(
 
 /// Build the SARIF rules list from the current rules configuration.
 fn build_sarif_rules(rules: &RulesConfig) -> Vec<serde_json::Value> {
+    let mut specs = Vec::new();
+    specs.extend(sarif_core_rule_specs(rules));
+    specs.extend(sarif_dependency_rule_specs(rules));
+    specs.extend(sarif_member_import_rule_specs(rules));
+    specs.extend(sarif_graph_rule_specs(rules));
+    specs.extend(sarif_workspace_rule_specs(rules));
+    specs
+        .into_iter()
+        .map(|(id, description, rule_severity)| {
+            sarif_rule(id, description, configured_sarif_level(rule_severity))
+        })
+        .collect()
+}
+
+type SarifRuleSpec = (&'static str, &'static str, Severity);
+
+fn sarif_core_rule_specs(rules: &RulesConfig) -> Vec<SarifRuleSpec> {
     [
         (
             "fallow/unused-file",
@@ -728,6 +745,12 @@ fn build_sarif_rules(rules: &RulesConfig) -> Vec<serde_json::Value> {
             "Exported signature references a same-file private type",
             rules.private_type_leaks,
         ),
+    ]
+    .into()
+}
+
+fn sarif_dependency_rule_specs(rules: &RulesConfig) -> Vec<SarifRuleSpec> {
+    [
         (
             "fallow/unused-dependency",
             "Dependency listed but never imported",
@@ -753,6 +776,12 @@ fn build_sarif_rules(rules: &RulesConfig) -> Vec<serde_json::Value> {
             "Production dependency only imported by test files",
             rules.test_only_dependencies,
         ),
+    ]
+    .into()
+}
+
+fn sarif_member_import_rule_specs(rules: &RulesConfig) -> Vec<SarifRuleSpec> {
+    [
         (
             "fallow/unused-enum-member",
             "Enum member is never referenced",
@@ -778,6 +807,12 @@ fn build_sarif_rules(rules: &RulesConfig) -> Vec<serde_json::Value> {
             "Export name appears in multiple modules",
             rules.duplicate_exports,
         ),
+    ]
+    .into()
+}
+
+fn sarif_graph_rule_specs(rules: &RulesConfig) -> Vec<SarifRuleSpec> {
+    [
         (
             "fallow/circular-dependency",
             "Circular dependency chain detected",
@@ -813,6 +848,12 @@ fn build_sarif_rules(rules: &RulesConfig) -> Vec<serde_json::Value> {
             "Suppression comment or tag no longer matches any issue",
             rules.stale_suppressions,
         ),
+    ]
+    .into()
+}
+
+fn sarif_workspace_rule_specs(rules: &RulesConfig) -> Vec<SarifRuleSpec> {
+    [
         (
             "fallow/unused-catalog-entry",
             "pnpm catalog entry not referenced by any workspace package",
@@ -839,11 +880,7 @@ fn build_sarif_rules(rules: &RulesConfig) -> Vec<serde_json::Value> {
             rules.misconfigured_dependency_overrides,
         ),
     ]
-    .into_iter()
-    .map(|(id, description, rule_severity)| {
-        sarif_rule(id, description, configured_sarif_level(rule_severity))
-    })
-    .collect()
+    .into()
 }
 
 #[must_use]
