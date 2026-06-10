@@ -162,17 +162,33 @@ fn print_audit_human(result: &AuditResult, quiet: bool, explain: bool, output: O
     }
 }
 
-/// Format the scope context line.
+/// Abbreviate a 40-char hex SHA to 12 chars for display; leave anything else
+/// (branch names, refspecs, the literal user typed for `--base`) untouched.
+fn short_base_ref(base_ref: &str) -> &str {
+    if base_ref.len() == 40 && base_ref.bytes().all(|b| b.is_ascii_hexdigit()) {
+        &base_ref[..12]
+    } else {
+        base_ref
+    }
+}
+
+/// Format the scope context line. When the base ref was auto-detected (or set
+/// via `FALLOW_AUDIT_BASE`), append the provenance so the comparison target is
+/// checkable, e.g. `vs a1b2c3d4e5f6 (merge-base with origin/main)`.
 fn format_scope_line(result: &AuditResult) -> String {
     let sha_suffix = result
         .head_sha
         .as_ref()
         .map_or(String::new(), |sha| format!(" ({sha}..HEAD)"));
+    let base_display = match &result.base_description {
+        Some(description) => format!("{} ({description})", short_base_ref(&result.base_ref)),
+        None => result.base_ref.clone(),
+    };
     format!(
         "Audit scope: {} changed file{} vs {}{}",
         result.changed_files_count,
         plural(result.changed_files_count),
-        result.base_ref,
+        base_display,
         sha_suffix
     )
 }
@@ -309,6 +325,12 @@ fn print_audit_json(result: &AuditResult) -> ExitCode {
         "base_ref".into(),
         serde_json::Value::String(result.base_ref.clone()),
     );
+    if let Some(ref description) = result.base_description {
+        obj.insert(
+            "base_description".into(),
+            serde_json::Value::String(description.clone()),
+        );
+    }
     if let Some(ref sha) = result.head_sha {
         obj.insert("head_sha".into(), serde_json::Value::String(sha.clone()));
     }
@@ -495,4 +517,31 @@ fn build_audit_codeclimate(result: &AuditResult) -> serde_json::Value {
     }
 
     serde_json::to_value(&all_issues).expect("CodeClimateIssue serializes infallibly")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_base_ref;
+
+    #[test]
+    fn short_base_ref_abbreviates_full_sha() {
+        assert_eq!(
+            short_base_ref("611d151e8250146426ff3178e94207f8a8d3cc7b"),
+            "611d151e8250"
+        );
+    }
+
+    #[test]
+    fn short_base_ref_leaves_branch_names_and_refspecs_untouched() {
+        assert_eq!(short_base_ref("main"), "main");
+        assert_eq!(short_base_ref("origin/main"), "origin/main");
+        assert_eq!(short_base_ref("HEAD~5"), "HEAD~5");
+        // Not 40 chars, so not treated as a SHA.
+        assert_eq!(short_base_ref("611d151e8250"), "611d151e8250");
+        // 40 chars but contains a non-hex character: left untouched.
+        assert_eq!(
+            short_base_ref("611d151e8250146426ff3178e94207f8a8d3ccZZ"),
+            "611d151e8250146426ff3178e94207f8a8d3ccZZ"
+        );
+    }
 }
