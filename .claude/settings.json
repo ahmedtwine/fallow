@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); python3 \"$root/.claude/hooks/pre-bash-guard.py\"",
+            "statusMessage": "Checking fallow agent command guard..."
+          },
+          {
+            "type": "command",
             "command": "if jq -r '.tool_input.command' | grep -q '^git commit'; then cargo fmt --all 2>/dev/null; typos; fi",
             "statusMessage": "Pre-commit: formatting and typo check..."
           }

@@ -77,6 +77,8 @@ editors/vscode/LICENSE
 # Claude
 .claude/*
 !.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/pre-bash-guard.py
 !.claude/skills/
 !.claude/rules/
 !.claude/agents/
@@ -84,6 +86,13 @@ editors/vscode/LICENSE
 # Codex
 .codex/
 AGENTS.md
+!crates/cli/AGENTS.md
+!crates/core/AGENTS.md
+!crates/extract/AGENTS.md
+!crates/graph/AGENTS.md
+!editors/vscode/AGENTS.md
+!tests/AGENTS.md
+!.github/workflows/AGENTS.md
 
 # In-flight feature plans written by /fallow-implement and re-read by /panel-review,
 # the implementation phase, and /fallow-review. Transient; promoted concepts go to decisions/.
