@@ -177,15 +177,15 @@ fn scan_template_body(
             let Some((tag, next_index)) = scan_html_tag(body, index) else {
                 break;
             };
-            apply_tag(
+            apply_tag(VueTagInput {
                 tag,
-                body_offset + index,
-                body_offset + next_index,
+                tag_start: body_offset + index,
+                tag_end: body_offset + next_index,
                 imported_bindings,
                 bound_targets,
-                &mut scopes,
-                &mut usage,
-            );
+                scopes: &mut scopes,
+                usage: &mut usage,
+            });
             index = next_index;
             continue;
         }
@@ -196,15 +196,27 @@ fn scan_template_body(
     usage
 }
 
-fn apply_tag(
-    tag: &str,
+struct VueTagInput<'a> {
+    tag: &'a str,
     tag_start: usize,
     tag_end: usize,
-    imported_bindings: &FxHashSet<String>,
-    bound_targets: &FxHashMap<String, String>,
-    scopes: &mut Vec<Vec<String>>,
-    usage: &mut TemplateUsage,
-) {
+    imported_bindings: &'a FxHashSet<String>,
+    bound_targets: &'a FxHashMap<String, String>,
+    scopes: &'a mut Vec<Vec<String>>,
+    usage: &'a mut TemplateUsage,
+}
+
+fn apply_tag(input: VueTagInput<'_>) {
+    let VueTagInput {
+        tag,
+        tag_start,
+        tag_end,
+        imported_bindings,
+        bound_targets,
+        scopes,
+        usage,
+    } = input;
+
     let trimmed = tag.trim();
     if trimmed.starts_with("</") {
         if scopes.len() > 1 {
