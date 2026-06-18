@@ -2666,9 +2666,11 @@ mod tests {
             missing_reason: true,
             actions: StaleSuppression::actions_for(true),
         });
-        let mut rules = RulesConfig::default();
-        rules.stale_suppressions = Severity::Off;
-        rules.require_suppression_reason = Severity::Error;
+        let rules = RulesConfig {
+            stale_suppressions: Severity::Off,
+            require_suppression_reason: Severity::Error,
+            ..Default::default()
+        };
 
         let sarif = build_sarif(&results, &root, &rules);
 
@@ -2677,13 +2679,13 @@ mod tests {
             "fallow/missing-suppression-reason"
         );
         assert_eq!(sarif["runs"][0]["results"][0]["level"], "error");
-        let rule_ids: Vec<&str> = sarif["runs"][0]["tool"]["driver"]["rules"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|rule| rule["id"].as_str().unwrap())
-            .collect();
-        assert!(rule_ids.contains(&"fallow/missing-suppression-reason"));
+        assert!(
+            sarif["runs"][0]["tool"]["driver"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| rule["id"].as_str().unwrap() == "fallow/missing-suppression-reason")
+        );
     }
 
     #[test]
@@ -2712,9 +2714,11 @@ mod tests {
             missing_reason: true,
             actions: StaleSuppression::actions_for(true),
         });
-        let mut rules = RulesConfig::default();
-        rules.stale_suppressions = Severity::Warn;
-        rules.require_suppression_reason = Severity::Error;
+        let rules = RulesConfig {
+            stale_suppressions: Severity::Warn,
+            require_suppression_reason: Severity::Error,
+            ..Default::default()
+        };
 
         let sarif = build_sarif(&results, &root, &rules);
         let results = sarif["runs"][0]["results"].as_array().unwrap();

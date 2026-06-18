@@ -2288,9 +2288,11 @@ mod tests {
             missing_reason: true,
             actions: StaleSuppression::actions_for(true),
         });
-        let mut rules = RulesConfig::default();
-        rules.stale_suppressions = Severity::Off;
-        rules.require_suppression_reason = Severity::Error;
+        let rules = RulesConfig {
+            stale_suppressions: Severity::Off,
+            require_suppression_reason: Severity::Error,
+            ..Default::default()
+        };
 
         let output = issues_to_value(&build_codeclimate(&results, &root, &rules));
 
@@ -2324,9 +2326,11 @@ mod tests {
             missing_reason: true,
             actions: StaleSuppression::actions_for(true),
         });
-        let mut rules = RulesConfig::default();
-        rules.stale_suppressions = Severity::Warn;
-        rules.require_suppression_reason = Severity::Error;
+        let rules = RulesConfig {
+            stale_suppressions: Severity::Warn,
+            require_suppression_reason: Severity::Error,
+            ..Default::default()
+        };
 
         let output = issues_to_value(&build_codeclimate(&results, &root, &rules));
 

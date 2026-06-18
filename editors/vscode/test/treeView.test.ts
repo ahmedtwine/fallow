@@ -85,6 +85,7 @@ describe("DeadCodeTreeProvider", () => {
             issue_kind: "unused-export",
             is_file_level: false,
           },
+          actions: [],
         },
       ],
     });
@@ -187,6 +188,7 @@ describe("DeadCodeTreeProvider", () => {
           line: 1,
           col: 0,
           origin: { type: "jsdoc_tag", export_name: "Widget" },
+          actions: [],
         },
         {
           path: "b.ts",
@@ -197,18 +199,21 @@ describe("DeadCodeTreeProvider", () => {
             issue_kind: "unused-export",
             is_file_level: true,
           },
+          actions: [],
         },
         {
           path: "c.ts",
           line: 3,
           col: 0,
           origin: { type: "comment", is_file_level: false },
+          actions: [],
         },
         {
           path: "d.ts",
           line: 4,
           col: 0,
           origin: { type: "comment", is_file_level: true },
+          actions: [],
         },
       ],
     });

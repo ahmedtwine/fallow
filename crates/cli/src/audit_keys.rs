@@ -2249,9 +2249,7 @@ mod tests {
         assert!(keys.contains("test-only-dependency:package.json:vitest"));
     }
 
-    #[test]
-    fn dead_code_keys_cover_graph_boundary_catalog_and_override_variants() {
-        let root = root();
+    fn graph_boundary_catalog_override_results(root: &std::path::Path) -> AnalysisResults {
         let source = root.join("src/app.ts");
         let other = root.join("src/other.ts");
         let workspace = root.join("pnpm-workspace.yaml");
@@ -2385,6 +2383,13 @@ mod tests {
                 line: 12,
             }),
         );
+        results
+    }
+
+    #[test]
+    fn dead_code_keys_cover_graph_boundary_catalog_and_override_variants() {
+        let root = root();
+        let results = graph_boundary_catalog_override_results(&root);
 
         let keys = dead_code_keys(&results, &root);
 

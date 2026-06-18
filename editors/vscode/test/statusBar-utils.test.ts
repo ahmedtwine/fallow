@@ -303,6 +303,7 @@ describe("buildParamsFromCli", () => {
             issue_kind: "unused-export",
             is_file_level: false,
           },
+          actions: [],
         },
       ],
     };
